@@ -1,4 +1,4 @@
-import { store, ESTADOS, estadoInfo, FORMAS_PAGO, TIPOS_EQUIPO, resetDemo } from './store.js';
+import { store, ESTADOS, estadoInfo, FORMAS_PAGO, FORMAS_COBRO, CUENTA_CORRIENTE, TIPOS_EQUIPO, resetDemo } from './store.js';
 
 // =====================================================================
 // Utilidades
@@ -95,7 +95,8 @@ function waLink(telefono, texto) {
 // =====================================================================
 const NAV = [
   ['inicio', 'Inicio'], ['vender', 'Vender'], ['service', 'Service'], ['productos', 'Productos'],
-  ['clientes', 'Clientes'], ['caja', 'Caja'], ['compras', 'Compras'], ['reportes', 'Reportes'], ['ajustes', 'Ajustes'],
+  ['clientes', 'Clientes'], ['fichero', 'Fichero'], ['caja', 'Caja'], ['compras', 'Compras'], ['proveedores', 'Proveedores'],
+  ['reportes', 'Reportes'], ['ajustes', 'Ajustes'],
 ];
 const ROUTES = {};
 const view = () => $('#view');
@@ -246,7 +247,7 @@ ROUTES.vender = async ({ q }) => {
           ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.dni_cuit ? ' — ' + esc(c.dni_cuit) : ''}</option>`).join('')}</select>
           <button class="btn" id="nuevo-cli" style="flex:0" title="Nuevo cliente">+</button></div></div>
       <div class="field"><label>Forma de pago</label><div class="pay-opts" id="pagos">
-        ${FORMAS_PAGO.map(f => `<button class="chip" data-f="${f}">${f}</button>`).join('')}</div></div>
+        ${FORMAS_COBRO.map(f => `<button class="chip" data-f="${f}">${f}</button>`).join('')}</div></div>
       <div class="field"><label>Descuento ($)</label><input class="input" id="desc" type="number" min="0" step="any" value="${cart.descuento || ''}" placeholder="0"></div>
       <hr style="border:0;border-top:1px solid var(--line);margin:.6rem 0 1rem">
       <div class="row small muted"><span>Subtotal</span><span class="right" id="subt"></span></div>
@@ -333,6 +334,7 @@ ROUTES.vender = async ({ q }) => {
   };
   $('#nuevo-cli').onclick = () => clienteModal(null, c => { cart.cliente_id = String(c.id); render(); });
   $('#cobrar').onclick = () => run(async () => {
+    if (cart.forma_pago === CUENTA_CORRIENTE && !cart.cliente_id) return toast('Para vender a cuenta corriente elegí el cliente', true);
     const sinStock = cart.items.filter(i => i.producto_id && !i.es_servicio && i.cantidad > i.stock);
     if (sinStock.length && !confirm(`Hay ${sinStock.length} producto(s) sin stock suficiente según el sistema. ¿Registrar la venta igual?`)) return;
     const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago });
@@ -559,8 +561,9 @@ const equipoFields = (v, p = '') => `
   <div class="field"><label>Notas del equipo</label><input class="input" name="${p}notas" value="${esc(v.notas)}" placeholder="ej: color, stickers, golpes visibles"></div>`;
 
 async function fichaCliente(id) {
-  const [c, equipos, h] = await Promise.all([store.cliente(id), store.equipos(id), store.historialCliente(id)]);
+  const [c, equipos, h, cc] = await Promise.all([store.cliente(id), store.equipos(id), store.historialCliente(id), store.ccMovimientos(id)]);
   if (!c) { view().innerHTML = '<div class="empty">Cliente no encontrado</div>'; return; }
+  const saldo = cc.reduce((s, m) => s + +m.monto, 0);
   const ventasOk = h.ventas.filter(v => !v.anulada);
   const totalCompras = ventasOk.reduce((s, v) => s + v.total, 0);
   const totalService = h.ordenes.reduce((s, o) => s + (o.total_cobrado || 0), 0);
@@ -575,7 +578,8 @@ async function fichaCliente(id) {
   <div class="page-head"><div><a href="#/clientes" class="small muted">← Clientes</a><h1>${esc(c.nombre)}</h1></div>
     <div class="actions"><a class="btn" href="#/vender?cliente=${c.id}">Nueva venta</a><button class="btn primary" id="orden">Nueva orden de service</button></div></div>
   <div class="grid grid-4" style="margin-bottom:1rem">
-    <div class="card kpi"><div class="label">Cliente desde</div><div class="value" style="font-size:1.2rem">${fdate(c.created_at)}</div></div>
+    <a class="card kpi" href="#/fichero/${c.id}" style="text-decoration:none;color:inherit"><div class="label">Cuenta corriente</div>
+      <div class="value" style="${saldo > 0 ? 'color:var(--bad)' : ''}">${money(saldo)}</div><div class="sub">${saldo > 0 ? 'adeuda · ver / cobrar →' : cc.length ? 'al día · ver movimientos →' : 'sin movimientos'}</div></a>
     <div class="card kpi"><div class="label">Compras</div><div class="value">${money(totalCompras)}</div><div class="sub">${ventasOk.length} compra(s)</div></div>
     <div class="card kpi"><div class="label">Services</div><div class="value">${h.ordenes.length}</div><div class="sub">${money(totalService)} cobrado</div></div>
     <div class="card kpi"><div class="label">En el taller ahora</div><div class="value">${h.ordenes.filter(ACTIVAS).length}</div></div>
@@ -587,7 +591,8 @@ async function fichaCliente(id) {
     <div class="grid">
       <div class="card card-pad"><h2>Datos <button class="btn sm" id="editar">Editar</button></h2>
         <dl class="kv"><dt>Teléfono</dt><dd>${esc(c.telefono) || '—'} ${c.telefono ? `<a class="small" target="_blank" rel="noopener" href="${waLink(c.telefono, `Hola ${primerNombre(c)}, te escribimos de GScom.`)}">WhatsApp</a>` : ''}</dd>
-        <dt>DNI / CUIT</dt><dd>${esc(c.dni_cuit) || '—'}</dd><dt>Email</dt><dd>${esc(c.email) || '—'}</dd><dt>Dirección</dt><dd>${esc(c.direccion) || '—'}</dd></dl>
+        <dt>DNI / CUIT</dt><dd>${esc(c.dni_cuit) || '—'}</dd><dt>Email</dt><dd>${esc(c.email) || '—'}</dd><dt>Dirección</dt><dd>${esc(c.direccion) || '—'}</dd>
+        <dt>Cliente desde</dt><dd>${fdate(c.created_at)}</dd></dl>
         ${c.notas ? `<div class="small" style="margin-top:.8rem;background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px">📝 ${esc(c.notas)}</div>` : ''}</div>
       <div class="card card-pad"><h2>Equipos <button class="btn sm" id="add-eq">+ Agregar</button></h2>
         ${equipos.map(e => `<div class="equipo"><b>${esc(e.tipo)}</b> ${esc(e.marca)} ${esc(e.modelo)}
@@ -696,7 +701,7 @@ async function detalleOrden(id) {
 
   view().innerHTML = `
   <div class="page-head"><div><a href="#/service" class="small muted">← Service</a><h1>Orden #${o.numero} ${pill(o.estado)}${respuestaPresu(o)}</h1></div>
-    <div class="actions"><button class="btn" id="imp">Imprimir comprobante</button>${cerrada ? '' : '<button class="btn ok" id="entregar">Entregar y cobrar</button>'}</div></div>
+    <div class="actions"><button class="btn" id="imp">Imprimir comprobante</button>${cerrada ? '<button class="btn danger" id="anular-entrega">Anular entrega</button>' : '<button class="btn ok" id="entregar">Entregar y cobrar</button>'}</div></div>
   <div class="card card-pad" style="margin-bottom:1rem">${stepper(o.estado)}</div>
   <div class="split">
     <div class="grid">
@@ -791,6 +796,11 @@ async function detalleOrden(id) {
   };
   br.onblur = () => setTimeout(() => sug.hidden = true, 150);
 
+  const anEnt = $('#anular-entrega');
+  if (anEnt) anEnt.onclick = () => run(async () => {
+    if (!confirm('¿Anular la entrega? La orden vuelve a "Listo para retirar", los repuestos vuelven al stock y se descuenta el cobro (de caja o de la cuenta corriente).')) return;
+    await store.anularEntregaOrden(id); toast('Entrega anulada'); render();
+  });
   const ent = $('#entregar');
   if (ent) ent.onclick = () => {
     const totalItems = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
@@ -799,7 +809,8 @@ async function detalleOrden(id) {
     const m = modal(`Entregar orden #${o.numero}`, `
       <div class="field"><label>Total a cobrar</label><input class="input" type="number" step="any" min="0" id="tot" value="${sugerido}"></div>
       <p class="small muted" style="margin:-.4rem 0 .8rem">${totalItems ? 'Sugerido: suma de repuestos y mano de obra.' : o.presupuesto ? 'Sugerido: presupuesto.' : 'Poné 0 si no se cobra (garantía, sin reparación).'}</p>
-      <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div>
+      <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_COBRO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div>
+        <div class="small muted" style="margin-top:.3rem">"Cuenta corriente" no entra a caja: queda como deuda del cliente en el Fichero.</div></div>
       <div class="field"><label>Mensaje final para el cliente (opcional)</label><input class="input" id="msg" placeholder="ej: Garantía de ${n.garantia_dias} días sobre el trabajo realizado."></div>`,
       `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Confirmar entrega</button>`);
     $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); });
@@ -854,7 +865,7 @@ ROUTES.caja = async ({ q }) => {
   </div>
   <div class="split">
     <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Hora</th><th>Concepto</th><th>Forma de pago</th><th class="num">Monto</th></tr></thead><tbody>
-      ${delDia.map(m => `<tr ${m.venta_id ? `class="click" data-venta="${m.venta_id}"` : m.orden_id ? `class="click" data-href="#/service/${m.orden_id}"` : ''}><td>${new Date(m.fecha).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}</td><td>${esc(m.concepto)}</td><td>${esc(m.forma_pago)}</td>
+      ${delDia.map(m => `<tr class="click" data-mov="${m.id}"><td>${new Date(m.fecha).toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' })}</td><td>${esc(m.concepto)}</td><td>${esc(m.forma_pago)}</td>
         <td class="num" style="color:${m.tipo === 'ingreso' ? 'var(--ok)' : 'var(--bad)'}"><b>${m.tipo === 'ingreso' ? '+' : '−'}${money(m.monto)}</b></td></tr>`).join('')
       || '<tr><td colspan="4" class="empty">Sin movimientos este día.</td></tr>'}</tbody></table></div>
     <div class="grid">
@@ -890,7 +901,191 @@ ROUTES.caja = async ({ q }) => {
       await store.cerrarCaja({ efectivo_esperado: esperado, efectivo_contado: contado, diferencia: contado - esperado, notas: $('#notas', m.el).value }); m.close(); toast('Cierre guardado'); render();
     });
   };
-  bindRowLinks();
+  $$('tr[data-mov]').forEach(tr => tr.onclick = () => movimientoCajaModal(movs.find(x => x.id === +tr.dataset.mov)));
+};
+
+// Detalle de un movimiento de caja: de dónde viene y cómo anularlo
+async function movimientoCajaModal(mv) {
+  const hora = fdatetime(mv.fecha);
+  const signo = `${mv.tipo === 'ingreso' ? '+' : '−'}${money(mv.monto)}`;
+  let origen = 'Movimiento manual', accion = '', ir = '', ejecutar = null;
+  const esAnulacion = /^Anulación/.test(mv.concepto);
+
+  if (mv.venta_id) {
+    const v = await store.venta(mv.venta_id);
+    origen = `Venta #${v.numero}${v.cliente ? ` · ${esc(v.cliente.nombre)}` : ''}`;
+    ir = `<button class="btn" id="ir">Ver venta</button>`;
+    if (!v.anulada && !esAnulacion) {
+      accion = 'Anular la venta (devuelve el stock y descuenta el cobro de caja)';
+      ejecutar = () => store.anularVenta(v.id);
+    } else if (v.anulada) origen += ' <span class="pill red">Anulada</span>';
+  } else if (mv.orden_id) {
+    const o = await store.orden(mv.orden_id);
+    origen = `Service orden #${o.numero} · ${esc(o.cliente?.nombre)}`;
+    ir = `<a class="btn" href="#/service/${o.id}" data-close>Ver orden</a>`;
+    if (o.estado === 'entregado' && !esAnulacion) {
+      accion = 'Anular la entrega (la orden vuelve a "Listo para retirar", los repuestos vuelven al stock y se descuenta el cobro)';
+      ejecutar = () => store.anularEntregaOrden(o.id);
+    }
+  } else if (mv.cc_movimiento_id) {
+    const cm = await store.ccMovimiento(mv.cc_movimiento_id);
+    origen = `Cobro de cuenta corriente${cm?.anulado ? ' <span class="pill red">Anulado</span>' : ''}`;
+    if (cm) ir = `<a class="btn" href="#/fichero/${cm.cliente_id}" data-close>Ver cuenta</a>`;
+    if (cm && !cm.anulado && !esAnulacion) {
+      accion = 'Anular el cobro (la deuda vuelve a la cuenta del cliente y se descuenta de caja)';
+      ejecutar = () => store.anularCobroCuenta(cm.id);
+    }
+  } else {
+    accion = 'Eliminar este movimiento';
+    ejecutar = () => store.eliminarMovimientoCaja(mv.id);
+  }
+
+  const m = modal('Movimiento de caja', `
+    <dl class="kv"><dt>Fecha</dt><dd>${hora}</dd><dt>Concepto</dt><dd>${esc(mv.concepto)}</dd><dt>Origen</dt><dd>${origen}</dd>
+      <dt>Forma de pago</dt><dd>${esc(mv.forma_pago)}</dd><dt>Monto</dt><dd><b style="color:${mv.tipo === 'ingreso' ? 'var(--ok)' : 'var(--bad)'}">${signo}</b></dd></dl>
+    ${accion ? `<p class="small muted" style="margin-top:1rem">${accion}.</p>` : ''}`,
+    `${ejecutar ? `<button class="btn danger" id="anular">${mv.venta_id || mv.orden_id || mv.cc_movimiento_id ? 'Anular' : 'Eliminar'}</button>` : ''}${ir}<button class="btn primary" data-close>Cerrar</button>`);
+  const irBtn = $('#ir', m.el);
+  if (irBtn) irBtn.onclick = () => { m.close(); ventaModal(mv.venta_id); };
+  const an = $('#anular', m.el);
+  if (an) an.onclick = () => run(async () => {
+    if (!confirm(`¿Confirmás? ${accion}.`)) return;
+    await ejecutar(); m.close(); toast('Listo'); render();
+  });
+}
+
+// =====================================================================
+// FICHERO (cuentas corrientes de clientes)
+// =====================================================================
+ROUTES.fichero = async ({ id }) => {
+  if (id) return cuentaCliente(+id);
+  const saldos = await store.ccSaldos();
+  const deudores = saldos.filter(s => s.saldo > 0.009);
+  const total = deudores.reduce((s, d) => s + +d.saldo, 0);
+  const aFavor = saldos.filter(s => s.saldo < -0.009);
+  view().innerHTML = `
+  <div class="page-head"><h1>Fichero</h1><div class="actions"><button class="btn primary" id="cargar">+ Cargar deuda manual</button></div></div>
+  <div class="grid grid-3" style="margin-bottom:1rem">
+    <div class="card kpi"><div class="label">Total adeudado</div><div class="value" style="color:${total ? 'var(--bad)' : 'inherit'}">${money(total)}</div></div>
+    <div class="card kpi"><div class="label">Clientes que deben</div><div class="value">${deudores.length}</div></div>
+    <div class="card kpi"><div class="label">Saldos a favor del cliente</div><div class="value">${money(-aFavor.reduce((s, d) => s + +d.saldo, 0))}</div><div class="sub">${aFavor.length} cliente(s)</div></div>
+  </div>
+  <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar cliente"></div></div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Cliente</th><th>Teléfono</th><th>Debe desde</th><th>Último movimiento</th><th class="num">Saldo</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+  <p class="small muted" style="margin-top:.8rem">Las ventas y los services entregados con forma de pago "Cuenta corriente" se cargan acá automáticamente.</p>`;
+  const paint = t => {
+    const l = [...deudores, ...aFavor].filter(d => matches(t, d.nombre, d.telefono));
+    $('#rows').innerHTML = l.map(d => `<tr class="click" data-href="#/fichero/${d.cliente_id}"><td><b>${esc(d.nombre)}</b></td><td>${esc(d.telefono)}</td>
+      <td>${d.saldo > 0 ? `${fdate(d.deuda_desde)} <span class="small muted">(${daysSince(d.deuda_desde)} d)</span>` : '—'}</td><td>${fdate(d.ultimo_movimiento)}</td>
+      <td class="num"><b style="color:${d.saldo > 0 ? 'var(--bad)' : 'var(--ok)'}">${money(d.saldo)}</b></td>
+      <td class="right">${d.saldo > 0 ? `<button class="btn sm ok" data-cobrar="${d.cliente_id}">Cobrar</button>` : ''}</td></tr>`).join('')
+      || `<tr><td colspan="6" class="empty">${t ? 'Sin resultados.' : 'Nadie debe nada 🎉'}</td></tr>`;
+    bindRowLinks();
+    $$('[data-cobrar]').forEach(b => b.onclick = e => { e.stopPropagation(); const d = deudores.find(x => x.cliente_id === +b.dataset.cobrar); cobrarModal(d.cliente_id, d.nombre, +d.saldo, render); });
+  };
+  $('#buscar').oninput = e => paint(e.target.value);
+  $('#cargar').onclick = () => cargoManualModal();
+  paint('');
+};
+
+async function cuentaCliente(clienteId) {
+  const [c, movs] = await Promise.all([store.cliente(clienteId), store.ccMovimientos(clienteId)]);
+  if (!c) { view().innerHTML = '<div class="empty">Cliente no encontrado</div>'; return; }
+  const saldo = movs.reduce((s, m) => s + +m.monto, 0);
+  // saldo acumulado línea por línea (de la más vieja a la más nueva)
+  let acum = 0;
+  const conSaldo = movs.slice().reverse().map(m => ({ ...m, acum: (acum += +m.monto) })).reverse();
+  const TIPO = { cargo: ['Cargo', 'amber'], pago: ['Pago', 'green'], ajuste: ['Ajuste', 'gray'] };
+  view().innerHTML = `
+  <div class="page-head"><div><a href="#/fichero" class="small muted">← Fichero</a><h1>${esc(c.nombre)}</h1></div>
+    <div class="actions"><a class="btn" href="#/clientes/${c.id}">Ficha del cliente</a><button class="btn" id="cargo">+ Cargar deuda</button>
+      <button class="btn ok" id="cobrar" ${saldo > 0 ? '' : 'disabled'}>Cobrar</button></div></div>
+  <div class="grid grid-3" style="margin-bottom:1rem">
+    <div class="card kpi"><div class="label">Saldo</div><div class="value" style="color:${saldo > 0 ? 'var(--bad)' : 'var(--ok)'}">${money(saldo)}</div><div class="sub">${saldo > 0 ? 'adeuda' : saldo < 0 ? 'a favor del cliente' : 'al día'}</div></div>
+    <div class="card kpi"><div class="label">Total cargado</div><div class="value">${money(movs.filter(m => m.tipo === 'cargo').reduce((s, m) => s + +m.monto, 0))}</div></div>
+    <div class="card kpi"><div class="label">Total pagado</div><div class="value">${money(-movs.filter(m => m.tipo === 'pago' && !m.anulado).reduce((s, m) => s + +m.monto, 0))}</div></div>
+  </div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th class="num">Debe</th><th class="num">Haber</th><th class="num">Saldo</th><th></th></tr></thead><tbody>
+    ${conSaldo.map(m => `<tr><td class="nowrap">${fdatetime(m.fecha)}</td><td><span class="pill ${TIPO[m.tipo][1]}">${TIPO[m.tipo][0]}</span>${m.anulado ? ' <span class="pill red">Anulado</span>' : ''}</td>
+      <td>${esc(m.concepto)}${m.forma_pago ? ` <span class="small muted">· ${esc(m.forma_pago)}</span>` : ''}
+        ${m.venta_id ? ` <a href="#" class="small" data-venta="${m.venta_id}">ver venta</a>` : ''}${m.orden_id ? ` <a class="small" href="#/service/${m.orden_id}">ver orden</a>` : ''}</td>
+      <td class="num">${m.monto > 0 ? money(m.monto) : ''}</td><td class="num">${m.monto < 0 ? money(-m.monto) : ''}</td><td class="num"><b>${money(m.acum)}</b></td>
+      <td class="right">${m.tipo === 'pago' && !m.anulado ? `<button class="btn sm danger" data-anular="${m.id}">Anular</button>` : ''}</td></tr>`).join('')
+    || '<tr><td colspan="7" class="empty">Sin movimientos.</td></tr>'}</tbody></table></div>`;
+  $('#cobrar').onclick = () => cobrarModal(c.id, c.nombre, saldo, render);
+  $('#cargo').onclick = () => cargoManualModal(c.id);
+  $$('[data-venta]').forEach(a => a.onclick = e => { e.preventDefault(); ventaModal(+a.dataset.venta); });
+  $$('[data-anular]').forEach(b => b.onclick = () => run(async () => {
+    if (!confirm('¿Anular este cobro? La deuda vuelve a la cuenta y se descuenta de caja.')) return;
+    await store.anularCobroCuenta(+b.dataset.anular); toast('Cobro anulado'); render();
+  }));
+}
+
+function cobrarModal(clienteId, nombre, saldo, onDone) {
+  let forma = 'Efectivo';
+  const m = modal(`Cobrar a ${nombre}`, `
+    <dl class="kv" style="margin-bottom:1rem"><dt>Saldo adeudado</dt><dd><b style="color:var(--bad)">${money(saldo)}</b></dd></dl>
+    <div class="field"><label>Monto a cobrar</label><input class="input" type="number" step="any" min="0" id="monto" value="${saldo > 0 ? saldo : ''}">
+      <div class="small muted" style="margin-top:.3rem">Podés cobrar el total o una parte.</div></div>
+    <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div>
+    <div class="field"><label>Nota (opcional)</label><input class="input" id="nota" placeholder="ej: entrega a cuenta"></div>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Registrar cobro</button>`);
+  $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); });
+  $('#monto', m.el).select();
+  $('#ok', m.el).onclick = () => run(async () => {
+    const monto = +$('#monto', m.el).value;
+    if (!(monto > 0)) return toast('Ingresá el monto a cobrar', true);
+    if (monto > saldo + 0.009 && !confirm(`El monto supera la deuda (${money(saldo)}). La diferencia queda a favor del cliente. ¿Continuar?`)) return;
+    await store.cobrarCuenta(clienteId, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
+    m.close(); toast(`Cobro registrado · ${money(monto)}`); onDone();
+  });
+}
+
+// Deuda cargada a mano (ej: saldo que ya traía de antes, un trabajo no registrado como venta)
+async function cargoManualModal(clienteId = null) {
+  const clientes = clienteId ? [] : await store.clientes();
+  const m = modal('Cargar deuda manual', `
+    ${clienteId ? '' : `<div class="field"><label>Cliente *</label><select class="input" id="cli"><option value="">Elegí un cliente…</option>
+      ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select></div>`}
+    <div class="field"><label>Monto *</label><input class="input" type="number" step="any" min="0" id="monto"></div>
+    <div class="field"><label>Concepto *</label><input class="input" id="concepto" placeholder="ej: Saldo anterior, trabajo a domicilio"></div>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Cargar</button>`);
+  $('#ok', m.el).onclick = () => run(async () => {
+    const cid = clienteId || +$('#cli', m.el).value, monto = +$('#monto', m.el).value, concepto = $('#concepto', m.el).value.trim();
+    if (!cid || !(monto > 0) || !concepto) return toast('Completá cliente, monto y concepto', true);
+    await store.cargarDeuda(cid, { monto, concepto });
+    m.close(); toast('Deuda cargada'); cid === clienteId ? render() : go(`#/fichero/${cid}`);
+  });
+}
+
+// =====================================================================
+// PROVEEDORES
+// =====================================================================
+ROUTES.proveedores = async () => {
+  const [proveedores, compras] = await Promise.all([store.proveedores(), store.compras()]);
+  const stats = id => { const cs = compras.filter(c => c.proveedor_id === id); return { n: cs.length, total: cs.reduce((s, c) => s + +c.total, 0), ultima: cs[0]?.fecha }; };
+  view().innerHTML = `
+  <div class="page-head"><h1>Proveedores</h1><div class="actions"><button class="btn primary" id="nuevo">+ Nuevo proveedor</button></div></div>
+  <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por nombre, CUIT, teléfono o email"></div></div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Proveedor</th><th>CUIT</th><th>Contacto</th><th class="num">Compras</th><th class="num">Total comprado</th><th>Última compra</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  const paint = t => {
+    $('#rows').innerHTML = proveedores.filter(p => matches(t, p.nombre, p.cuit, p.telefono, p.email)).map(p => {
+      const s = stats(p.id);
+      return `<tr><td><b>${esc(p.nombre)}</b>${p.notas ? `<div class="small muted">${esc(p.notas)}</div>` : ''}</td><td>${esc(p.cuit) || '—'}</td>
+        <td class="small">${[p.telefono, p.email].filter(Boolean).map(esc).join('<br>') || '—'}</td>
+        <td class="num">${s.n}</td><td class="num">${money(s.total)}</td><td>${s.ultima ? fdate(s.ultima) : '—'}</td>
+        <td class="right nowrap"><button class="btn sm" data-edit="${p.id}">Editar</button> <button class="btn sm danger" data-del="${p.id}">Eliminar</button></td></tr>`;
+    }).join('') || `<tr><td colspan="7" class="empty">${t ? 'Sin resultados.' : 'Todavía no hay proveedores.'}</td></tr>`;
+    $$('[data-edit]').forEach(b => b.onclick = () => proveedorModal(() => render(), proveedores.find(p => p.id === +b.dataset.edit)));
+    $$('[data-del]').forEach(b => b.onclick = () => run(async () => {
+      const p = proveedores.find(x => x.id === +b.dataset.del), s = stats(p.id);
+      if (!confirm(`¿Eliminar a ${p.nombre}?${s.n ? `\n\nTiene ${s.n} compra(s) registradas: no se borran, quedan como "sin proveedor".` : ''}`)) return;
+      await store.eliminarProveedor(p.id); toast('Proveedor eliminado'); render();
+    }));
+  };
+  $('#buscar').oninput = e => paint(e.target.value);
+  $('#nuevo').onclick = () => proveedorModal(() => render());
+  paint('');
 };
 
 // =====================================================================
@@ -948,13 +1143,16 @@ function compraModal(c, productos, provName) {
   });
 }
 
-function proveedorModal(onSaved) {
-  const m = modal('Nuevo proveedor', `<div class="field"><label>Nombre *</label><input class="input" name="nombre"></div>
-    <div class="row"><div class="field"><label>CUIT</label><input class="input" name="cuit"></div><div class="field"><label>Teléfono</label><input class="input" name="telefono"></div></div>
-    <div class="field"><label>Email</label><input class="input" name="email"></div>`, `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
+function proveedorModal(onSaved, p = null) {
+  const v = p || { nombre: '', cuit: '', telefono: '', email: '', notas: '' };
+  const m = modal(p ? 'Editar proveedor' : 'Nuevo proveedor', `<div class="field"><label>Nombre *</label><input class="input" name="nombre" value="${esc(v.nombre)}"></div>
+    <div class="row"><div class="field"><label>CUIT</label><input class="input" name="cuit" value="${esc(v.cuit)}"></div><div class="field"><label>Teléfono</label><input class="input" name="telefono" value="${esc(v.telefono)}"></div></div>
+    <div class="field"><label>Email</label><input class="input" name="email" value="${esc(v.email)}"></div>
+    <div class="field"><label>Notas</label><input class="input" name="notas" value="${esc(v.notas)}" placeholder="ej: vendedor, días de entrega, cuenta bancaria"></div>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el); if (!f.nombre) return toast('Falta el nombre', true);
-    const p = await store.guardarProveedor(f); m.close(); toast('Proveedor guardado'); onSaved(p);
+    const r = await store.guardarProveedor({ ...(p ? { id: p.id } : {}), ...f }); m.close(); toast('Proveedor guardado'); onSaved(r);
   });
 }
 

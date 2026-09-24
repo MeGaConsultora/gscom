@@ -153,6 +153,22 @@ export const store = {
     if (!/^[0-9a-f-]{36}$/i.test(token || '')) return null;
     return q(sb.rpc('seguimiento_orden', { p_token: token }));
   },
+  async anularEntregaOrden(id) { await q(sb.rpc('anular_entrega_orden', { p_orden_id: id })); },
+  async eliminarMovimientoCaja(id) { await q(sb.rpc('eliminar_movimiento_caja', { p_id: id })); },
+  async eliminarProveedor(id) { await q(sb.from('proveedores').delete().eq('id', id)); },
+
+  // Fichero (cuentas corrientes)
+  async ccSaldos() { return q(sb.from('cc_saldos').select('*').order('saldo', { ascending: false })); },
+  async ccMovimientos(clienteId) { return q(sb.from('cc_movimientos').select('*').eq('cliente_id', clienteId).order('fecha', { ascending: false }).order('id', { ascending: false })); },
+  async ccMovimiento(id) { return q(sb.from('cc_movimientos').select('*').eq('id', id).maybeSingle()); },
+  async cobrarCuenta(clienteId, { monto, forma_pago, nota = '' }) {
+    return q(sb.rpc('cobrar_cuenta', { p_cliente_id: clienteId, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }));
+  },
+  async cargarDeuda(clienteId, { monto, concepto }) {
+    await q(sb.from('cc_movimientos').insert({ cliente_id: clienteId, tipo: 'cargo', monto: +monto, concepto }));
+  },
+  async anularCobroCuenta(ccId) { await q(sb.rpc('anular_cobro_cuenta', { p_cc_id: ccId })); },
+
   // Avisos: presupuestos respondidos por el cliente que todavía no se atendieron
   async presupuestosRespondidos() {
     const { count, error } = await sb.from('ordenes_servicio').select('id', { count: 'exact', head: true })

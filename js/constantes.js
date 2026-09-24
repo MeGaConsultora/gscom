@@ -13,3 +13,6 @@ export const ESTADOS = [
 export const estadoInfo = id => ESTADOS.find(e => e.id === id) || ESTADOS[0];
 export const FORMAS_PAGO = ['Efectivo', 'Transferencia', 'Débito', 'Crédito', 'Mercado Pago'];
 export const TIPOS_EQUIPO = ['Notebook', 'PC de escritorio', 'All in One', 'Celular', 'Tablet', 'Impresora', 'Monitor', 'Consola', 'Otro'];
+// Deja la venta o el service como deuda del cliente (Fichero) en vez de entrar a caja
+export const CUENTA_CORRIENTE = 'Cuenta corriente';
+export const FORMAS_COBRO = [...FORMAS_PAGO, CUENTA_CORRIENTE];

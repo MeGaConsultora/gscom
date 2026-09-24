@@ -3,7 +3,8 @@
 // (localStorage) con datos de ejemplo. Misma interfaz que store-supabase.js.
 // =====================================================================
 
-const DEMO_KEY = 'gscom_demo_v2';
+const DEMO_KEY = 'gscom_demo_v3';
+const CC = 'Cuenta corriente';
 
 // ---------- código de barras interno (EAN-13, prefijo 20) ----------
 export function ean13CheckDigit(d12) {
@@ -106,6 +107,7 @@ export const store = {
   },
   async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '' }) {
     if (!items.length) throw new Error('La venta no tiene ítems');
+    if (forma_pago === CC && !cliente_id) throw new Error('Para vender a cuenta corriente hay que elegir el cliente');
     const subtotal = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
     db.seq.venta_numero = (db.seq.venta_numero || 0) + 1;
     const v = insert('ventas', { numero: db.seq.venta_numero, fecha: now(), cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0,
@@ -115,7 +117,8 @@ export const store = {
         precio_unitario: i.precio_unitario, subtotal: i.cantidad * i.precio_unitario });
       if (i.producto_id) movStock(i.producto_id, -i.cantidad, 'venta', { venta_id: v.id });
     }
-    insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Venta #${v.numero}`, monto: v.total, forma_pago, venta_id: v.id });
+    if (forma_pago === CC) insert('cc_movimientos', { cliente_id: v.cliente_id, fecha: now(), tipo: 'cargo', monto: v.total, concepto: `Venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
+    else insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Venta #${v.numero}`, monto: v.total, forma_pago, venta_id: v.id });
     save(); return clone(v);
   },
   async anularVenta(id) {
@@ -123,7 +126,49 @@ export const store = {
     if (v.anulada) throw new Error('La venta ya estaba anulada');
     v.anulada = true;
     db.venta_items.filter(i => i.venta_id === v.id && i.producto_id).forEach(i => movStock(i.producto_id, i.cantidad, 'anulacion', { venta_id: v.id, nota: `Anulación venta #${v.numero}` }));
-    insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Anulación venta #${v.numero}`, monto: v.total, forma_pago: v.forma_pago, venta_id: v.id });
+    if (v.forma_pago === CC) insert('cc_movimientos', { cliente_id: v.cliente_id, fecha: now(), tipo: 'ajuste', monto: -v.total, concepto: `Anulación venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
+    else insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Anulación venta #${v.numero}`, monto: v.total, forma_pago: v.forma_pago, venta_id: v.id });
+    save();
+  },
+  async eliminarMovimientoCaja(id) {
+    const m = byId('caja_movimientos', id);
+    if (m.venta_id || m.orden_id || m.cc_movimiento_id) throw new Error('Este movimiento viene de una venta, un service o un cobro: anulalo desde su origen');
+    db.caja_movimientos = db.caja_movimientos.filter(x => x.id !== m.id); save();
+  },
+
+  // Fichero (cuentas corrientes)
+  async ccSaldos() {
+    const por = {};
+    db.cc_movimientos.forEach(m => {
+      const c = byId('clientes', m.cliente_id);
+      const s = por[m.cliente_id] ??= { cliente_id: m.cliente_id, nombre: c?.nombre, telefono: c?.telefono, saldo: 0, deuda_desde: null, ultimo_movimiento: null };
+      s.saldo += m.monto;
+      if (m.tipo === 'cargo' && !m.anulado && (!s.deuda_desde || m.fecha < s.deuda_desde)) s.deuda_desde = m.fecha;
+      if (!s.ultimo_movimiento || m.fecha > s.ultimo_movimiento) s.ultimo_movimiento = m.fecha;
+    });
+    return clone(Object.values(por).sort((a, b) => b.saldo - a.saldo));
+  },
+  async ccMovimientos(clienteId) { return clone(db.cc_movimientos.filter(m => m.cliente_id === +clienteId).reverse()); },
+  async ccMovimiento(id) { return clone(byId('cc_movimientos', id) || null); },
+  async cobrarCuenta(clienteId, { monto, forma_pago, nota = '' }) {
+    if (!(+monto > 0)) throw new Error('El monto a cobrar tiene que ser mayor a cero');
+    if (forma_pago === CC) throw new Error('Elegí cómo paga (efectivo, transferencia, etc.)');
+    const c = byId('clientes', clienteId);
+    const m = insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || 'Cobro de cuenta corriente', forma_pago, anulado: false });
+    insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Cobro cta. cte. — ${c.nombre}`, monto: +monto, forma_pago, cc_movimiento_id: m.id });
+    save(); return m.id;
+  },
+  async cargarDeuda(clienteId, { monto, concepto }) {
+    insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'cargo', monto: +monto, concepto, forma_pago: '', anulado: false }); save();
+  },
+  async anularCobroCuenta(ccId) {
+    const m = byId('cc_movimientos', ccId);
+    if (m.tipo !== 'pago') throw new Error('Solo se pueden anular cobros');
+    if (m.anulado) throw new Error('El cobro ya estaba anulado');
+    const c = byId('clientes', m.cliente_id);
+    m.anulado = true;
+    insert('cc_movimientos', { cliente_id: m.cliente_id, fecha: now(), tipo: 'ajuste', monto: -m.monto, concepto: `Anulación de cobro del ${new Date(m.fecha).toLocaleDateString('es-AR')}`, forma_pago: '', anulado: false });
+    insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Anulación cobro cta. cte. — ${c.nombre}`, monto: -m.monto, forma_pago: m.forma_pago, cc_movimiento_id: m.id });
     save();
   },
 
@@ -138,6 +183,10 @@ export const store = {
   async guardarProveedor(p) {
     if (p.id) { Object.assign(byId('proveedores', p.id), p); save(); return clone(byId('proveedores', p.id)); }
     const r = insert('proveedores', { cuit: '', telefono: '', email: '', notas: '', ...p }); save(); return clone(r);
+  },
+  async eliminarProveedor(id) {
+    db.compras.filter(c => c.proveedor_id === +id).forEach(c => c.proveedor_id = null);
+    db.proveedores = db.proveedores.filter(p => p.id !== +id); save();
   },
   async compras() { return clone(db.compras.slice().reverse().map(c => ({ ...c, items: db.compra_items.filter(i => i.compra_id === c.id) }))); },
   async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {
@@ -203,9 +252,26 @@ export const store = {
     const o = byId('ordenes_servicio', id);
     if (o.estado === 'entregado') throw new Error('La orden ya fue entregada');
     db.orden_items.filter(i => i.orden_id === o.id && i.producto_id).forEach(i => movStock(i.producto_id, -i.cantidad, 'service', { orden_id: o.id, nota: `Orden #${o.numero}` }));
-    if (+total > 0) insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Service orden #${o.numero}`, monto: +total, forma_pago, orden_id: o.id });
-    o.total_cobrado = +total;
+    if (+total > 0) {
+      if (forma_pago === CC) insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'cargo', monto: +total, concepto: `Service orden #${o.numero}`, forma_pago: '', orden_id: o.id, anulado: false });
+      else insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Service orden #${o.numero}`, monto: +total, forma_pago, orden_id: o.id });
+    }
+    o.total_cobrado = +total; o.forma_pago_entrega = forma_pago;
     await this.cambiarEstadoOrden(id, 'entregado', comentario);
+  },
+  async anularEntregaOrden(id) {
+    const o = byId('ordenes_servicio', id);
+    if (o.estado !== 'entregado') throw new Error('La orden no está entregada');
+    db.orden_items.filter(i => i.orden_id === o.id && i.producto_id).forEach(i => movStock(i.producto_id, i.cantidad, 'anulacion', { orden_id: o.id, nota: `Anulación entrega orden #${o.numero}` }));
+    if (+o.total_cobrado > 0) {
+      if (o.forma_pago_entrega === CC) insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'ajuste', monto: -o.total_cobrado, concepto: `Anulación entrega orden #${o.numero}`, forma_pago: '', orden_id: o.id, anulado: false });
+      else {
+        const fp = o.forma_pago_entrega || db.caja_movimientos.filter(m => m.orden_id === o.id && m.tipo === 'ingreso').pop()?.forma_pago || 'Efectivo';
+        insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Anulación cobro service orden #${o.numero}`, monto: +o.total_cobrado, forma_pago: fp, orden_id: o.id });
+      }
+    }
+    Object.assign(o, { total_cobrado: null, fecha_entrega: null, forma_pago_entrega: '' });
+    await this.cambiarEstadoOrden(id, 'listo', 'Se anuló la entrega registrada por error.');
   },
 
   // Página pública de seguimiento (en Supabase será la función seguimiento_orden)
@@ -268,7 +334,7 @@ function seed() {
       pie_comprobante: 'Los equipos no retirados dentro de los 90 días se consideran abandonados.', garantia_dias: 30 },
     categorias: [], productos: [], stock_movimientos: [], clientes: [], equipos: [], ventas: [], venta_items: [],
     caja_movimientos: [], caja_cierres: [], proveedores: [], compras: [], compra_items: [],
-    ordenes_servicio: [], orden_items: [], orden_estados: [],
+    ordenes_servicio: [], orden_items: [], orden_estados: [], cc_movimientos: [],
   };
   const prev = db; db = d;
   const daysAgo = (n, h = 11) => { const t = new Date(); t.setDate(t.getDate() - n); t.setHours(h, 15, 0, 0); return t.toISOString(); };
@@ -330,6 +396,11 @@ function seed() {
   venta(3, 2, [[5, 1], [4, 1]], 'Débito');
   venta(0, null, [[7, 2], [10, 1]], 'Efectivo');
   venta(0, 4, [[8, 1]], 'Mercado Pago');
+
+  // Cuenta corriente de ejemplo: el estudio contable tiene saldo pendiente
+  insert('cc_movimientos', { cliente_id: 3, fecha: daysAgo(15), tipo: 'cargo', monto: 78000, concepto: 'Mantenimiento mensual de equipos', forma_pago: '', anulado: false });
+  const pago = insert('cc_movimientos', { cliente_id: 3, fecha: daysAgo(4), tipo: 'pago', monto: -30000, concepto: 'Cobro de cuenta corriente', forma_pago: 'Transferencia', anulado: false });
+  insert('caja_movimientos', { fecha: daysAgo(4), tipo: 'ingreso', concepto: 'Cobro cta. cte. — Estudio Contable Ríos', monto: 30000, forma_pago: 'Transferencia', cc_movimiento_id: pago.id });
 
   // Órdenes de service de ejemplo
   const orden = (dias, cliente_id, equipo_id, falla, estados, extra = {}) => {
