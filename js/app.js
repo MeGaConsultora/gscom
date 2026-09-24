@@ -341,10 +341,11 @@ ROUTES.productos = async ({ q }) => {
   $('#buscar').focus();
 };
 
-async function productoModal(id) {
+// opts.prefill: datos iniciales · opts.onSaved(producto): en vez de refrescar la pantalla · opts.sinStock: ocultar "Stock inicial"
+async function productoModal(id, opts = {}) {
   const [p, categorias] = await Promise.all([id ? store.producto(id) : null, store.categorias()]);
   const movs = id ? await store.movimientosStock(id) : [];
-  const v = p || { nombre: '', codigo_barras: '', marca: '', descripcion: '', categoria_id: '', precio_costo: '', precio_venta: '', stock: '', stock_minimo: 1, es_servicio: false };
+  const v = p || { nombre: '', codigo_barras: '', marca: '', descripcion: '', categoria_id: '', precio_costo: '', precio_venta: '', stock: '', stock_minimo: 1, es_servicio: false, ...opts.prefill };
   const m = modal(id ? 'Editar producto' : 'Nuevo producto', `
     <div class="field"><label>Nombre *</label><input class="input" name="nombre" value="${esc(v.nombre)}"></div>
     <div class="row"><div class="field"><label>Marca</label><input class="input" name="marca" value="${esc(v.marca)}"></div>
@@ -354,7 +355,7 @@ async function productoModal(id) {
     <div class="row"><div class="field"><label>Precio de costo</label><input class="input" name="precio_costo" type="number" step="any" min="0" value="${v.precio_costo}"></div>
       <div class="field"><label>Precio de venta *</label><input class="input" name="precio_venta" type="number" step="any" min="0" value="${v.precio_venta}"></div>
       <div class="field"><label>Margen</label><input class="input" id="margen" readonly tabindex="-1"></div></div>
-    <div class="row">${id ? '' : `<div class="field"><label>Stock inicial</label><input class="input" name="stock" type="number" step="any" value="${v.stock}"></div>`}
+    <div class="row">${id || opts.sinStock ? '' : `<div class="field"><label>Stock inicial</label><input class="input" name="stock" type="number" step="any" value="${v.stock}"></div>`}
       <div class="field"><label>Stock mínimo (alerta)</label><input class="input" name="stock_minimo" type="number" step="any" min="0" value="${v.stock_minimo}"></div></div>
     <label class="small" style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem"><input type="checkbox" name="es_servicio" ${v.es_servicio ? 'checked' : ''}> Es un servicio / mano de obra (no maneja stock)</label>
     ${id && !v.es_servicio ? `<div class="card card-pad" style="background:#fafbfc"><h2 style="margin-bottom:.5rem">Stock actual: ${v.stock}</h2>
@@ -380,7 +381,8 @@ async function productoModal(id) {
       precio_costo: +f.precio_costo || 0, precio_venta: +f.precio_venta || 0, stock_minimo: +f.stock_minimo || 0, es_servicio: f.es_servicio };
     if (!id) { data.codigo_barras = f.codigo_barras; data.stock = +f.stock || 0; }
     const r = await store.guardarProducto(data);
-    m.close(); toast(id ? 'Producto actualizado' : `Producto creado · código ${r.codigo_barras}`); render();
+    m.close(); toast(id ? 'Producto actualizado' : `Producto creado · código ${r.codigo_barras}`);
+    opts.onSaved ? opts.onSaved(r) : render();
   });
   const aj = $('#aj-ok', m.el);
   if (aj) aj.onclick = () => run(async () => {
@@ -811,58 +813,163 @@ ROUTES.caja = async ({ q }) => {
 // =====================================================================
 // COMPRAS (ingreso de mercadería) Y PROVEEDORES
 // =====================================================================
-ROUTES.compras = async () => {
+// Borrador de la compra en curso: sobrevive si se cambia de pestaña a mitad de la carga
+let compraDraft = null;
+const nuevoDraft = () => ({ proveedor_id: '', nro_comprobante: '', notas: '', items: [] });
+
+ROUTES.compras = async ({ id }) => {
+  if (id === 'nueva') return nuevaCompra();
   const [compras, proveedores, productos] = await Promise.all([store.compras(), store.proveedores(), store.productos()]);
   const provName = id => proveedores.find(p => p.id === id)?.nombre || '—';
+  const enCurso = compraDraft && compraDraft.items.length;
   view().innerHTML = `
-  <div class="page-head"><h1>Compras y proveedores</h1><div class="actions"><button class="btn" id="prov">+ Proveedor</button><button class="btn primary" id="nueva">Ingresar mercadería</button></div></div>
+  <div class="page-head"><h1>Compras y proveedores</h1><div class="actions"><button class="btn" id="prov">+ Proveedor</button>
+    <a class="btn primary" href="#/compras/nueva">${enCurso ? `Continuar carga (${compraDraft.items.length})` : 'Ingresar mercadería'}</a></div></div>
   <div class="split">
     <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Proveedor</th><th>Comprobante</th><th>Ítems</th><th class="num">Total</th></tr></thead><tbody>
       ${compras.map(c => `<tr><td>${fdate(c.fecha)}</td><td>${esc(provName(c.proveedor_id))}</td><td>${esc(c.nro_comprobante) || '—'}</td>
         <td class="small">${c.items.map(i => `${i.cantidad}× ${esc(productos.find(p => p.id === i.producto_id)?.nombre || '')}`).join(', ')}</td><td class="num">${money(c.total)}</td></tr>`).join('')
-      || '<tr><td colspan="5" class="empty">Todavía no se registraron compras. Usá "Ingresar mercadería" cuando llegue un pedido: suma el stock y actualiza el costo.</td></tr>'}</tbody></table></div>
+      || '<tr><td colspan="5" class="empty">Todavía no se registraron compras. Usá "Ingresar mercadería" cuando llegue un pedido: suma el stock y actualiza costos y precios.</td></tr>'}</tbody></table></div>
     <div class="card card-pad"><h2>Proveedores</h2>${proveedores.map(p => `<div class="equipo"><b>${esc(p.nombre)}</b><div class="small muted">${esc(p.cuit)} ${p.telefono ? '· ' + esc(p.telefono) : ''}</div></div>`).join('') || '<div class="muted small">Sin proveedores.</div>'}</div>
   </div>`;
-  $('#prov').onclick = () => {
-    const m = modal('Nuevo proveedor', `<div class="field"><label>Nombre *</label><input class="input" name="nombre"></div>
-      <div class="row"><div class="field"><label>CUIT</label><input class="input" name="cuit"></div><div class="field"><label>Teléfono</label><input class="input" name="telefono"></div></div>
-      <div class="field"><label>Email</label><input class="input" name="email"></div>`, `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
-    $('#ok', m.el).onclick = () => run(async () => { const f = formData(m.el); if (!f.nombre) return toast('Falta el nombre', true); await store.guardarProveedor(f); m.close(); render(); });
-  };
-  $('#nueva').onclick = () => {
-    const items = [];
-    const m = modal('Ingresar mercadería', `
-      <div class="row"><div class="field"><label>Proveedor</label><select class="input" name="proveedor_id"><option value="">—</option>${proveedores.map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></div>
-      <div class="field"><label>N° de factura / remito</label><input class="input" name="nro_comprobante"></div></div>
-      <div class="search" style="position:relative;margin-bottom:.6rem"><input class="input" id="b" placeholder="Escaneá o buscá el producto"><div class="suggest" id="s" hidden></div></div>
-      <div id="its"></div>`, `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Registrar compra</button>`, { wide: true });
-    const paint = () => {
-      $('#its', m.el).innerHTML = items.length ? `<table class="tbl"><thead><tr><th>Producto</th><th>Cantidad</th><th>Costo unitario</th><th class="num">Subtotal</th><th></th></tr></thead><tbody>
-        ${items.map((i, k) => `<tr><td>${esc(i.nombre)}</td><td style="width:90px"><input class="input" data-c="${k}" value="${i.cantidad}"></td><td style="width:130px"><input class="input" data-p="${k}" value="${i.costo_unitario}"></td>
-        <td class="num">${money(i.cantidad * i.costo_unitario)}</td><td><button class="x" data-d="${k}">×</button></td></tr>`).join('')}
-        <tr><td colspan="3"><b>Total</b></td><td class="num"><b>${money(items.reduce((s, i) => s + i.cantidad * i.costo_unitario, 0))}</b></td><td></td></tr></tbody></table>` : '<div class="muted small">Agregá los productos que llegaron.</div>';
-      $$('[data-c]', m.el).forEach(i => i.onchange = () => { items[+i.dataset.c].cantidad = +i.value || 1; paint(); });
-      $$('[data-p]', m.el).forEach(i => i.onchange = () => { items[+i.dataset.p].costo_unitario = +i.value || 0; paint(); });
-      $$('[data-d]', m.el).forEach(b => b.onclick = () => { items.splice(+b.dataset.d, 1); paint(); });
-    };
-    paint();
-    const b = $('#b', m.el), s = $('#s', m.el);
-    const addP = p => { const ex = items.find(i => i.producto_id === p.id); ex ? ex.cantidad++ : items.push({ producto_id: p.id, nombre: p.nombre, cantidad: 1, costo_unitario: p.precio_costo }); b.value = ''; s.hidden = true; paint(); b.focus(); };
-    b.oninput = () => {
-      const t = b.value.trim(); if (!t) { s.hidden = true; return; }
-      const r = productos.filter(p => !p.es_servicio && (p.codigo_barras === t || matches(t, p.nombre, p.codigo_barras))).slice(0, 8);
-      s.hidden = false; s.innerHTML = r.map(p => `<div data-id="${p.id}"><span>${esc(p.nombre)}</span><span class="muted">stock ${p.stock}</span></div>`).join('') || '<div class="muted">Sin resultados — crealo primero en Productos</div>';
-      $$('[data-id]', s).forEach(d => d.onmousedown = e => { e.preventDefault(); addP(productos.find(x => x.id === +d.dataset.id)); });
-    };
-    b.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); const p = productos.find(x => x.codigo_barras === b.value.trim()); if (p) addP(p); } };
-    $('#ok', m.el).onclick = () => run(async () => {
-      if (!items.length) return toast('No agregaste productos', true);
-      const f = formData(m.el);
-      await store.registrarCompra({ proveedor_id: f.proveedor_id ? +f.proveedor_id : null, nro_comprobante: f.nro_comprobante, items: items.map(({ producto_id, cantidad, costo_unitario }) => ({ producto_id, cantidad, costo_unitario })) });
-      m.close(); toast('Compra registrada · stock actualizado'); render();
-    });
-  };
+  $('#prov').onclick = () => proveedorModal(() => render());
 };
+
+function proveedorModal(onSaved) {
+  const m = modal('Nuevo proveedor', `<div class="field"><label>Nombre *</label><input class="input" name="nombre"></div>
+    <div class="row"><div class="field"><label>CUIT</label><input class="input" name="cuit"></div><div class="field"><label>Teléfono</label><input class="input" name="telefono"></div></div>
+    <div class="field"><label>Email</label><input class="input" name="email"></div>`, `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
+  $('#ok', m.el).onclick = () => run(async () => {
+    const f = formData(m.el); if (!f.nombre) return toast('Falta el nombre', true);
+    const p = await store.guardarProveedor(f); m.close(); toast('Proveedor guardado'); onSaved(p);
+  });
+}
+
+async function nuevaCompra() {
+  const [proveedores, productos] = await Promise.all([store.proveedores(), store.productos()]);
+  compraDraft ??= nuevoDraft();
+  const d = compraDraft;
+
+  view().innerHTML = `
+  <div class="page-head"><div><a href="#/compras" class="small muted">← Compras</a><h1>Ingresar mercadería</h1></div>
+    <div class="actions"><button class="btn danger" id="descartar">Descartar</button></div></div>
+  <div class="card card-pad" style="margin-bottom:1rem">
+    <div class="row">
+      <div class="field"><label>Proveedor</label><select class="input" id="prov"><option value="">— Sin especificar —</option>
+        ${proveedores.map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}<option value="__nuevo">+ Nuevo proveedor…</option></select></div>
+      <div class="field"><label>N° de factura / remito</label><input class="input" id="nro" value="${esc(d.nro_comprobante)}"></div>
+    </div>
+  </div>
+  <div class="card card-pad">
+    <div class="search" style="position:relative;margin-bottom:.8rem">
+      <input class="input scan-input" id="b" placeholder="Escaneá el código o buscá el producto por nombre…" autocomplete="off">
+      <div class="suggest" id="s" hidden></div>
+    </div>
+    <div class="tbl-wrap" id="its"></div>
+    <div class="row" style="margin-top:1rem;align-items:flex-end">
+      <div class="field" style="flex:2"><label>Notas</label><input class="input" id="notas" value="${esc(d.notas)}" placeholder="(opcional)"></div>
+      <div class="field right" style="flex:1"><div class="small muted">Total de la compra</div><div class="total-box" id="total"></div></div>
+    </div>
+    <button class="btn ok lg block" id="registrar">Registrar compra</button>
+  </div>`;
+
+  const prov = $('#prov');
+  prov.value = d.proveedor_id;
+  prov.onchange = () => {
+    if (prov.value !== '__nuevo') { d.proveedor_id = prov.value; return; }
+    prov.value = d.proveedor_id;
+    proveedorModal(p => { d.proveedor_id = String(p.id); nuevaCompra(); });
+  };
+  $('#nro').oninput = e => d.nro_comprobante = e.target.value;
+  $('#notas').oninput = e => d.notas = e.target.value;
+
+  const margen = i => i.costo_unitario > 0 && i.precio_venta > 0 ? Math.round((i.precio_venta / i.costo_unitario - 1) * 100) + '%' : '—';
+  function paint() {
+    const total = d.items.reduce((s, i) => s + i.cantidad * i.costo_unitario, 0);
+    $('#its').innerHTML = d.items.length ? `<table class="tbl"><thead><tr><th>Producto</th><th style="width:90px">Cantidad</th><th style="width:130px">Costo unit.</th>
+      <th style="width:130px">Precio venta</th><th class="num">Margen</th><th class="num">Subtotal</th><th></th></tr></thead><tbody>
+      ${d.items.map((i, k) => `<tr><td>${esc(i.nombre)}${i.nuevo ? ' <span class="pill blue">nuevo</span>' : ''}<div class="small muted mono">${esc(i.codigo_barras)} · stock actual ${i.stock}</div></td>
+        <td><input class="input" data-k="${k}" data-f="cantidad" value="${i.cantidad}" inputmode="decimal"></td>
+        <td><input class="input" data-k="${k}" data-f="costo_unitario" value="${i.costo_unitario}" inputmode="decimal"></td>
+        <td><input class="input" data-k="${k}" data-f="precio_venta" value="${i.precio_venta}" inputmode="decimal"></td>
+        <td class="num muted">${margen(i)}</td><td class="num">${money(i.cantidad * i.costo_unitario)}</td>
+        <td><button class="x" data-d="${k}" title="Quitar">×</button></td></tr>`).join('')}</tbody></table>`
+      : '<div class="empty">Escaneá o buscá los productos que llegaron. Si alguno no existe, lo podés crear desde el buscador.</div>';
+    $$('[data-f]').forEach(inp => inp.onchange = () => {
+      const v = +String(inp.value).replace(',', '.');
+      d.items[+inp.dataset.k][inp.dataset.f] = inp.dataset.f === 'cantidad' ? Math.max(0.01, v || 1) : Math.max(0, v || 0);
+      paint();
+    });
+    $$('[data-d]').forEach(bt => bt.onclick = () => { d.items.splice(+bt.dataset.d, 1); paint(); });
+    $('#total').textContent = money(total);
+    $('#registrar').disabled = !d.items.length;
+  }
+
+  function addP(p, extra = {}) {
+    const ex = d.items.find(i => i.producto_id === p.id);
+    if (ex) ex.cantidad++;
+    else d.items.push({ producto_id: p.id, nombre: p.nombre, codigo_barras: p.codigo_barras, stock: p.stock, cantidad: 1,
+      costo_unitario: +p.precio_costo || 0, precio_venta: +p.precio_venta || 0, precio_venta_orig: +p.precio_venta || 0, ...extra });
+    b.value = ''; s.hidden = true; paint(); b.focus();
+  }
+  function crearProducto(texto) {
+    s.hidden = true;
+    const esCodigo = /^\d{6,14}$/.test(texto);
+    productoModal(null, {
+      sinStock: true,
+      prefill: esCodigo ? { codigo_barras: texto } : { nombre: texto },
+      onSaved: p => { productos.push(p); addP(p, { nuevo: true }); },
+    });
+  }
+
+  const b = $('#b'), s = $('#s');
+  let results = [], sel = 0;
+  const paintSug = () => {
+    const t = b.value.trim();
+    s.innerHTML = results.map((p, i) => `<div class="${i === sel ? 'sel' : ''}" data-i="${i}"><span>${esc(p.nombre)} <span class="small muted mono">${esc(p.codigo_barras)}</span></span><span class="muted nowrap">stock ${p.stock}</span></div>`).join('')
+      + `<div class="${sel === results.length ? 'sel' : ''}" data-nuevo><span><b>+ Crear producto nuevo</b> «${esc(t)}»</span></div>`;
+    $$('[data-i]', s).forEach(x => x.onmousedown = e => { e.preventDefault(); addP(results[+x.dataset.i]); });
+    $('[data-nuevo]', s).onmousedown = e => { e.preventDefault(); crearProducto(t); };
+  };
+  b.oninput = () => {
+    const t = b.value.trim();
+    if (!t) { s.hidden = true; return; }
+    results = productos.filter(p => !p.es_servicio && (p.codigo_barras === t || matches(t, p.nombre, p.marca, p.codigo_barras))).slice(0, 8);
+    sel = 0; s.hidden = false; paintSug();
+  };
+  b.onkeydown = e => {
+    if (e.key === 'ArrowDown') { sel = Math.min(sel + 1, results.length); paintSug(); e.preventDefault(); }
+    if (e.key === 'ArrowUp') { sel = Math.max(sel - 1, 0); paintSug(); e.preventDefault(); }
+    if (e.key === 'Escape') s.hidden = true;
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const t = b.value.trim(); if (!t) return;
+    const exact = productos.find(p => p.codigo_barras === t);
+    if (exact) return addP(exact);
+    if (sel < results.length) return addP(results[sel]);
+    crearProducto(t);  // código escaneado que no existe → alta directa
+  };
+  b.onblur = () => setTimeout(() => s.hidden = true, 150);
+
+  $('#descartar').onclick = () => {
+    if (d.items.length && !confirm('¿Descartar esta carga? Se pierden los productos agregados.')) return;
+    compraDraft = null; go('#/compras');
+  };
+  $('#registrar').onclick = () => run(async () => {
+    if (!d.items.length) return toast('No agregaste productos', true);
+    const btn = $('#registrar'); btn.disabled = true;
+    try {
+      await store.registrarCompra({ proveedor_id: d.proveedor_id ? +d.proveedor_id : null, nro_comprobante: d.nro_comprobante.trim(), notas: d.notas.trim(),
+        items: d.items.map(({ producto_id, cantidad, costo_unitario }) => ({ producto_id, cantidad, costo_unitario })) });
+      for (const i of d.items.filter(i => i.precio_venta !== i.precio_venta_orig)) await store.guardarProducto({ id: i.producto_id, precio_venta: i.precio_venta });
+    } finally { btn.disabled = false; }
+    const n = d.items.length; compraDraft = null;
+    toast(`Compra registrada · ${n} producto(s) con stock actualizado`); go('#/compras');
+  });
+
+  paint();
+  b.focus();
+}
 
 // =====================================================================
 // REPORTES
