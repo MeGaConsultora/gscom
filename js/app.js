@@ -1121,12 +1121,13 @@ async function cuentaCliente(clienteId) {
       <td>${esc(m.concepto)}${m.forma_pago ? ` <span class="small muted">· ${esc(m.forma_pago)}</span>` : ''}
         ${m.venta_id ? ` <a href="#" class="small" data-venta="${m.venta_id}">ver venta</a>` : ''}${m.orden_id ? ` <a class="small" href="#/service/${m.orden_id}">ver orden</a>` : ''}</td>
       <td class="num">${m.monto > 0 ? money(m.monto) : ''}</td><td class="num">${m.monto < 0 ? money(-m.monto) : ''}</td><td class="num"><b>${money(m.acum)}</b></td>
-      <td class="right">${m.tipo === 'pago' && !m.anulado ? `<button class="btn sm danger" data-anular="${m.id}">Anular</button>`
+      <td class="right nowrap">${m.tipo === 'pago' && !m.anulado ? `<button class="btn sm" data-recibo="${m.id}">Recibo</button> <button class="btn sm danger" data-anular="${m.id}">Anular</button>`
         : m.tipo === 'cargo' && !m.venta_id && !m.orden_id ? `<button class="btn sm" data-editar-cargo="${m.id}">Editar</button> <button class="btn sm danger" data-eliminar-cargo="${m.id}">Eliminar</button>` : ''}</td></tr>`).join('')
     || '<tr><td colspan="7" class="empty">Sin movimientos.</td></tr>'}</tbody></table></div>`;
   $('#cobrar').onclick = () => cobrarModal(c.id, c.nombre, saldo, render);
   $('#cargo').onclick = () => cargoManualModal(c.id);
   $$('[data-venta]').forEach(a => a.onclick = e => { e.preventDefault(); ventaModal(+a.dataset.venta); });
+  $$('[data-recibo]').forEach(b => b.onclick = () => run(() => imprimirRecibo(c.id, +b.dataset.recibo)));
   $$('[data-anular]').forEach(b => b.onclick = () => run(async () => {
     if (!confirm('¿Anular este cobro? La deuda vuelve a la cuenta y se descuenta de caja.')) return;
     await store.anularCobroCuenta(+b.dataset.anular); toast('Cobro anulado'); render();
@@ -1169,9 +1170,36 @@ function cobrarModal(clienteId, nombre, saldo, onDone) {
     const monto = +$('#monto', m.el).value;
     if (!(monto > 0)) return toast('Ingresá el monto a cobrar', true);
     if (monto > saldo + 0.009 && !confirm(`El monto supera la deuda (${money(saldo)}). La diferencia queda a favor del cliente. ¿Continuar?`)) return;
-    await store.cobrarCuenta(clienteId, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
-    m.close(); toast(`Cobro registrado · ${money(monto)}`); onDone();
+    const ccId = await store.cobrarCuenta(clienteId, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
+    m.close(); onDone();
+    const r = modal('Cobro registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(forma)} · ${esc(nombre)}</div></div>`,
+      `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="rec">Imprimir recibo</button>`);
+    $('#rec', r.el).onclick = () => run(() => imprimirRecibo(clienteId, ccId));
   });
+}
+
+// Recibo de pago de cuenta corriente (ticket), con saldo anterior y saldo actual
+async function imprimirRecibo(clienteId, ccId) {
+  const [c, movs, n] = await Promise.all([store.cliente(clienteId), store.ccMovimientos(clienteId), store.negocio()]);
+  const cron = movs.slice().reverse();                // de la más vieja a la más nueva
+  const i = cron.findIndex(m => m.id === +ccId);
+  if (i < 0) throw new Error('No se encontró el pago');
+  const pago = cron[i];
+  const saldoActual = cron.slice(0, i + 1).reduce((s, m) => s + +m.monto, 0);
+  const saldoAnterior = saldoActual - +pago.monto;    // el pago tiene monto negativo
+  const esAnticipo = !!pago.orden_id;
+  printHTML(`<div class="ticket">
+    <div class="c big">${esc(n.nombre)}</div><div class="c">${esc(n.direccion)}<br>${esc(n.telefono)}</div><hr>
+    <div class="c"><b>RECIBO DE PAGO</b><br>${esAnticipo ? 'Anticipo de service' : 'Cuenta corriente'}</div><hr>
+    <div>Recibo N° ${pago.id}<br>${fdatetime(pago.fecha)}<br>Cliente: ${esc(c.nombre)}${c.dni_cuit ? `<br>DNI/CUIT: ${esc(c.dni_cuit)}` : ''}</div><hr>
+    <div>Concepto: ${esc(pago.concepto)}</div>
+    <table><tr><td>Forma de pago</td><td style="text-align:right">${esc(pago.forma_pago)}</td></tr></table><hr>
+    <table>
+      <tr><td>Saldo anterior</td><td style="text-align:right">${money(saldoAnterior)}</td></tr>
+      <tr><td class="big">PAGADO</td><td class="big" style="text-align:right">${money(-pago.monto)}</td></tr>
+      <tr><td><b>Saldo actual</b></td><td style="text-align:right"><b>${money(saldoActual)}</b></td></tr>
+    </table>${pago.anulado ? '<div class="c big">*** ANULADO ***</div>' : ''}<hr>
+    <div class="c">${saldoActual > 0.009 ? 'Queda un saldo pendiente.' : saldoActual < -0.009 ? 'Queda saldo a su favor.' : 'Cuenta al día. ¡Gracias!'}<br>Documento no válido como factura.</div></div>`, PAGINA_TICKET);
 }
 
 function anticipoModal(o, onDone) {
