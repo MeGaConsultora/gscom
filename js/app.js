@@ -712,10 +712,14 @@ async function detalleOrden(id) {
       <div class="card card-pad"><h2>Equipo y cliente</h2>
         <dl class="kv"><dt>Cliente</dt><dd><a href="#/clientes/${o.cliente.id}">${esc(o.cliente.nombre)}</a> · ${esc(o.cliente.telefono)}</dd>
         <dt>Equipo</dt><dd>${esc(eq)}${o.equipo?.nro_serie ? ` <span class="small muted mono">S/N ${esc(o.equipo.nro_serie)}</span>` : ''}</dd>
-        <dt>Ingreso</dt><dd>${fdatetime(o.fecha_ingreso)}</dd><dt>Fecha estimada</dt><dd>${fdate(o.fecha_estimada)}</dd>
-        <dt>Falla reportada</dt><dd>${esc(o.falla_reportada)}</dd><dt>Accesorios</dt><dd>${esc(o.accesorios) || '—'}</dd>
-        <dt>Contraseña</dt><dd class="mono">${esc(o.contrasena_equipo) || '—'}</dd><dt>Técnico</dt><dd>${esc(o.tecnico) || '—'}</dd>
-        ${o.fecha_entrega ? `<dt>Entregado</dt><dd>${fdatetime(o.fecha_entrega)} · ${money(o.total_cobrado)}</dd>` : ''}</dl></div>
+        <dt>Ingreso</dt><dd>${fdatetime(o.fecha_ingreso)}</dd>
+        ${o.fecha_entrega ? `<dt>Entregado</dt><dd>${fdatetime(o.fecha_entrega)} · ${money(o.total_cobrado)}</dd>` : ''}</dl>
+        <div class="row"><div class="field"><label>Fecha estimada</label><input class="input" type="date" id="fecha-est" value="${o.fecha_estimada || ''}"></div>
+          <div class="field"><label>Técnico</label><input class="input" id="tecnico" value="${esc(o.tecnico)}"></div></div>
+        <div class="field"><label>Falla reportada</label><textarea class="input" id="falla">${esc(o.falla_reportada)}</textarea></div>
+        <div class="row"><div class="field"><label>Accesorios</label><input class="input" id="accesorios" value="${esc(o.accesorios)}"></div>
+          <div class="field"><label>Contraseña / patrón</label><input class="input mono" id="contrasena" value="${esc(o.contrasena_equipo)}"></div></div>
+        <button class="btn" id="guardar-datos">Guardar</button></div>
       <div class="card card-pad"><h2>Diagnóstico y presupuesto</h2>
         <div class="field"><label>Diagnóstico técnico</label><textarea class="input" id="diag">${esc(o.diagnostico)}</textarea></div>
         <div class="field"><label>Trabajo realizado</label><textarea class="input" id="trab">${esc(o.trabajo_realizado)}</textarea></div>
@@ -757,6 +761,12 @@ async function detalleOrden(id) {
   const wa = $('#wa'); if (wa) wa.href = waLink(o.cliente.telefono, msgWA(o.estado, ''));
   $('#copiar').onclick = async () => { try { await navigator.clipboard.writeText(url); toast('Link copiado'); } catch { prompt('Copiá el link:', url); } };
   $('#imp').onclick = () => imprimirOrden(o, n, url);
+
+  $('#guardar-datos').onclick = () => run(async () => {
+    await store.actualizarOrden(id, { fecha_estimada: $('#fecha-est').value || null, tecnico: $('#tecnico').value.trim(),
+      falla_reportada: $('#falla').value.trim(), accesorios: $('#accesorios').value.trim(), contrasena_equipo: $('#contrasena').value.trim() });
+    toast('Guardado');
+  });
 
   $('#guardar-diag').onclick = () => run(async () => {
     const ap = $('#aprob').value;
