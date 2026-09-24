@@ -153,4 +153,7 @@ export const store = {
     if (!/^[0-9a-f-]{36}$/i.test(token || '')) return null;
     return q(sb.rpc('seguimiento_orden', { p_token: token }));
   },
+  async responderPresupuesto(token, acepta) {
+    return q(sb.rpc('responder_presupuesto', { p_token: token, p_acepta: !!acepta }));
+  },
 };

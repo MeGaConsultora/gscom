@@ -3,7 +3,7 @@
 // (localStorage) con datos de ejemplo. Misma interfaz que store-supabase.js.
 // =====================================================================
 
-const DEMO_KEY = 'gscom_demo_v1';
+const DEMO_KEY = 'gscom_demo_v2';
 
 // ---------- código de barras interno (EAN-13, prefijo 20) ----------
 export function ean13CheckDigit(d12) {
@@ -26,7 +26,9 @@ function load() {
     const raw = localStorage.getItem(DEMO_KEY);
     if (raw) return JSON.parse(raw);
   } catch (e) { /* sin storage: usamos datos en memoria */ }
-  return seed();
+  const d = seed();
+  try { localStorage.setItem(DEMO_KEY, JSON.stringify(d)); } catch (e) {}  // así la página de seguimiento ve los mismos datos
+  return d;
 }
 function save() { try { localStorage.setItem(DEMO_KEY, JSON.stringify(db)); } catch (e) {} }
 const now = () => new Date().toISOString();
@@ -74,11 +76,12 @@ export const store = {
   async movimientosStock(productoId) { return clone(db.stock_movimientos.filter(m => m.producto_id === +productoId).reverse()); },
 
   // Clientes y equipos
-  async clientes() { return clone(db.clientes); },
+  async clientes() { return clone(db.clientes.slice().sort((a, b) => a.nombre.localeCompare(b.nombre))); },
   async cliente(id) { return clone(byId('clientes', id)); },
   async guardarCliente(c) {
+    c = { ...c, nombre: nombreCliente(c) };  // igual que el trigger armar_nombre_cliente de la base
     if (c.id) { Object.assign(byId('clientes', c.id), c); save(); return clone(byId('clientes', c.id)); }
-    const r = insert('clientes', { dni_cuit: '', telefono: '', email: '', direccion: '', notas: '', created_at: now(), ...c });
+    const r = insert('clientes', { apellido: '', nombres: '', dni_cuit: '', telefono: '', email: '', direccion: '', notas: '', created_at: now(), ...c });
     save(); return clone(r);
   },
   async equipos(clienteId) { return clone(db.equipos.filter(e => e.cliente_id === +clienteId)); },
@@ -210,15 +213,30 @@ export const store = {
     const o = db.ordenes_servicio.find(x => x.token === tok); if (!o) return null;
     const c = byId('clientes', o.cliente_id), e = byId('equipos', o.equipo_id);
     return clone({
-      numero: o.numero, cliente: (c?.nombre || '').split(' ')[0],
+      numero: o.numero, cliente: c?.nombres || (c?.nombre || '').split(' ')[0],
       equipo: e ? [e.tipo, e.marca, e.modelo].filter(Boolean).join(' ') : '',
       falla: o.falla_reportada, estado: o.estado, fecha_ingreso: o.fecha_ingreso, fecha_estimada: o.fecha_estimada,
-      fecha_entrega: o.fecha_entrega, presupuesto: o.presupuesto,
+      fecha_entrega: o.fecha_entrega, presupuesto: o.presupuesto, presupuesto_aprobado: o.presupuesto_aprobado,
       historial: db.orden_estados.filter(h => h.orden_id === o.id).map(h => ({ estado: h.estado, comentario: h.comentario, fecha: h.created_at })),
       negocio: db.negocio,
     });
   },
+  async responderPresupuesto(tok, acepta) {
+    const o = db.ordenes_servicio.find(x => x.token === tok);
+    if (!o) throw new Error('Orden no encontrada');
+    if (o.estado !== 'presupuesto' || o.presupuesto == null) throw new Error('Esta orden no tiene un presupuesto pendiente de respuesta');
+    if (o.presupuesto_aprobado != null) throw new Error('El presupuesto ya fue respondido');
+    o.presupuesto_aprobado = !!acepta;
+    insert('orden_estados', { orden_id: o.id, estado: o.estado, created_at: now(),
+      comentario: `El cliente ${acepta ? 'ACEPTÓ' : 'RECHAZÓ'} el presupuesto desde el link de seguimiento.` });
+    save(); return this.seguimiento(tok);
+  },
 };
+
+function nombreCliente({ apellido = '', nombres = '', nombre = '' }) {
+  apellido = apellido.trim(); nombres = nombres.trim();
+  return apellido && nombres ? `${apellido}, ${nombres}` : apellido || nombres || nombre;
+}
 
 function movStock(producto_id, cantidad, tipo, extra = {}) {
   const p = byId('productos', producto_id);
@@ -264,12 +282,12 @@ function seed() {
   });
 
   const clientes = [
-    ['Juan Pérez', '28.456.789', '3425551234', 'juanperez@mail.com'],
-    ['María Gómez', '31.222.333', '3425559876', 'mgomez@mail.com'],
-    ['Estudio Contable Ríos', '30-71234567-8', '3424567890', 'admin@estudiorios.com'],
-    ['Lucas Fernández', '40.111.222', '3426661122', ''],
+    ['Pérez', 'Juan', '28.456.789', '3425551234', 'juanperez@mail.com'],
+    ['Gómez', 'María', '31.222.333', '3425559876', 'mgomez@mail.com'],
+    ['Estudio Contable Ríos', '', '30-71234567-8', '3424567890', 'admin@estudiorios.com'],
+    ['Fernández', 'Lucas', '40.111.222', '3426661122', ''],
   ];
-  clientes.forEach(([nombre, dni_cuit, telefono, email], i) => insert('clientes', { nombre, dni_cuit, telefono, email, direccion: '', notas: i === 2 ? 'Cliente con abono mensual. Facturar a la razón social.' : '', created_at: daysAgo(60 - i * 10) }));
+  clientes.forEach(([apellido, nombres, dni_cuit, telefono, email], i) => insert('clientes', { apellido, nombres, nombre: nombreCliente({ apellido, nombres }), dni_cuit, telefono, email, direccion: '', notas: i === 2 ? 'Cliente con abono mensual. Facturar a la razón social.' : '', created_at: daysAgo(60 - i * 10) }));
   insert('equipos', { cliente_id: 1, tipo: 'Notebook', marca: 'Lenovo', modelo: 'IdeaPad 3 15ITL6', nro_serie: 'PF3ABC12', notas: '', created_at: daysAgo(30) });
   insert('equipos', { cliente_id: 2, tipo: 'PC de escritorio', marca: 'Armada', modelo: 'Ryzen 5 5600G', nro_serie: '', notas: 'Gabinete negro', created_at: daysAgo(20) });
   insert('equipos', { cliente_id: 3, tipo: 'Impresora', marca: 'HP', modelo: 'LaserJet Pro M404', nro_serie: 'VNB3K12345', notas: '', created_at: daysAgo(10) });

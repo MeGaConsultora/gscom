@@ -13,11 +13,16 @@ const fdate = iso => iso ? toDate(iso).toLocaleDateString('es-AR', { day: '2-dig
 const fdatetime = iso => iso ? new Date(iso).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const isToday = iso => sameDay(iso, new Date());
-const daysSince = iso => Math.floor((Date.now() - new Date(iso)) / 86400000);
+const daysSince = iso => Math.max(0, Math.floor((Date.now() - new Date(iso)) / 86400000));
 const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 const matches = (q, ...fields) => { const t = norm(q).trim(); return !t || t.split(/\s+/).every(w => fields.some(f => norm(f).includes(w))); };
 const pill = estado => { const e = estadoInfo(estado); return `<span class="pill ${e.color}">${esc(e.label)}</span>`; };
 const ACTIVAS = o => !['entregado'].includes(o.estado);
+// Para saludar: "Juan" (o la razón social si no tiene nombres cargados)
+const primerNombre = c => (c?.nombres || '').split(' ')[0] || c?.apellido || (c?.nombre || '').split(' ')[0];
+// Respuesta del cliente al presupuesto, para mostrar junto al estado
+const respuestaPresu = o => o.estado !== 'presupuesto' || o.presupuesto_aprobado == null ? ''
+  : o.presupuesto_aprobado ? ' <span class="pill green">✓ Aceptado</span>' : ' <span class="pill red">✗ Rechazado</span>';
 
 // Búsqueda de productos: por nombre, marca, categoría, descripción o código
 const buscarProductos = (productos, cats, t, filtro = () => true) => productos.filter(p => filtro(p) && (p.codigo_barras === t
@@ -461,9 +466,10 @@ ROUTES.clientes = async ({ id }) => {
 };
 
 function clienteModal(c, onSaved) {
-  const v = c || { nombre: '', telefono: '', dni_cuit: '', email: '', direccion: '', notas: '' };
+  const v = c || { apellido: '', nombres: '', telefono: '', dni_cuit: '', email: '', direccion: '', notas: '' };
   const m = modal(c ? 'Editar cliente' : 'Nuevo cliente', `
-    <div class="field"><label>Nombre y apellido / Razón social *</label><input class="input" name="nombre" value="${esc(v.nombre)}"></div>
+    <div class="row"><div class="field"><label>Apellido / Razón social *</label><input class="input" name="apellido" value="${esc(v.apellido ?? v.nombre)}"></div>
+      <div class="field"><label>Nombres</label><input class="input" name="nombres" value="${esc(v.nombres)}" placeholder="(vacío si es empresa)"></div></div>
     <div class="row"><div class="field"><label>Teléfono (WhatsApp)</label><input class="input" name="telefono" value="${esc(v.telefono)}" placeholder="ej: 342 555-1234"></div>
       <div class="field"><label>DNI / CUIT</label><input class="input" name="dni_cuit" value="${esc(v.dni_cuit)}"></div></div>
     <div class="row"><div class="field"><label>Email</label><input class="input" name="email" type="email" value="${esc(v.email)}"></div>
@@ -472,7 +478,7 @@ function clienteModal(c, onSaved) {
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el);
-    if (!f.nombre) return toast('El nombre es obligatorio', true);
+    if (!f.apellido) return toast('El apellido (o razón social) es obligatorio', true);
     const r = await store.guardarCliente({ ...(c ? { id: c.id } : {}), ...f });
     m.close(); toast('Cliente guardado'); onSaved ? onSaved(r) : render();
   });
@@ -523,7 +529,7 @@ async function fichaCliente(id) {
     </div>
     <div class="grid">
       <div class="card card-pad"><h2>Datos <button class="btn sm" id="editar">Editar</button></h2>
-        <dl class="kv"><dt>Teléfono</dt><dd>${esc(c.telefono) || '—'} ${c.telefono ? `<a class="small" target="_blank" rel="noopener" href="${waLink(c.telefono, `Hola ${c.nombre.split(' ')[0]}, te escribimos de GScom.`)}">WhatsApp</a>` : ''}</dd>
+        <dl class="kv"><dt>Teléfono</dt><dd>${esc(c.telefono) || '—'} ${c.telefono ? `<a class="small" target="_blank" rel="noopener" href="${waLink(c.telefono, `Hola ${primerNombre(c)}, te escribimos de GScom.`)}">WhatsApp</a>` : ''}</dd>
         <dt>DNI / CUIT</dt><dd>${esc(c.dni_cuit) || '—'}</dd><dt>Email</dt><dd>${esc(c.email) || '—'}</dd><dt>Dirección</dt><dd>${esc(c.direccion) || '—'}</dd></dl>
         ${c.notas ? `<div class="small" style="margin-top:.8rem;background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px">📝 ${esc(c.notas)}</div>` : ''}</div>
       <div class="card card-pad"><h2>Equipos <button class="btn sm" id="add-eq">+ Agregar</button></h2>
@@ -559,7 +565,7 @@ ROUTES.service = async ({ id, q }) => {
     $('#rows').innerHTML = l.map(o => `<tr class="click" data-href="#/service/${o.id}"><td class="mono"><b>#${o.numero}</b></td>
       <td class="nowrap">${fdate(o.fecha_ingreso)}<div class="small muted">${daysSince(o.fecha_ingreso) === 0 ? 'hoy' : `hace ${daysSince(o.fecha_ingreso)} d`}</div></td>
       <td>${esc(o.cliente?.nombre)}</td><td>${esc([o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' '))}</td>
-      <td class="small" style="max-width:280px">${esc(o.falla_reportada)}</td><td>${pill(o.estado)}</td></tr>`).join('')
+      <td class="small" style="max-width:280px">${esc(o.falla_reportada)}</td><td>${pill(o.estado)}${respuestaPresu(o)}</td></tr>`).join('')
       || '<tr><td colspan="6" class="empty">No hay órdenes en este estado.</td></tr>';
     bindRowLinks();
   };
@@ -574,9 +580,10 @@ async function nuevaOrdenModal(clienteId = null) {
     <div class="field"><label>Cliente *</label><select class="input" name="cliente_id"><option value="">Elegí un cliente…</option><option value="__nuevo">+ Cliente nuevo</option>
       ${clientes.map(c => `<option value="${c.id}" ${c.id === clienteId ? 'selected' : ''}>${esc(c.nombre)}${c.telefono ? ' — ' + esc(c.telefono) : ''}</option>`).join('')}</select></div>
     <div id="cli-nuevo" hidden class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem">
-      <div class="row"><div class="field"><label>Nombre y apellido *</label><input class="input" name="c_nombre"></div>
-      <div class="field"><label>Teléfono (WhatsApp)</label><input class="input" name="c_telefono"></div></div>
-      <div class="field"><label>DNI / CUIT</label><input class="input" name="c_dni_cuit"></div></div>
+      <div class="row"><div class="field"><label>Apellido / Razón social *</label><input class="input" name="c_apellido"></div>
+      <div class="field"><label>Nombres</label><input class="input" name="c_nombres"></div></div>
+      <div class="row"><div class="field"><label>Teléfono (WhatsApp)</label><input class="input" name="c_telefono"></div>
+      <div class="field"><label>DNI / CUIT</label><input class="input" name="c_dni_cuit"></div></div></div>
     <div class="field"><label>Equipo *</label><select class="input" name="equipo_id"></select></div>
     <div id="eq-nuevo" hidden class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem">${equipoFields({ tipo: 'Notebook', marca: '', modelo: '', nro_serie: '', notas: '' }, 'e_')}</div>
     <div class="field"><label>Falla reportada por el cliente *</label><textarea class="input" name="falla_reportada" placeholder="Lo que cuenta el cliente, con sus palabras"></textarea></div>
@@ -598,10 +605,10 @@ async function nuevaOrdenModal(clienteId = null) {
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el);
     if (!f.cliente_id) return toast('Elegí el cliente', true);
-    if (f.cliente_id === '__nuevo' && !f.c_nombre) return toast('Completá el nombre del cliente nuevo', true);
+    if (f.cliente_id === '__nuevo' && !f.c_apellido) return toast('Completá el apellido del cliente nuevo', true);
     if (!f.falla_reportada) return toast('Describí la falla reportada', true);
     let cid = +f.cliente_id;
-    if (f.cliente_id === '__nuevo') cid = (await store.guardarCliente({ nombre: f.c_nombre, telefono: f.c_telefono, dni_cuit: f.c_dni_cuit })).id;
+    if (f.cliente_id === '__nuevo') cid = (await store.guardarCliente({ apellido: f.c_apellido, nombres: f.c_nombres, telefono: f.c_telefono, dni_cuit: f.c_dni_cuit })).id;
     let eid = +f.equipo_id;
     if (f.equipo_id === '__nuevo') eid = (await store.guardarEquipo({ cliente_id: cid, tipo: f.e_tipo, marca: f.e_marca, modelo: f.e_modelo, nro_serie: f.e_nro_serie, notas: f.e_notas })).id;
     const o = await store.crearOrden({ cliente_id: cid, equipo_id: eid, falla_reportada: f.falla_reportada, accesorios: f.accesorios,
@@ -631,7 +638,7 @@ async function detalleOrden(id) {
   const cerrada = o.estado === 'entregado';
 
   view().innerHTML = `
-  <div class="page-head"><div><a href="#/service" class="small muted">← Service</a><h1>Orden #${o.numero} ${pill(o.estado)}</h1></div>
+  <div class="page-head"><div><a href="#/service" class="small muted">← Service</a><h1>Orden #${o.numero} ${pill(o.estado)}${respuestaPresu(o)}</h1></div>
     <div class="actions"><button class="btn" id="imp">Imprimir comprobante</button>${cerrada ? '' : '<button class="btn ok" id="entregar">Entregar y cobrar</button>'}</div></div>
   <div class="card card-pad" style="margin-bottom:1rem">${stepper(o.estado)}</div>
   <div class="split">
@@ -673,7 +680,7 @@ async function detalleOrden(id) {
 
   const msgWA = (estado, coment) => {
     const e = estadoInfo(estado);
-    return `Hola ${o.cliente.nombre.split(' ')[0]}! Te escribimos de ${n.nombre} por tu ${eq} (orden #${o.numero}).\n\nEstado: *${e.label}*\n${coment || e.cliente}\n\nPodés seguirlo acá: ${url}`;
+    return `Hola ${primerNombre(o.cliente)}! Te escribimos de ${n.nombre} por tu ${eq} (orden #${o.numero}).\n\nEstado: *${e.label}*\n${coment || e.cliente}\n\nPodés seguirlo acá: ${url}`;
   };
   const wa = $('#wa'); if (wa) wa.href = waLink(o.cliente.telefono, msgWA(o.estado, ''));
   $('#copiar').onclick = async () => { try { await navigator.clipboard.writeText(url); toast('Link copiado'); } catch { prompt('Copiá el link:', url); } };
@@ -690,6 +697,10 @@ async function detalleOrden(id) {
   if (cambiar) cambiar.onclick = () => run(async () => {
     const estado = $('#nuevo-estado').value, coment = $('#coment').value.trim();
     if (estado === o.estado && !coment) return toast('Elegí un estado distinto o escribí un mensaje', true);
+    const pres = $('#pres').value === '' ? null : +$('#pres').value;
+    if (estado === 'presupuesto' && pres == null) return toast('Cargá el monto en "Presupuesto ($)" para que el cliente pueda aceptarlo desde el link', true);
+    // Presupuesto nuevo o modificado: se guarda y queda pendiente de respuesta del cliente
+    if (pres !== o.presupuesto) await store.actualizarOrden(id, { presupuesto: pres, presupuesto_aprobado: null });
     await store.cambiarEstadoOrden(id, estado, coment); // mismo estado + mensaje = novedad para el cliente
     if ($('#avisar').checked && o.cliente.telefono) window.open(waLink(o.cliente.telefono, msgWA(estado, coment)), '_blank', 'noopener');
     toast('Estado actualizado'); render();
