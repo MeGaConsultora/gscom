@@ -907,7 +907,7 @@ ROUTES.ajustes = async () => {
   const n = await store.negocio();
   view().innerHTML = `
   <div class="page-head"><h1>Ajustes</h1></div>
-  <div class="split">
+  <div ${store.modo === 'demo' ? 'class="split"' : 'style="max-width:760px"'}>
     <div class="card card-pad"><h2>Datos del negocio</h2><p class="small muted" style="margin-bottom:1rem">Aparecen en los comprobantes y en la página de seguimiento que ve el cliente.</p>
       <div class="field"><label>Nombre</label><input class="input" name="nombre" value="${esc(n.nombre)}"></div>
       <div class="row"><div class="field"><label>Dirección</label><input class="input" name="direccion" value="${esc(n.direccion)}"></div>
@@ -921,10 +921,7 @@ ROUTES.ajustes = async () => {
     ${store.modo === 'demo' ? `<div class="card card-pad"><h2>Modo demostración</h2>
       <p class="small" style="margin-bottom:.8rem">La app está funcionando con <b>datos de ejemplo guardados solo en este navegador</b>. Podés cargar, vender y probar todo libremente: nada se envía a ningún lado.</p>
       <p class="small muted" style="margin-bottom:1rem">Cuando conectemos Supabase, los datos pasan a guardarse en la base real y quedan disponibles desde cualquier computadora o celular.</p>
-      <button class="btn danger" id="reset">Restablecer datos de ejemplo</button></div>` : `<div class="card card-pad"><h2>Usuarios</h2>
-      <p class="small" style="margin-bottom:.6rem">Los usuarios se crean en Supabase → <b>Authentication → Users → Add user</b> y se activan desde el <b>SQL Editor</b> con:</p>
-      <pre class="small mono" style="white-space:pre-wrap;background:#f5f6f8;padding:.7rem;border-radius:8px">update perfiles set activo = true, nombre = 'Nombre'
-where id = (select id from auth.users where email = 'mail@ejemplo.com');</pre></div>`}
+      <button class="btn danger" id="reset">Restablecer datos de ejemplo</button></div>` : ''}
   </div>`;
   $('#guardar').onclick = () => run(async () => { const f = formData(view()); f.garantia_dias = +f.garantia_dias || 0; await store.guardarNegocio(f); toast('Datos guardados'); });
   if ($('#reset')) $('#reset').onclick = () => { if (confirm('¿Borrar todo lo cargado y volver a los datos de ejemplo?')) { resetDemo(); cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo' }; prodSel.clear(); toast('Datos restablecidos'); go('#/inicio'); } };
