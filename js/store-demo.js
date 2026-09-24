@@ -150,21 +150,29 @@ export const store = {
     if (!items.length) throw new Error('La venta no tiene ítems');
     if (forma_pago === CC && !cliente_id) throw new Error('Para vender a cuenta corriente hay que elegir el cliente');
 
-    db.venta_items.filter(i => i.venta_id === v.id && i.producto_id).forEach(i => movStock(i.producto_id, i.cantidad, 'ajuste', { venta_id: v.id, nota: `Corrección de venta #${v.numero}` }));
-    if (v.forma_pago === CC) insert('cc_movimientos', { cliente_id: v.cliente_id, fecha: now(), tipo: 'ajuste', monto: -v.total, concepto: `Corrección de venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
-    else insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Corrección de venta #${v.numero}`, monto: v.total, forma_pago: v.forma_pago, venta_id: v.id });
-
-    db.venta_items = db.venta_items.filter(i => i.venta_id !== v.id);
+    // Igual que editar_venta en la base: solo se corrige lo que cambió
     const subtotal = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
     const total = subtotal - (+descuento || 0);
-    for (const i of items) {
-      insert('venta_items', { venta_id: v.id, producto_id: i.producto_id || null, descripcion: i.descripcion, cantidad: i.cantidad,
-        precio_unitario: i.precio_unitario, subtotal: i.cantidad * i.precio_unitario });
-      if (i.producto_id) movStock(i.producto_id, -i.cantidad, 'venta', { venta_id: v.id, nota: `Venta #${v.numero} (editada)` });
+    const firma = l => JSON.stringify(l.map(i => [i.producto_id || null, i.descripcion, +i.cantidad, +i.precio_unitario]).sort());
+    const itemsIguales = firma(db.venta_items.filter(i => i.venta_id === v.id)) === firma(items);
+    const plataIgual = total === v.total && forma_pago === v.forma_pago && (cliente_id || null) === (v.cliente_id || null);
+
+    if (!itemsIguales) {
+      db.venta_items.filter(i => i.venta_id === v.id && i.producto_id).forEach(i => movStock(i.producto_id, i.cantidad, 'ajuste', { venta_id: v.id, nota: `Corrección de venta #${v.numero}` }));
+      db.venta_items = db.venta_items.filter(i => i.venta_id !== v.id);
+      for (const i of items) {
+        insert('venta_items', { venta_id: v.id, producto_id: i.producto_id || null, descripcion: i.descripcion, cantidad: i.cantidad,
+          precio_unitario: i.precio_unitario, subtotal: i.cantidad * i.precio_unitario });
+        if (i.producto_id) movStock(i.producto_id, -i.cantidad, 'venta', { venta_id: v.id, nota: `Venta #${v.numero} (editada)` });
+      }
+    }
+    if (!plataIgual) {
+      if (v.forma_pago === CC) insert('cc_movimientos', { cliente_id: v.cliente_id, fecha: now(), tipo: 'ajuste', monto: -v.total, concepto: `Corrección de venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
+      else insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Corrección de venta #${v.numero}`, monto: v.total, forma_pago: v.forma_pago, venta_id: v.id });
+      if (forma_pago === CC) insert('cc_movimientos', { cliente_id: cliente_id || null, fecha: now(), tipo: 'cargo', monto: total, concepto: `Venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
+      else insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Venta #${v.numero}`, monto: total, forma_pago, venta_id: v.id });
     }
     Object.assign(v, { cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0, total, forma_pago, notas: notas ?? v.notas });
-    if (forma_pago === CC) insert('cc_movimientos', { cliente_id: v.cliente_id, fecha: now(), tipo: 'cargo', monto: total, concepto: `Venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
-    else insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Venta #${v.numero}`, monto: total, forma_pago, venta_id: v.id });
     save();
   },
   async eliminarMovimientoCaja(id) {
