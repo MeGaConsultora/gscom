@@ -138,6 +138,12 @@ export const store = {
     if (m.venta_id || m.orden_id || m.cc_movimiento_id) throw new Error('Este movimiento viene de una venta, un service o un cobro: anulalo desde su origen');
     db.caja_movimientos = db.caja_movimientos.filter(x => x.id !== m.id); save();
   },
+  async editarMovimientoCaja(id, { concepto, monto, forma_pago }) {
+    const m = byId('caja_movimientos', id);
+    if (!(+monto > 0)) throw new Error('El monto tiene que ser mayor a cero');
+    if (m.venta_id || m.orden_id || m.cc_movimiento_id) throw new Error('Este movimiento viene de una venta, un service o un cobro: no se edita directamente');
+    Object.assign(m, { concepto, monto: +monto, forma_pago }); save();
+  },
 
   // Fichero (cuentas corrientes)
   async ccSaldos() {
@@ -300,11 +306,15 @@ export const store = {
   async seguimiento(tok) {
     const o = db.ordenes_servicio.find(x => x.token === tok); if (!o) return null;
     const c = byId('clientes', o.cliente_id), e = byId('equipos', o.equipo_id);
+    const anticipoPagado = -db.cc_movimientos.filter(m => m.orden_id === o.id && m.tipo === 'pago' && !m.anulado).reduce((s, m) => s + m.monto, 0);
+    const saldoPendiente = o.estado === 'entregado' && o.forma_pago_entrega !== CC ? 0
+      : Math.max((o.total_cobrado ?? o.presupuesto ?? 0) - anticipoPagado, 0);
     return clone({
       numero: o.numero, cliente: c?.nombres || (c?.nombre || '').split(' ')[0],
       equipo: e ? [e.tipo, e.marca, e.modelo].filter(Boolean).join(' ') : '',
       falla: o.falla_reportada, estado: o.estado, fecha_ingreso: o.fecha_ingreso, fecha_estimada: o.fecha_estimada,
       fecha_entrega: o.fecha_entrega, presupuesto: o.presupuesto, presupuesto_aprobado: o.presupuesto_aprobado,
+      anticipo_pagado: anticipoPagado, saldo_pendiente: saldoPendiente,
       historial: db.orden_estados.filter(h => h.orden_id === o.id).map(h => ({ estado: h.estado, comentario: h.comentario, fecha: h.created_at })),
       negocio: db.negocio,
     });

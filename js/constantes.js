@@ -5,6 +5,7 @@ export const ESTADOS = [
   { id: 'diagnostico',    label: 'En diagnóstico',      color: 'blue',   cliente: 'Un técnico está revisando tu equipo.' },
   { id: 'presupuesto',    label: 'Presupuesto enviado', color: 'amber',  cliente: 'Te enviamos el presupuesto. Esperamos tu confirmación.' },
   { id: 'reparacion',     label: 'En reparación',       color: 'blue',   cliente: 'Tu equipo está siendo reparado.' },
+  { id: 'derivado',       label: 'Derivado a laboratorio', color: 'violet', cliente: 'Tu equipo fue derivado a un laboratorio externo para su reparación.' },
   { id: 'repuesto',       label: 'Esperando repuesto',  color: 'violet', cliente: 'Estamos esperando un repuesto para continuar.' },
   { id: 'listo',          label: 'Listo para retirar',  color: 'green',  cliente: '¡Tu equipo está listo! Podés pasar a retirarlo.' },
   { id: 'entregado',      label: 'Entregado',           color: 'gray',   cliente: 'Equipo entregado. ¡Gracias por confiar en nosotros!' },

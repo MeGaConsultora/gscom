@@ -685,10 +685,10 @@ async function nuevaOrdenModal(clienteId = null) {
 
 const FLUJO = ['recibido', 'diagnostico', 'presupuesto', 'reparacion', 'listo', 'entregado'];
 function stepper(estado) {
-  const pos = estado === 'repuesto' ? FLUJO.indexOf('reparacion') : estado === 'sin_reparacion' ? FLUJO.indexOf('listo') : FLUJO.indexOf(estado);
+  const pos = ['repuesto', 'derivado'].includes(estado) ? FLUJO.indexOf('reparacion') : estado === 'sin_reparacion' ? FLUJO.indexOf('listo') : FLUJO.indexOf(estado);
   return `<div class="stepper">${FLUJO.map((s, i) => {
     let label = estadoInfo(s).label;
-    if (i === pos && estado === 'repuesto') label = 'Esperando repuesto';
+    if (i === pos && ['repuesto', 'derivado'].includes(estado)) label = estadoInfo(estado).label;
     if (i === pos && estado === 'sin_reparacion') label = 'Sin reparación';
     return `<div class="step ${i < pos ? 'done' : ''} ${i === pos ? 'current' : ''}">${esc(label)}</div>`;
   }).join('')}</div>`;
@@ -974,18 +974,37 @@ async function movimientoCajaModal(mv) {
     accion = 'Eliminar este movimiento';
     ejecutar = () => store.eliminarMovimientoCaja(mv.id);
   }
+  const esManual = !mv.venta_id && !mv.orden_id && !mv.cc_movimiento_id;
 
   const m = modal('Movimiento de caja', `
     <dl class="kv"><dt>Fecha</dt><dd>${hora}</dd><dt>Concepto</dt><dd>${esc(mv.concepto)}</dd><dt>Origen</dt><dd>${origen}</dd>
       <dt>Forma de pago</dt><dd>${esc(mv.forma_pago)}</dd><dt>Monto</dt><dd><b style="color:${mv.tipo === 'ingreso' ? 'var(--ok)' : 'var(--bad)'}">${signo}</b></dd></dl>
     ${accion ? `<p class="small muted" style="margin-top:1rem">${accion}.</p>` : ''}`,
-    `${ejecutar ? `<button class="btn danger" id="anular">${mv.venta_id || mv.orden_id || mv.cc_movimiento_id ? 'Anular' : 'Eliminar'}</button>` : ''}${ir}<button class="btn primary" data-close>Cerrar</button>`);
+    `${ejecutar ? `<button class="btn danger" id="anular">${mv.venta_id || mv.orden_id || mv.cc_movimiento_id ? 'Anular' : 'Eliminar'}</button>` : ''}${esManual ? '<button class="btn" id="editar">Editar</button>' : ''}${ir}<button class="btn primary" data-close>Cerrar</button>`);
   const irBtn = $('#ir', m.el);
   if (irBtn) irBtn.onclick = () => { m.close(); ventaModal(mv.venta_id); };
   const an = $('#anular', m.el);
   if (an) an.onclick = () => run(async () => {
     if (!confirm(`¿Confirmás? ${accion}.`)) return;
     await ejecutar(); m.close(); toast('Listo'); render();
+  });
+  const ed = $('#editar', m.el);
+  if (ed) ed.onclick = () => { m.close(); editarMovCajaModal(mv); };
+}
+
+function editarMovCajaModal(mv) {
+  let forma = mv.forma_pago;
+  const m = modal(`Editar ${mv.tipo === 'ingreso' ? 'ingreso' : 'egreso'} de caja`, `
+    <div class="field"><label>Concepto</label><input class="input" id="concepto" value="${esc(mv.concepto)}"></div>
+    <div class="row"><div class="field"><label>Monto</label><input class="input" id="monto" type="number" step="any" min="0" value="${mv.monto}"></div>
+    <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div></div>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
+  $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); });
+  $('#ok', m.el).onclick = () => run(async () => {
+    const concepto = $('#concepto', m.el).value.trim(), monto = +$('#monto', m.el).value;
+    if (!concepto || !(monto > 0)) return toast('Completá concepto y monto', true);
+    await store.editarMovimientoCaja(mv.id, { concepto, monto, forma_pago: forma });
+    m.close(); toast('Movimiento actualizado'); render();
   });
 }
 

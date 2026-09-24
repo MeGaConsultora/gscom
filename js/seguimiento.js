@@ -15,7 +15,7 @@ function render(o) {
     return;
   }
   const e = estadoInfo(o.estado);
-  const pos = o.estado === 'repuesto' ? 3 : o.estado === 'sin_reparacion' ? 4 : FLUJO.indexOf(o.estado);
+  const pos = ['repuesto', 'derivado'].includes(o.estado) ? 3 : o.estado === 'sin_reparacion' ? 4 : FLUJO.indexOf(o.estado);
   const ultimo = [...o.historial].reverse().find(h => h.estado === o.estado && h.comentario && !esRespuestaCliente(h.comentario));
   const n = o.negocio;
   const wa = texto => n.whatsapp ? `https://wa.me/${n.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent(texto)}` : '';
@@ -23,7 +23,7 @@ function render(o) {
   document.title = `Orden #${o.numero} — ${e.label}`;
 
   let bloquePresu = '';
-  if (o.presupuesto != null && ['presupuesto', 'reparacion', 'repuesto', 'listo'].includes(o.estado)) {
+  if (o.presupuesto != null && ['presupuesto', 'reparacion', 'derivado', 'repuesto', 'listo'].includes(o.estado)) {
     bloquePresu = `<div style="margin-top:1.2rem" class="small muted">Presupuesto</div><div style="font-size:1.5rem;font-weight:700">${money(o.presupuesto)}</div>`;
     if (pendiente) bloquePresu += `
       <div class="row" style="margin-top:1rem;gap:.6rem">
@@ -34,6 +34,12 @@ function render(o) {
     else if (o.estado === 'presupuesto' && o.presupuesto_aprobado === true) bloquePresu += `<div style="margin-top:.6rem"><span class="pill green">✓ Aceptaste el presupuesto</span></div>`;
     else if (o.estado === 'presupuesto' && o.presupuesto_aprobado === false) bloquePresu += `<div style="margin-top:.6rem"><span class="pill red">Rechazaste el presupuesto</span></div>`;
   }
+  if (o.anticipo_pagado > 0) {
+    bloquePresu += `<div style="margin-top:1rem;padding-top:1rem;border-top:1px solid var(--line)">
+      <div class="small muted">Pagaste a cuenta</div><div style="font-size:1.3rem;font-weight:700;color:var(--ok)">${money(o.anticipo_pagado)}</div>
+      ${o.saldo_pendiente > 0 ? `<div class="small muted" style="margin-top:.3rem">Saldo pendiente: <b>${money(o.saldo_pendiente)}</b></div>` : `<div class="small" style="margin-top:.3rem;color:var(--ok)">✓ No tenés saldo pendiente</div>`}
+    </div>`;
+  }
 
   const waConsulta = wa(`Hola! Consulto por mi orden #${o.numero} (${o.equipo}).`);
   app.innerHTML = `
@@ -42,7 +48,7 @@ function render(o) {
     <div class="eq">${esc(o.equipo)}</div>
     <div class="stepper">${FLUJO.map((s, i) => {
       let label = estadoInfo(s).label;
-      if (i === pos && o.estado === 'repuesto') label = 'Esperando repuesto';
+      if (i === pos && ['repuesto', 'derivado'].includes(o.estado)) label = estadoInfo(o.estado).label;
       if (i === pos && o.estado === 'sin_reparacion') label = 'Sin reparación';
       return `<div class="step ${i < pos ? 'done' : ''} ${i === pos ? 'current' : ''}">${esc(label)}</div>`;
     }).join('')}</div>

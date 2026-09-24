@@ -161,6 +161,9 @@ export const store = {
   },
   async anularEntregaOrden(id) { await q(sb.rpc('anular_entrega_orden', { p_orden_id: id })); },
   async eliminarMovimientoCaja(id) { await q(sb.rpc('eliminar_movimiento_caja', { p_id: id })); },
+  async editarMovimientoCaja(id, { concepto, monto, forma_pago }) {
+    await q(sb.rpc('editar_movimiento_caja', { p_id: id, p_concepto: concepto, p_monto: +monto, p_forma_pago: forma_pago }));
+  },
   async eliminarProveedor(id) { await q(sb.from('proveedores').delete().eq('id', id)); },
 
   // Fichero (cuentas corrientes)
