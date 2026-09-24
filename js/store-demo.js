@@ -201,13 +201,20 @@ export const store = {
   },
   async ccMovimientos(clienteId) { return clone(db.cc_movimientos.filter(m => m.cliente_id === +clienteId).reverse().map(m => ({ ...m, venta: m.venta_id ? { notas: byId('ventas', m.venta_id)?.notas || '' } : null }))); },
   async ccMovimiento(id) { return clone(byId('cc_movimientos', id) || null); },
-  async cobrarCuenta(clienteId, { monto, forma_pago, nota = '' }) {
+  async cobrarCuenta(clienteId, { monto, forma_pago, nota = '', imputaciones = [] }) {
     if (!(+monto > 0)) throw new Error('El monto a cobrar tiene que ser mayor a cero');
     if (forma_pago === CC) throw new Error('Elegí cómo paga (efectivo, transferencia, etc.)');
+    if (imputaciones.reduce((s, x) => s + +x.monto, 0) > +monto + 0.009) throw new Error('Lo imputado supera el monto cobrado');
     const c = byId('clientes', clienteId);
     const m = insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || 'Cobro de cuenta corriente', forma_pago, anulado: false });
     insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Cobro cta. cte. — ${c.nombre}`, monto: +monto, forma_pago, cc_movimiento_id: m.id });
+    db.cc_imputaciones ||= [];
+    imputaciones.filter(x => +x.monto > 0).forEach(x => insert('cc_imputaciones', { pago_id: m.id, grupo: x.grupo, monto: +x.monto }));
     save(); return m.id;
+  },
+  async ccImputaciones(clienteId) {
+    const pagos = new Set(db.cc_movimientos.filter(m => m.cliente_id === +clienteId).map(m => m.id));
+    return clone((db.cc_imputaciones || []).filter(x => pagos.has(x.pago_id)));
   },
   async cargarDeuda(clienteId, { monto, concepto }) {
     insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'cargo', monto: +monto, concepto, forma_pago: '', anulado: false }); save();
