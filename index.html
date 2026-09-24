@@ -21,6 +21,11 @@
   <button class="btn sm" id="usuario" hidden style="background:#1b1e24;border-color:#2a2e36;color:#cfd4db;flex-shrink:0"></button>
 </header>
 <main id="view"></main>
+<script>
+  if (location.protocol === 'file:') document.getElementById('view').innerHTML =
+    '<div class="card card-pad" style="max-width:520px;margin:8vh auto 0"><h2>La app no se puede abrir con doble clic</h2>' +
+    '<p class="small">Abrila desde su dirección web (GitHub Pages) o, en esta computadora, ejecutá <code>node tools/servidor.js</code> y entrá a <b>http://localhost:5173</b>.</p></div>';
+</script>
 <div id="print-area"></div>
 <script type="module" src="js/app.js"></script>
 </body>
