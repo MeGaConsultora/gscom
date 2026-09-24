@@ -8,7 +8,8 @@ const $$ = (s, el = document) => [...el.querySelectorAll(s)];
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fmtMoney = new Intl.NumberFormat('es-AR', { style: 'currency', currency: 'ARS', minimumFractionDigits: 0, maximumFractionDigits: 2 });
 const money = n => fmtMoney.format(+n || 0);
-const fdate = iso => iso ? new Date(iso).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
+const toDate = iso => new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + 'T00:00' : iso); // fechas sin hora = día local
+const fdate = iso => iso ? toDate(iso).toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—';
 const fdatetime = iso => iso ? new Date(iso).toLocaleString('es-AR', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }) : '—';
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const isToday = iso => sameDay(iso, new Date());
@@ -750,9 +751,9 @@ function imprimirOrden(o, n, url) {
 // CAJA
 // =====================================================================
 ROUTES.caja = async ({ q }) => {
-  const dia = q.get('dia') || new Date().toISOString().slice(0, 10);
+  const dia = q.get('dia') || new Date().toLocaleDateString('sv');
   const [movs, cierres] = await Promise.all([store.cajaMovimientos(), store.cierresCaja()]);
-  const delDia = movs.filter(m => m.fecha.slice(0, 10) === dia || new Date(m.fecha).toLocaleDateString('sv') === dia);
+  const delDia = movs.filter(m => new Date(m.fecha).toLocaleDateString('sv') === dia);
   const neto = f => delDia.filter(m => !f || m.forma_pago === f).reduce((s, m) => s + (m.tipo === 'ingreso' ? m.monto : -m.monto), 0);
   const ingresos = delDia.filter(m => m.tipo === 'ingreso').reduce((s, m) => s + m.monto, 0);
   const egresos = delDia.filter(m => m.tipo === 'egreso').reduce((s, m) => s + m.monto, 0);
@@ -871,7 +872,7 @@ ROUTES.reportes = async ({ q }) => {
   const [ventas, ordenes, productos] = await Promise.all([store.ventas(), store.ordenes(), store.productos()]);
   const desde = new Date(); desde.setHours(0, 0, 0, 0); desde.setDate(desde.getDate() - (dias - 1));
   const vs = ventas.filter(v => !v.anulada && new Date(v.fecha) >= desde);
-  const detalle = (await Promise.all(vs.map(v => store.venta(v.id)))).flatMap(v => v.items);
+  const detalle = await store.itemsVendidos(desde.toISOString());
   const total = vs.reduce((s, v) => s + v.total, 0);
   const costo = detalle.reduce((s, i) => s + i.cantidad * (productos.find(p => p.id === i.producto_id)?.precio_costo || 0), 0);
   const top = Object.values(detalle.reduce((acc, i) => { const k = i.descripcion; acc[k] ??= { nombre: k, cant: 0, total: 0 }; acc[k].cant += i.cantidad; acc[k].total += i.subtotal; return acc; }, {})).sort((a, b) => b.total - a.total).slice(0, 10);
@@ -917,19 +918,64 @@ ROUTES.ajustes = async () => {
       <div class="row"><div class="field"><label>Garantía de service (días)</label><input class="input" type="number" name="garantia_dias" value="${n.garantia_dias}"></div><div></div></div>
       <div class="field"><label>Texto al pie del comprobante de service</label><textarea class="input" name="pie_comprobante">${esc(n.pie_comprobante)}</textarea></div>
       <button class="btn primary" id="guardar">Guardar</button></div>
-    <div class="card card-pad"><h2>Modo demostración</h2>
+    ${store.modo === 'demo' ? `<div class="card card-pad"><h2>Modo demostración</h2>
       <p class="small" style="margin-bottom:.8rem">La app está funcionando con <b>datos de ejemplo guardados solo en este navegador</b>. Podés cargar, vender y probar todo libremente: nada se envía a ningún lado.</p>
       <p class="small muted" style="margin-bottom:1rem">Cuando conectemos Supabase, los datos pasan a guardarse en la base real y quedan disponibles desde cualquier computadora o celular.</p>
-      <button class="btn danger" id="reset">Restablecer datos de ejemplo</button></div>
+      <button class="btn danger" id="reset">Restablecer datos de ejemplo</button></div>` : `<div class="card card-pad"><h2>Usuarios</h2>
+      <p class="small" style="margin-bottom:.6rem">Los usuarios se crean en Supabase → <b>Authentication → Users → Add user</b> y se activan desde el <b>SQL Editor</b> con:</p>
+      <pre class="small mono" style="white-space:pre-wrap;background:#f5f6f8;padding:.7rem;border-radius:8px">update perfiles set activo = true, nombre = 'Nombre'
+where id = (select id from auth.users where email = 'mail@ejemplo.com');</pre></div>`}
   </div>`;
   $('#guardar').onclick = () => run(async () => { const f = formData(view()); f.garantia_dias = +f.garantia_dias || 0; await store.guardarNegocio(f); toast('Datos guardados'); });
-  $('#reset').onclick = () => { if (confirm('¿Borrar todo lo cargado y volver a los datos de ejemplo?')) { resetDemo(); cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo' }; prodSel.clear(); toast('Datos restablecidos'); go('#/inicio'); } };
+  if ($('#reset')) $('#reset').onclick = () => { if (confirm('¿Borrar todo lo cargado y volver a los datos de ejemplo?')) { resetDemo(); cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo' }; prodSel.clear(); toast('Datos restablecidos'); go('#/inicio'); } };
 };
+
+// =====================================================================
+// Login (solo con Supabase)
+// =====================================================================
+function pantallaLogin(mensaje = '') {
+  $('nav.tabs').hidden = true;
+  view().innerHTML = `
+  <div class="card card-pad" style="max-width:380px;margin:8vh auto 0">
+    <div style="text-align:center;margin-bottom:1.2rem"><img src="img/logo.png" alt="" style="width:72px;height:72px"><h1 style="font-size:1.2rem;margin-top:.5rem">Ingresar a GScom</h1></div>
+    ${mensaje ? `<div class="small" style="background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px;margin-bottom:1rem">${esc(mensaje)}</div>` : ''}
+    <form id="login">
+      <div class="field"><label>Email</label><input class="input" name="email" type="email" autocomplete="username" required></div>
+      <div class="field"><label>Contraseña</label><input class="input" name="password" type="password" autocomplete="current-password" required></div>
+      <button class="btn primary block lg" type="submit">Ingresar</button>
+    </form></div>`;
+  $('#login [name=email]').focus();
+  $('#login').onsubmit = async e => {
+    e.preventDefault();
+    const f = formData($('#login'));
+    const btn = $('#login button'); btn.disabled = true; btn.textContent = 'Ingresando…';
+    const ok = await run(async () => { await store.login(f.email, f.password); return true; });
+    if (ok) iniciar(); else { btn.disabled = false; btn.textContent = 'Ingresar'; }
+  };
+}
 
 // =====================================================================
 // Arranque
 // =====================================================================
 $('nav.tabs').innerHTML = NAV.map(([r, l]) => `<a href="#/${r}" data-r="${r}">${l}</a>`).join('');
-if (store.modo === 'demo') $('#demo-badge').hidden = false;
-window.addEventListener('hashchange', render);
-render();
+let iniciada = false;
+
+async function iniciar() {
+  if (store.modo === 'demo') {
+    $('#demo-badge').hidden = false;
+  } else {
+    const perfil = await store.perfil().catch(() => null);
+    if (!perfil) return pantallaLogin();
+    if (!perfil.activo) {
+      await store.logout();
+      return pantallaLogin(`El usuario ${perfil.email} todavía no está activado. Pedile a un administrador que lo active.`);
+    }
+    const u = $('#usuario');
+    u.hidden = false; u.textContent = `${(perfil.nombre || perfil.email).split(' ')[0]} · Salir`;
+    u.onclick = async () => { if (confirm('¿Cerrar sesión?')) { await store.logout(); location.reload(); } };
+  }
+  $('nav.tabs').hidden = false;
+  if (!iniciada) { window.addEventListener('hashchange', render); iniciada = true; }
+  render();
+}
+iniciar();

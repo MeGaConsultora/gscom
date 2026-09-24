@@ -20,6 +20,7 @@
   --shadow: 0 1px 3px rgba(20,23,28,.06), 0 4px 14px rgba(20,23,28,.05);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { background: var(--bg); }
 body { font-family: 'DM Sans', system-ui, sans-serif; color: var(--ink); font-size: 15px; min-height: 100vh; }
 button, input, select, textarea { font: inherit; color: inherit; }
