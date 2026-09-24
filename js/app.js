@@ -26,9 +26,25 @@ const respuestaPresu = o => o.estado !== 'presupuesto' || o.presupuesto_aprobado
 // Códigos de barras: sin distinguir mayúsculas (algunos lectores devuelven "AHRX93708" en vez de "ahrx93708")
 const mismoCodigo = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 
-// Búsqueda de productos: por nombre, marca, categoría, descripción o código
-const buscarProductos = (productos, cats, t, filtro = () => true) => productos.filter(p => filtro(p) && (mismoCodigo(p.codigo_barras, t)
-  || matches(t, p.nombre, p.marca, p.descripcion, p.codigo_barras, cats.find(c => c.id === p.categoria_id)?.nombre))).slice(0, 8);
+// Búsqueda de productos: por nombre, marca, categoría, descripción o código.
+// Orden: código exacto → nombre que empieza con lo buscado → nombre que lo contiene → resto;
+// con stockPrimero, dentro de cada grupo van primero los que tienen stock.
+// Devuelve hasta `limite` resultados; en .total queda cuántos coincidían en total.
+const MAX_SUGERENCIAS = 50;
+function buscarProductos(productos, cats, t, filtro = () => true, { stockPrimero = false, limite = MAX_SUGERENCIAS } = {}) {
+  const tn = norm(t).trim();
+  const todos = productos.filter(p => filtro(p) && (mismoCodigo(p.codigo_barras, t)
+    || matches(t, p.nombre, p.marca, p.descripcion, p.codigo_barras, cats.find(c => c.id === p.categoria_id)?.nombre)));
+  const rango = p => mismoCodigo(p.codigo_barras, t) ? 0 : norm(p.nombre).startsWith(tn) ? 1 : norm(p.nombre).includes(tn) ? 2 : 3;
+  const conStock = p => stockPrimero && !p.es_servicio && p.stock <= 0 ? 1 : 0;
+  todos.sort((a, b) => rango(a) - rango(b) || conStock(a) - conStock(b) || a.nombre.localeCompare(b.nombre));
+  const r = todos.slice(0, limite);
+  r.total = todos.length;
+  return r;
+}
+// Pie de la lista de resultados cuando hay más de los que se muestran
+const masResultados = r => r.total > r.length
+  ? `<div class="muted small" style="cursor:default;background:#fafbfc">y ${r.total - r.length} más: escribí algo más específico (ej: marca + modelo)</div>` : '';
 
 // Contenido de un resultado de búsqueda con todos los datos, para no confundir productos parecidos
 function prodSugHTML(p, cats, { costo = false } = {}) {
@@ -281,14 +297,15 @@ ROUTES.vender = async ({ q }) => {
   }
   let results = [], sel = 0;
   const paintSug = () => {
-    sug.innerHTML = results.map((p, i) => `<div class="${i === sel ? 'sel' : ''}" data-i="${i}">${prodSugHTML(p, cats)}</div>`).join('')
-      || '<div class="muted">Sin resultados</div>';
+    sug.innerHTML = (results.map((p, i) => `<div class="${i === sel ? 'sel' : ''}" data-i="${i}">${prodSugHTML(p, cats)}</div>`).join('')
+      || '<div class="muted">Sin resultados</div>') + masResultados(results);
     $$('[data-i]', sug).forEach(d => d.onmousedown = e => { e.preventDefault(); add(results[+d.dataset.i]); });
+    $('.sel', sug)?.scrollIntoView({ block: 'nearest' });
   };
   scan.oninput = () => {
     const t = scan.value.trim();
     if (!t) { sug.hidden = true; return; }
-    results = buscarProductos(productos, cats, t);
+    results = buscarProductos(productos, cats, t, undefined, { stockPrimero: true });
     sel = 0; sug.hidden = false; paintSug();
   };
   scan.onkeydown = e => {
@@ -868,9 +885,9 @@ async function detalleOrden(id) {
   const br = $('#buscar-rep'), sug = $('#sug');
   br.oninput = () => {
     const t = br.value.trim(); if (!t) { sug.hidden = true; return; }
-    const r = buscarProductos(productos, cats, t);
+    const r = buscarProductos(productos, cats, t, undefined, { stockPrimero: true });
     sug.hidden = false;
-    sug.innerHTML = r.map(p => `<div data-id="${p.id}">${prodSugHTML(p, cats)}</div>`).join('') || '<div class="muted">Sin resultados</div>';
+    sug.innerHTML = (r.map(p => `<div data-id="${p.id}">${prodSugHTML(p, cats)}</div>`).join('') || '<div class="muted">Sin resultados</div>') + masResultados(r);
     $$('[data-id]', sug).forEach(d => d.onmousedown = e => {
       e.preventDefault(); const p = productos.find(x => x.id === +d.dataset.id);
       items.push({ producto_id: p.id, descripcion: p.nombre, cantidad: 1, precio_unitario: p.precio_venta });
@@ -1449,9 +1466,11 @@ async function nuevaCompra() {
   const paintSug = () => {
     const t = b.value.trim();
     s.innerHTML = results.map((p, i) => `<div class="${i === sel ? 'sel' : ''}" data-i="${i}">${prodSugHTML(p, cats, { costo: true })}</div>`).join('')
+      + masResultados(results)
       + `<div class="${sel === results.length ? 'sel' : ''}" data-nuevo><span><b>+ Crear producto nuevo</b> «${esc(t)}»</span></div>`;
     $$('[data-i]', s).forEach(x => x.onmousedown = e => { e.preventDefault(); addP(results[+x.dataset.i]); });
     $('[data-nuevo]', s).onmousedown = e => { e.preventDefault(); crearProducto(t); };
+    $('.sel', s)?.scrollIntoView({ block: 'nearest' });
   };
   b.oninput = () => {
     const t = b.value.trim();

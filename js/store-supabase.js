@@ -19,6 +19,18 @@ function check({ data, error }) {
 }
 const q = async p => check(await p);
 
+// Supabase entrega como máximo 1000 filas por consulta: esto las pide en tandas
+// hasta traer todas (o hasta 'max'). 'armar' devuelve la consulta ya ordenada.
+async function todas(armar, max = Infinity, tanda = 1000) {
+  let filas = [];
+  while (filas.length < max) {
+    const lote = await q(armar().range(filas.length, Math.min(filas.length + tanda, max) - 1));
+    filas = filas.concat(lote);
+    if (lote.length < tanda) break;
+  }
+  return filas;
+}
+
 const ORDEN_SEL = '*, cliente:clientes(*), equipo:equipos(*)';
 
 export const store = {
@@ -41,9 +53,9 @@ export const store = {
   async guardarNegocio(n) { await q(sb.from('negocio').update(n).eq('id', 1)); },
 
   // Productos
-  async categorias() { return q(sb.from('categorias').select('*').order('nombre')); },
+  async categorias() { return todas(() => sb.from('categorias').select('*').order('nombre')); },
   async crearCategoria(nombre) { return q(sb.from('categorias').insert({ nombre }).select().single()); },
-  async productos() { return q(sb.from('productos').select('*').eq('activo', true).order('nombre')); },
+  async productos() { return todas(() => sb.from('productos').select('*').eq('activo', true).order('nombre').order('id')); },
   async producto(id) { return q(sb.from('productos').select('*').eq('id', id).single()); },
   async productoPorCodigo(code) { return q(sb.from('productos').select('*').eq('activo', true).eq('codigo_barras', String(code).trim()).maybeSingle()); },
   async guardarProducto(p) {
@@ -63,7 +75,7 @@ export const store = {
   },
 
   // Clientes y equipos
-  async clientes() { return q(sb.from('clientes').select('*').order('nombre')); },
+  async clientes() { return todas(() => sb.from('clientes').select('*').order('nombre').order('id')); },
   async cliente(id) { return q(sb.from('clientes').select('*').eq('id', id).maybeSingle()); },
   async guardarCliente(c) {
     const { id, ...datos } = c;
@@ -85,7 +97,7 @@ export const store = {
   },
 
   // Ventas
-  async ventas() { return q(sb.from('ventas').select('*').order('fecha', { ascending: false }).limit(2000)); },
+  async ventas() { return todas(() => sb.from('ventas').select('*').order('fecha', { ascending: false }).order('id', { ascending: false }), 5000); },
   async venta(id) { return q(sb.from('ventas').select('*, items:venta_items(*), cliente:clientes(*)').eq('id', id).single()); },
   async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '' }) {
     const id = await q(sb.rpc('registrar_venta', {
@@ -96,8 +108,8 @@ export const store = {
     return q(sb.from('ventas').select('*').eq('id', id).single());
   },
   async itemsVendidos(desdeISO) {
-    return q(sb.from('venta_items').select('*, venta:ventas!inner(fecha, anulada)')
-      .gte('venta.fecha', desdeISO).eq('venta.anulada', false).limit(20000));
+    return todas(() => sb.from('venta_items').select('*, venta:ventas!inner(fecha, anulada)')
+      .gte('venta.fecha', desdeISO).eq('venta.anulada', false).order('id'), 20000);
   },
   async anularVenta(id) { await q(sb.rpc('anular_venta', { p_venta_id: id })); },
   async editarVenta(id, { cliente_id, items, descuento = 0, forma_pago, notas = '' }) {
@@ -109,13 +121,13 @@ export const store = {
   },
 
   // Caja
-  async cajaMovimientos() { return q(sb.from('caja_movimientos').select('*').order('fecha', { ascending: false }).limit(3000)); },
+  async cajaMovimientos() { return todas(() => sb.from('caja_movimientos').select('*').order('fecha', { ascending: false }).order('id', { ascending: false }), 5000); },
   async agregarMovimientoCaja(m) { return q(sb.from('caja_movimientos').insert(m).select().single()); },
   async cierresCaja() { return q(sb.from('caja_cierres').select('*').order('fecha', { ascending: false }).limit(60)); },
   async cerrarCaja(c) { return q(sb.from('caja_cierres').insert(c).select().single()); },
 
   // Proveedores y compras
-  async proveedores() { return q(sb.from('proveedores').select('*').order('nombre')); },
+  async proveedores() { return todas(() => sb.from('proveedores').select('*').order('nombre').order('id')); },
   async guardarProveedor(p) {
     const { id, ...datos } = p;
     return id ? q(sb.from('proveedores').update(datos).eq('id', id).select().single())
@@ -132,7 +144,7 @@ export const store = {
   async eliminarCompra(id) { await q(sb.rpc('eliminar_compra', { p_compra_id: id })); },
 
   // Service técnico
-  async ordenes() { return q(sb.from('ordenes_servicio').select(ORDEN_SEL).order('fecha_ingreso', { ascending: false }).limit(2000)); },
+  async ordenes() { return todas(() => sb.from('ordenes_servicio').select(ORDEN_SEL).order('fecha_ingreso', { ascending: false }).order('id', { ascending: false }), 3000); },
   async orden(id) {
     return q(sb.from('ordenes_servicio')
       .select(`${ORDEN_SEL}, items:orden_items(*), historial:orden_estados(*)`)
