@@ -3,3 +3,4 @@ node_modules/
 *.local
 CLAVES*.txt
 .env
+privado/

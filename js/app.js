@@ -23,9 +23,11 @@ const primerNombre = c => (c?.nombres || '').split(' ')[0] || c?.apellido || (c?
 // Respuesta del cliente al presupuesto, para mostrar junto al estado
 const respuestaPresu = o => o.estado !== 'presupuesto' || o.presupuesto_aprobado == null ? ''
   : o.presupuesto_aprobado ? ' <span class="pill green">✓ Aceptado</span>' : ' <span class="pill red">✗ Rechazado</span>';
+// Códigos de barras: sin distinguir mayúsculas (algunos lectores devuelven "AHRX93708" en vez de "ahrx93708")
+const mismoCodigo = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 
 // Búsqueda de productos: por nombre, marca, categoría, descripción o código
-const buscarProductos = (productos, cats, t, filtro = () => true) => productos.filter(p => filtro(p) && (p.codigo_barras === t
+const buscarProductos = (productos, cats, t, filtro = () => true) => productos.filter(p => filtro(p) && (mismoCodigo(p.codigo_barras, t)
   || matches(t, p.nombre, p.marca, p.descripcion, p.codigo_barras, cats.find(c => c.id === p.categoria_id)?.nombre))).slice(0, 8);
 
 // Contenido de un resultado de búsqueda con todos los datos, para no confundir productos parecidos
@@ -295,7 +297,7 @@ ROUTES.vender = async ({ q }) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       const t = scan.value.trim(); if (!t) return;
-      const exact = productos.find(p => p.codigo_barras === t);
+      const exact = productos.find(p => mismoCodigo(p.codigo_barras, t));
       if (exact) return add(exact);
       if (results[sel]) return add(results[sel]);
       toast('No se encontró un producto con ese código', true);
@@ -413,19 +415,25 @@ async function ventaModal(id) {
 let prodSel = new Set();
 
 ROUTES.productos = async ({ q }) => {
-  const [productos, categorias] = await Promise.all([store.productos(), store.categorias()]);
-  let filtro = q.get('bajo') ? 'bajo' : 'todos', texto = '';
+  const [productos, categorias, proveedores] = await Promise.all([store.productos(), store.categorias(), store.proveedores()]);
+  let filtro = q.get('bajo') ? 'bajo' : 'todos', texto = '', prov = q.get('prov') || '';
+  const provName = id => proveedores.find(p => p.id === id)?.nombre || '';
+  const aRevisar = p => (p.descripcion || '').startsWith('⚠');
   view().innerHTML = `
-  <div class="page-head"><h1>Productos y stock</h1><div class="actions">
+  <div class="page-head"><h1>Productos y stock <span class="muted small">(${productos.length})</span></h1><div class="actions">
     <button class="btn" id="etiquetas">Imprimir etiquetas <span id="nsel"></span></button><button class="btn primary" id="nuevo">+ Nuevo producto</button></div></div>
-  <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por nombre, marca o código (también podés escanear)"></div></div>
+  <div class="card card-pad" style="margin-bottom:1rem"><div class="row" style="align-items:center">
+    <div class="search" style="flex:3"><input class="input" id="buscar" placeholder="Buscar por nombre, marca, proveedor o código (también podés escanear)"></div>
+    <select class="input" id="prov" style="flex:1"><option value="">Todos los proveedores</option>${proveedores.map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></div></div>
   <div class="chips" id="cats"></div>
   <div class="card tbl-wrap"><table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" id="all"></th><th>Código</th><th>Producto</th><th>Categoría</th><th class="num">Stock</th><th class="num">Costo</th><th class="num">Precio</th></tr></thead><tbody id="rows"></tbody></table></div>`;
 
   const catName = id => categorias.find(c => c.id === id)?.nombre || '';
-  const chips = [['todos', 'Todos'], ['bajo', 'Stock bajo'], ...categorias.map(c => [String(c.id), c.nombre])];
-  const lista = () => productos.filter(p => (filtro === 'todos' || (filtro === 'bajo' ? (!p.es_servicio && p.stock <= p.stock_minimo) : p.categoria_id === +filtro))
-    && (texto === p.codigo_barras || matches(texto, p.nombre, p.marca, p.descripcion, p.codigo_barras, catName(p.categoria_id))));
+  const nRevisar = productos.filter(aRevisar).length;
+  const chips = [['todos', 'Todos'], ['bajo', 'Stock bajo'], ...(nRevisar ? [['revisar', `⚠ A revisar (${nRevisar})`]] : []), ...categorias.map(c => [String(c.id), c.nombre])];
+  const lista = () => productos.filter(p => (filtro === 'todos' || (filtro === 'bajo' ? (!p.es_servicio && p.stock <= p.stock_minimo) : filtro === 'revisar' ? aRevisar(p) : p.categoria_id === +filtro))
+    && (!prov || p.proveedor_id === +prov)
+    && (mismoCodigo(p.codigo_barras, texto) || matches(texto, p.nombre, p.marca, p.descripcion, p.codigo_barras, catName(p.categoria_id), provName(p.proveedor_id))));
   function paint() {
     $('#cats').innerHTML = chips.map(([k, l]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}</button>`).join('');
     $$('#cats .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
@@ -433,7 +441,7 @@ ROUTES.productos = async ({ q }) => {
     $('#rows').innerHTML = l.map(p => `<tr class="click" data-id="${p.id}">
       <td><input type="checkbox" data-sel="${p.id}" ${prodSel.has(p.id) ? 'checked' : ''}></td>
       <td class="mono small">${esc(p.codigo_barras)}${p.codigo_interno ? ' <span class="pill blue" title="Código generado por GScom">int</span>' : ''}</td>
-      <td>${esc(p.nombre)}${p.marca || p.descripcion ? `<div class="small muted">${[p.marca, p.descripcion].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
+      <td>${esc(p.nombre)}${p.marca || p.descripcion || p.proveedor_id ? `<div class="small muted">${[p.marca, p.descripcion, provName(p.proveedor_id) && `Prov.: ${provName(p.proveedor_id)}`].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
       <td class="num">${p.es_servicio ? '<span class="muted">—</span>' : `<span class="pill ${p.stock <= 0 ? 'red' : p.stock <= p.stock_minimo ? 'amber' : 'green'}">${p.stock}</span>`}</td>
       <td class="num muted">${money(p.precio_costo)}</td><td class="num"><b>${money(p.precio_venta)}</b></td></tr>`).join('')
       || '<tr><td colspan="7" class="empty">No hay productos que coincidan.</td></tr>';
@@ -443,6 +451,8 @@ ROUTES.productos = async ({ q }) => {
   }
   const paintSel = () => $('#nsel').textContent = prodSel.size ? `(${prodSel.size})` : '';
   $('#buscar').oninput = e => { texto = e.target.value.trim(); paint(); };
+  $('#prov').value = prov;
+  $('#prov').onchange = e => { prov = e.target.value; paint(); };
   $('#all').onchange = e => { lista().forEach(p => e.target.checked ? prodSel.add(p.id) : prodSel.delete(p.id)); paint(); };
   $('#nuevo').onclick = () => productoModal(null);
   $('#etiquetas').onclick = () => etiquetasModal([...prodSel]);
@@ -452,14 +462,15 @@ ROUTES.productos = async ({ q }) => {
 
 // opts.prefill: datos iniciales · opts.onSaved(producto): en vez de refrescar la pantalla · opts.sinStock: ocultar "Stock inicial"
 async function productoModal(id, opts = {}) {
-  const [p, categorias] = await Promise.all([id ? store.producto(id) : null, store.categorias()]);
+  const [p, categorias, proveedores] = await Promise.all([id ? store.producto(id) : null, store.categorias(), store.proveedores()]);
   const movs = id ? await store.movimientosStock(id) : [];
   const v = p || { nombre: '', codigo_barras: '', marca: '', descripcion: '', categoria_id: '', precio_costo: '', precio_venta: '', stock: '', stock_minimo: 1, es_servicio: false, ...opts.prefill };
   const m = modal(id ? 'Editar producto' : 'Nuevo producto', `
     <div class="field"><label>Nombre *</label><input class="input" name="nombre" value="${esc(v.nombre)}"></div>
     <div class="row"><div class="field"><label>Marca</label><input class="input" name="marca" value="${esc(v.marca)}"></div>
       <div class="field"><label>Categoría</label><select class="input" name="categoria_id"><option value="">—</option>${categorias.map(c => `<option value="${c.id}" ${c.id === v.categoria_id ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}<option value="__nueva">+ Nueva categoría…</option></select></div></div>
-    <div class="field"><label>Descripción / detalle</label><input class="input" name="descripcion" value="${esc(v.descripcion)}" placeholder="ej: USB, negro, teclado en español · 1TB 7200rpm"></div>
+    <div class="row"><div class="field" style="flex:2"><label>Descripción / detalle</label><input class="input" name="descripcion" value="${esc(v.descripcion)}" placeholder="ej: USB, negro, teclado en español · 1TB 7200rpm"></div>
+      <div class="field"><label>Proveedor habitual</label><select class="input" name="proveedor_id"><option value="">—</option>${proveedores.map(pr => `<option value="${pr.id}" ${pr.id === v.proveedor_id ? 'selected' : ''}>${esc(pr.nombre)}</option>`).join('')}</select></div></div>
     <div class="field"><label>Código de barras</label><input class="input mono" name="codigo_barras" value="${esc(v.codigo_barras)}" placeholder="Escaneá el código de fábrica, o dejalo vacío para generar uno interno">
       ${id ? `<div style="margin-top:.5rem">${barcodeSVG(v.codigo_barras, { height: 40 })}</div>` : ''}</div>
     <div class="row"><div class="field"><label>Precio de costo</label><input class="input" name="precio_costo" type="number" step="any" min="0" value="${v.precio_costo}"></div>
@@ -487,7 +498,7 @@ async function productoModal(id, opts = {}) {
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el);
     if (!f.nombre || f.precio_venta === '') return toast('Completá nombre y precio de venta', true);
-    const data = { ...(id ? { id } : {}), nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
+    const data = { ...(id ? { id } : {}), nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, proveedor_id: f.proveedor_id ? +f.proveedor_id : null, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
       precio_costo: +f.precio_costo || 0, precio_venta: +f.precio_venta || 0, stock_minimo: +f.stock_minimo || 0, es_servicio: f.es_servicio };
     data.codigo_barras = f.codigo_barras;
     if (!id) data.stock = +f.stock || 0;
@@ -1247,24 +1258,24 @@ async function cargoManualModal(clienteId = null) {
 // PROVEEDORES
 // =====================================================================
 ROUTES.proveedores = async () => {
-  const [proveedores, compras] = await Promise.all([store.proveedores(), store.compras()]);
-  const stats = id => { const cs = compras.filter(c => c.proveedor_id === id); return { n: cs.length, total: cs.reduce((s, c) => s + +c.total, 0), ultima: cs[0]?.fecha }; };
+  const [proveedores, compras, productos] = await Promise.all([store.proveedores(), store.compras(), store.productos()]);
+  const stats = id => { const cs = compras.filter(c => c.proveedor_id === id); return { n: cs.length, total: cs.reduce((s, c) => s + +c.total, 0), ultima: cs[0]?.fecha, prods: productos.filter(p => p.proveedor_id === id).length }; };
   view().innerHTML = `
   <div class="page-head"><h1>Proveedores</h1><div class="actions"><button class="btn primary" id="nuevo">+ Nuevo proveedor</button></div></div>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por nombre, CUIT, teléfono o email"></div></div>
-  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Proveedor</th><th>CUIT</th><th>Contacto</th><th class="num">Compras</th><th class="num">Total comprado</th><th>Última compra</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Proveedor</th><th>CUIT</th><th>Contacto</th><th class="num">Productos</th><th class="num">Compras</th><th class="num">Total comprado</th><th>Última compra</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const paint = t => {
     $('#rows').innerHTML = proveedores.filter(p => matches(t, p.nombre, p.cuit, p.telefono, p.email)).map(p => {
       const s = stats(p.id);
       return `<tr><td><b>${esc(p.nombre)}</b>${p.notas ? `<div class="small muted">${esc(p.notas)}</div>` : ''}</td><td>${esc(p.cuit) || '—'}</td>
         <td class="small">${[p.telefono, p.email].filter(Boolean).map(esc).join('<br>') || '—'}</td>
-        <td class="num">${s.n}</td><td class="num">${money(s.total)}</td><td>${s.ultima ? fdate(s.ultima) : '—'}</td>
+        <td class="num">${s.prods ? `<a href="#/productos?prov=${p.id}">${s.prods}</a>` : '0'}</td><td class="num">${s.n}</td><td class="num">${money(s.total)}</td><td>${s.ultima ? fdate(s.ultima) : '—'}</td>
         <td class="right nowrap"><button class="btn sm" data-edit="${p.id}">Editar</button> <button class="btn sm danger" data-del="${p.id}">Eliminar</button></td></tr>`;
-    }).join('') || `<tr><td colspan="7" class="empty">${t ? 'Sin resultados.' : 'Todavía no hay proveedores.'}</td></tr>`;
+    }).join('') || `<tr><td colspan="8" class="empty">${t ? 'Sin resultados.' : 'Todavía no hay proveedores.'}</td></tr>`;
     $$('[data-edit]').forEach(b => b.onclick = () => proveedorModal(() => render(), proveedores.find(p => p.id === +b.dataset.edit)));
     $$('[data-del]').forEach(b => b.onclick = () => run(async () => {
       const p = proveedores.find(x => x.id === +b.dataset.del), s = stats(p.id);
-      if (!confirm(`¿Eliminar a ${p.nombre}?${s.n ? `\n\nTiene ${s.n} compra(s) registradas: no se borran, quedan como "sin proveedor".` : ''}`)) return;
+      if (!confirm(`¿Eliminar a ${p.nombre}?${s.n || s.prods ? `\n\nSus ${s.n} compra(s) y ${s.prods} producto(s) no se borran: quedan "sin proveedor".` : ''}`)) return;
       await store.eliminarProveedor(p.id); toast('Proveedor eliminado'); render();
     }));
   };
@@ -1441,7 +1452,7 @@ async function nuevaCompra() {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     const t = b.value.trim(); if (!t) return;
-    const exact = productos.find(p => p.codigo_barras === t);
+    const exact = productos.find(p => mismoCodigo(p.codigo_barras, t));
     if (exact) return addP(exact);
     if (sel < results.length) return addP(results[sel]);
     crearProducto(t);  // código escaneado que no existe → alta directa
