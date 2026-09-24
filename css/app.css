@@ -207,3 +207,11 @@ dl.kv dt { color: var(--muted); }
 .ticket .qr svg { width: 34mm; height: 34mm; }
 a { color: var(--accent); }
 a.chip { text-decoration: none; color: inherit; }
+
+/* ---------- Avisos ---------- */
+.badge { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: #25a55f; color: #fff; font-size: .75rem; font-weight: 700; line-height: 1; }
+#avisos { position: fixed; top: 72px; right: 16px; z-index: 150; display: flex; flex-direction: column; gap: .6rem; width: min(360px, calc(100vw - 32px)); }
+.aviso { background: #fff; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.2); padding: .9rem 1rem; border-left: 5px solid var(--ok); position: relative; animation: entra .25s ease-out; }
+.aviso.no { border-left-color: var(--bad); }
+.aviso .x { position: absolute; top: .4rem; right: .6rem; font-size: 1.2rem; }
+@keyframes entra { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }

@@ -153,6 +153,23 @@ export const store = {
     if (!/^[0-9a-f-]{36}$/i.test(token || '')) return null;
     return q(sb.rpc('seguimiento_orden', { p_token: token }));
   },
+  // Avisos: presupuestos respondidos por el cliente que todavía no se atendieron
+  async presupuestosRespondidos() {
+    const { count, error } = await sb.from('ordenes_servicio').select('id', { count: 'exact', head: true })
+      .eq('estado', 'presupuesto').not('presupuesto_aprobado', 'is', null);
+    if (error) throw new Error(error.message);
+    return count || 0;
+  },
+  // Llama a cb(ordenId, acepta) cada vez que un cliente responde un presupuesto desde su link
+  escucharRespuestas(cb) {
+    sb.channel('respuestas-presupuesto')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'orden_estados' }, ({ new: h }) => {
+        const m = /^El cliente (ACEPTÓ|RECHAZÓ)/.exec(h.comentario || '');
+        if (m) cb(h.orden_id, m[1] === 'ACEPTÓ');
+      })
+      .subscribe();
+  },
+
   async responderPresupuesto(token, acepta) {
     return q(sb.rpc('responder_presupuesto', { p_token: token, p_acepta: !!acepta }));
   },

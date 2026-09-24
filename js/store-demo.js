@@ -221,6 +221,22 @@ export const store = {
       negocio: db.negocio,
     });
   },
+  async presupuestosRespondidos() {
+    return db.ordenes_servicio.filter(o => o.estado === 'presupuesto' && o.presupuesto_aprobado != null).length;
+  },
+  // En demo, la respuesta llega desde otra pestaña (seguimiento.html) vía el evento "storage"
+  escucharRespuestas(cb) {
+    window.addEventListener('storage', e => {
+      if (e.key !== DEMO_KEY || !e.newValue) return;
+      const nuevo = JSON.parse(e.newValue);
+      const vistos = new Set(db.orden_estados.map(h => h.id));
+      db = nuevo;
+      nuevo.orden_estados.filter(h => !vistos.has(h.id)).forEach(h => {
+        const m = /^El cliente (ACEPTÓ|RECHAZÓ)/.exec(h.comentario || '');
+        if (m) cb(h.orden_id, m[1] === 'ACEPTÓ');
+      });
+    });
+  },
   async responderPresupuesto(tok, acepta) {
     const o = db.ordenes_servicio.find(x => x.token === tok);
     if (!o) throw new Error('Orden no encontrada');

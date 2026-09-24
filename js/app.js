@@ -113,6 +113,54 @@ async function render() {
   view().innerHTML = '<div class="empty">Cargando…</div>';
   await run(() => fn(r));
   window.scrollTo(0, 0);
+  actualizarContador();
+}
+
+// =====================================================================
+// Avisos: el cliente respondió un presupuesto desde su link
+// =====================================================================
+let respondidos = 0;
+async function actualizarContador() {
+  try { respondidos = await store.presupuestosRespondidos(); } catch { return; }
+  const a = $('nav.tabs a[data-r=service]');
+  if (a) a.innerHTML = `Service${respondidos ? ` <span class="badge" title="Presupuestos respondidos por clientes">${respondidos}</span>` : ''}`;
+  document.title = (respondidos && document.hidden ? `(${respondidos}) ` : '') + 'GScom — Gestión';
+}
+document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'GScom — Gestión'; });
+
+function sonido() {
+  try {
+    const ctx = new AudioContext();
+    [0, 0.18].forEach((t, i) => {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = i ? 1046 : 784; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(0.15, ctx.currentTime + t); g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + t + 0.3);
+      o.start(ctx.currentTime + t); o.stop(ctx.currentTime + t + 0.3);
+    });
+  } catch { /* sin audio */ }
+}
+
+async function avisarRespuesta(ordenId, acepta) {
+  const o = await store.orden(ordenId).catch(() => null);
+  if (!o) return;
+  let pila = $('#avisos');
+  if (!pila) { pila = document.createElement('div'); pila.id = 'avisos'; document.body.appendChild(pila); }
+  const el = document.createElement('div');
+  el.className = `aviso ${acepta ? 'ok' : 'no'}`;
+  el.innerHTML = `<button class="x" title="Cerrar">×</button>
+    <div class="small muted">Respuesta desde el link de seguimiento</div>
+    <div style="margin:.2rem 0 .6rem"><b>${acepta ? '✓' : '✗'} ${esc(o.cliente?.nombre)}</b> ${acepta ? 'ACEPTÓ' : 'RECHAZÓ'} el presupuesto
+      de la orden <b>#${o.numero}</b>${o.presupuesto != null ? ` (${money(o.presupuesto)})` : ''}.</div>
+    <a class="btn sm ${acepta ? 'ok' : ''}" href="#/service/${o.id}">Ver orden</a>`;
+  $('.x', el).onclick = () => el.remove();
+  $('a', el).onclick = () => el.remove();
+  pila.prepend(el);
+  sonido();
+  await actualizarContador();
+  if (document.hidden) document.title = `(${respondidos}) GScom — Gestión`;
+  // si justo está mirando la lista de service o el inicio, refrescar
+  const r = parseHash();
+  if (r.name === 'service' || r.name === 'inicio') render();
 }
 const go = h => { if (location.hash === h) render(); else location.hash = h; };
 
@@ -132,6 +180,15 @@ ROUTES.inicio = async () => {
   view().innerHTML = `
   <div class="page-head"><h1>Resumen de hoy</h1>
     <div class="actions"><a class="btn primary" href="#/vender">Nueva venta</a><button class="btn" id="nueva-orden">Nueva orden de service</button></div></div>
+  ${(() => {
+    const resp = ordenes.filter(o => o.estado === 'presupuesto' && o.presupuesto_aprobado != null);
+    return resp.length ? `<div class="card card-pad" style="margin-bottom:1rem;border-left:4px solid var(--ok)">
+      <h2>Presupuestos respondidos por clientes <span class="badge">${resp.length}</span></h2>
+      ${resp.map(o => `<div class="row small" style="align-items:center;padding:.35rem 0;border-top:1px solid var(--line)">
+        <span><a href="#/service/${o.id}"><b>#${o.numero}</b></a> · ${esc(o.cliente?.nombre)} · ${esc([o.equipo?.tipo, o.equipo?.marca].filter(Boolean).join(' '))}</span>
+        <span class="right">${money(o.presupuesto)} ${respuestaPresu(o)}</span></div>`).join('')}
+      <div class="small muted" style="margin-top:.5rem">Desaparecen de acá cuando cambiás el estado de la orden (por ejemplo, a "En reparación").</div></div>` : '';
+  })()}
   <div class="grid grid-4" style="margin-bottom:1rem">
     <div class="card kpi"><div class="label">Ventas de hoy</div><div class="value">${money(totalHoy)}</div><div class="sub">${hoy.length} venta${hoy.length === 1 ? '' : 's'}</div></div>
     <div class="card kpi"><div class="label">Efectivo en caja (hoy)</div><div class="value">${money(efectivo)}</div><div class="sub">ingresos − egresos en efectivo</div></div>
@@ -1140,7 +1197,7 @@ async function iniciar() {
     u.onclick = async () => { if (confirm('¿Cerrar sesión?')) { await store.logout(); location.reload(); } };
   }
   $('nav.tabs').hidden = false;
-  if (!iniciada) { window.addEventListener('hashchange', render); iniciada = true; }
+  if (!iniciada) { window.addEventListener('hashchange', render); store.escucharRespuestas(avisarRespuesta); iniciada = true; }
   render();
 }
 iniciar();
