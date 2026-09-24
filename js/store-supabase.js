@@ -147,6 +147,12 @@ export const store = {
   async entregarOrden(id, { total, forma_pago, comentario = '' }) {
     await q(sb.rpc('entregar_orden', { p_orden_id: id, p_total: +total || 0, p_forma_pago: forma_pago, p_comentario: comentario }));
   },
+  async anticiposOrden(ordenId) {
+    return q(sb.from('cc_movimientos').select('*').eq('orden_id', ordenId).eq('tipo', 'pago').order('fecha'));
+  },
+  async registrarAnticipoOrden(id, { monto, forma_pago, nota = '' }) {
+    return q(sb.rpc('registrar_anticipo_orden', { p_orden_id: id, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }));
+  },
 
   // Página pública (no requiere login)
   async seguimiento(token) {

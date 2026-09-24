@@ -695,12 +695,13 @@ function stepper(estado) {
 }
 
 async function detalleOrden(id) {
-  const [o, productos, n, cats] = await Promise.all([store.orden(id), store.productos(), store.negocio(), store.categorias()]);
+  const [o, productos, n, cats, anticipos] = await Promise.all([store.orden(id), store.productos(), store.negocio(), store.categorias(), store.anticiposOrden(id)]);
   if (!o) { view().innerHTML = '<div class="empty">Orden no encontrada</div>'; return; }
   const url = trackingURL(o.token);
   const items = o.items.slice();
   const eq = [o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' ');
   const cerrada = o.estado === 'entregado';
+  const anticipadoTotal = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
 
   view().innerHTML = `
   <div class="page-head"><div><a href="#/service" class="small muted">← Service</a><h1>Orden #${o.numero} ${pill(o.estado)}${respuestaPresu(o)}</h1></div>
@@ -722,6 +723,12 @@ async function detalleOrden(id) {
           <div class="field"><label>¿Aprobado por el cliente?</label><select class="input" id="aprob"><option value="">Pendiente</option><option value="si" ${o.presupuesto_aprobado === true ? 'selected' : ''}>Sí</option><option value="no" ${o.presupuesto_aprobado === false ? 'selected' : ''}>No</option></select></div></div>
         <div class="field"><label>Notas internas (el cliente no las ve)</label><textarea class="input" id="notas">${esc(o.notas_internas)}</textarea></div>
         <button class="btn" id="guardar-diag">Guardar</button></div>
+      <div class="card card-pad"><h2>Anticipos (pago a cuenta) ${cerrada ? '' : '<button class="btn sm" id="add-anticipo">+ Registrar anticipo</button>'}</h2>
+        ${anticipos.length ? `<table class="tbl small" style="margin-bottom:.6rem"><tbody>${anticipos.map(a => `<tr><td>${fdatetime(a.fecha)}</td><td>${esc(a.forma_pago)}</td>
+          <td class="num">${money(-a.monto)}</td><td>${a.anulado ? '<span class="pill red">Anulado</span>' : cerrada ? '' : `<button class="x" data-anular-ant="${a.id}" title="Anular">×</button>`}</td></tr>`).join('')}</tbody></table>`
+          : '<p class="small muted" style="margin-bottom:.6rem">Sin anticipos registrados.</p>'}
+        <div class="small muted">Anticipado: <b>${money(anticipadoTotal)}</b>${o.presupuesto || items.length ? ` · Saldo pendiente estimado: <b>${money(Math.max((o.presupuesto || items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0)) - anticipadoTotal, 0))}</b>` : ''}</div>
+        <p class="small muted" style="margin-top:.3rem">Se descuenta solo al entregar y cobrar el equipo. Impacta caja al momento y el saldo del cliente en el Fichero.</p></div>
       <div class="card card-pad"><h2>Repuestos y mano de obra</h2>
         <div class="search" style="position:relative;margin-bottom:.6rem"><input class="input" id="buscar-rep" placeholder="Agregar producto o mano de obra (buscar o escanear)" ${cerrada ? 'disabled' : ''}><div class="suggest" id="sug" hidden></div></div>
         <div id="items"></div>
@@ -757,6 +764,13 @@ async function detalleOrden(id) {
       presupuesto: $('#pres').value === '' ? null : +$('#pres').value, presupuesto_aprobado: ap === '' ? null : ap === 'si', notas_internas: $('#notas').value.trim() });
     toast('Guardado');
   });
+
+  const addAnt = $('#add-anticipo');
+  if (addAnt) addAnt.onclick = () => anticipoModal(o, () => render());
+  $$('[data-anular-ant]').forEach(b => b.onclick = () => run(async () => {
+    if (!confirm('¿Anular este anticipo? Se descuenta de caja y del saldo del cliente.')) return;
+    await store.anularCobroCuenta(+b.dataset.anularAnt); toast('Anticipo anulado'); render();
+  }));
 
   const cambiar = $('#cambiar');
   if (cambiar) cambiar.onclick = () => run(async () => {
@@ -810,13 +824,21 @@ async function detalleOrden(id) {
     const sugerido = totalItems || o.presupuesto || 0;
     let forma = 'Efectivo';
     const m = modal(`Entregar orden #${o.numero}`, `
-      <div class="field"><label>Total a cobrar</label><input class="input" type="number" step="any" min="0" id="tot" value="${sugerido}"></div>
-      <p class="small muted" style="margin:-.4rem 0 .8rem">${totalItems ? 'Sugerido: suma de repuestos y mano de obra.' : o.presupuesto ? 'Sugerido: presupuesto.' : 'Poné 0 si no se cobra (garantía, sin reparación).'}</p>
-      <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_COBRO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div>
-        <div class="small muted" style="margin-top:.3rem">"Cuenta corriente" no entra a caja: queda como deuda del cliente en el Fichero.</div></div>
+      <div class="field"><label>Total del trabajo</label><input class="input" type="number" step="any" min="0" id="tot" value="${sugerido}"></div>
+      <p class="small muted" style="margin:-.4rem 0 .8rem">${totalItems ? 'Sugerido: suma de repuestos y mano de obra.' : o.presupuesto ? 'Sugerido: presupuesto.' : 'Poné 0 si no se cobra (garantía, sin reparación).'}${anticipadoTotal ? ` Ya se cobraron ${money(anticipadoTotal)} en anticipos: se descuentan solos.` : ''}</p>
+      <div class="field"><label>Forma de pago del saldo restante</label><div class="pay-opts">${FORMAS_COBRO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div>
+        <div class="small muted" style="margin-top:.3rem" id="saldo-restante"></div></div>
       <div class="field"><label>Mensaje final para el cliente (opcional)</label><input class="input" id="msg" placeholder="ej: Garantía de ${n.garantia_dias} días sobre el trabajo realizado."></div>`,
       `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Confirmar entrega</button>`);
-    $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); });
+    const pintarSaldo = () => {
+      const restante = Math.max((+$('#tot', m.el).value || 0) - anticipadoTotal, 0);
+      $('#saldo-restante', m.el).textContent = forma === 'Cuenta corriente'
+        ? `Queda ${money(restante)} como deuda del cliente en el Fichero (no entra a caja).`
+        : restante ? `Se cobra ${money(restante)} ahora por ${forma.toLowerCase()}.` : 'Nada más que cobrar: el anticipo ya cubre el total.';
+    };
+    $('#tot', m.el).oninput = pintarSaldo;
+    $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarSaldo(); });
+    pintarSaldo();
     $('#ok', m.el).onclick = () => run(async () => {
       await store.entregarOrden(id, { total: +$('#tot', m.el).value || 0, forma_pago: forma, comentario: $('#msg', m.el).value.trim() });
       m.close(); toast('Orden entregada'); render();
@@ -1041,6 +1063,24 @@ function cobrarModal(clienteId, nombre, saldo, onDone) {
     if (monto > saldo + 0.009 && !confirm(`El monto supera la deuda (${money(saldo)}). La diferencia queda a favor del cliente. ¿Continuar?`)) return;
     await store.cobrarCuenta(clienteId, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
     m.close(); toast(`Cobro registrado · ${money(monto)}`); onDone();
+  });
+}
+
+function anticipoModal(o, onDone) {
+  let forma = 'Efectivo';
+  const m = modal(`Anticipo — orden #${o.numero}`, `
+    <p class="small muted" style="margin-top:-.4rem">Plata que el cliente ya pagó a cuenta de esta orden (por ejemplo, al confirmar el presupuesto). Entra a caja ahora y se descuenta del total al entregar el equipo.</p>
+    <div class="field"><label>Monto</label><input class="input" type="number" step="any" min="0" id="monto"></div>
+    <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div>
+    <div class="field"><label>Nota (opcional)</label><input class="input" id="nota" placeholder="ej: comprobante de transferencia"></div>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Registrar anticipo</button>`);
+  $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); });
+  $('#monto', m.el).focus();
+  $('#ok', m.el).onclick = () => run(async () => {
+    const monto = +$('#monto', m.el).value;
+    if (!(monto > 0)) return toast('Ingresá el monto del anticipo', true);
+    await store.registrarAnticipoOrden(o.id, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
+    m.close(); toast(`Anticipo registrado · ${money(monto)}`); onDone();
   });
 }
 
