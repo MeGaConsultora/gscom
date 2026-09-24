@@ -99,6 +99,13 @@ export const store = {
       .gte('venta.fecha', desdeISO).eq('venta.anulada', false).limit(20000));
   },
   async anularVenta(id) { await q(sb.rpc('anular_venta', { p_venta_id: id })); },
+  async editarVenta(id, { cliente_id, items, descuento = 0, forma_pago, notas = '' }) {
+    await q(sb.rpc('editar_venta', {
+      p_venta_id: id, p_cliente_id: cliente_id || null,
+      p_items: items.map(({ producto_id, descripcion, cantidad, precio_unitario }) => ({ producto_id, descripcion, cantidad, precio_unitario })),
+      p_descuento: +descuento || 0, p_forma_pago: forma_pago, p_notas: notas,
+    }));
+  },
 
   // Caja
   async cajaMovimientos() { return q(sb.from('caja_movimientos').select('*').order('fecha', { ascending: false }).limit(3000)); },

@@ -224,14 +224,15 @@ function bindRowLinks() {
 // =====================================================================
 // VENDER (punto de venta)
 // =====================================================================
-let cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo' };
+let cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', editId: null, editNumero: null };
 
 ROUTES.vender = async ({ q }) => {
   const [productos, clientes, cats] = await Promise.all([store.productos(), store.clientes(), store.categorias()]);
   if (q.get('cliente')) cart.cliente_id = q.get('cliente');
 
   view().innerHTML = `
-  <div class="page-head"><h1>Nueva venta</h1><div class="actions"><button class="btn" id="manual">+ Ítem manual</button><button class="btn danger" id="vaciar">Vaciar</button></div></div>
+  <div class="page-head"><h1>${cart.editId ? `Editar venta #${cart.editNumero}` : 'Nueva venta'}</h1><div class="actions"><button class="btn" id="manual">+ Ítem manual</button><button class="btn danger" id="vaciar">${cart.editId ? 'Cancelar edición' : 'Vaciar'}</button></div></div>
+  ${cart.editId ? '<div class="small" style="background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px;margin-bottom:1rem">Al guardar, el stock y la caja/cuenta corriente se corrigen según la diferencia con la venta original.</div>' : ''}
   <div class="split">
     <div class="card card-pad">
       <div class="search" style="position:relative">
@@ -252,7 +253,7 @@ ROUTES.vender = async ({ q }) => {
       <hr style="border:0;border-top:1px solid var(--line);margin:.6rem 0 1rem">
       <div class="row small muted"><span>Subtotal</span><span class="right" id="subt"></span></div>
       <div class="row" style="align-items:baseline;margin:.3rem 0 1rem"><span>Total</span><span class="right total-box" id="tot"></span></div>
-      <button class="btn ok lg block" id="cobrar">Cobrar</button>
+      <button class="btn ok lg block" id="cobrar">${cart.editId ? 'Guardar cambios' : 'Cobrar'}</button>
     </div>
   </div>`;
 
@@ -318,7 +319,13 @@ ROUTES.vender = async ({ q }) => {
   paintCart();
   scan.focus();
 
-  $('#vaciar').onclick = () => { cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo' }; render(); };
+  $('#vaciar').onclick = () => {
+    if (cart.editId) {
+      if (cart.items.length && !confirm('¿Cancelar la edición? La venta queda como estaba.')) return;
+      cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', editId: null, editNumero: null }; go('#/caja'); return;
+    }
+    cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', editId: null, editNumero: null }; render();
+  };
   $('#manual').onclick = () => {
     const m = modal('Ítem manual', `<p class="small muted" style="margin-bottom:.8rem">Para algo que no está cargado como producto (no descuenta stock).</p>
       <div class="field"><label>Descripción</label><input class="input" name="descripcion" required></div>
@@ -337,8 +344,13 @@ ROUTES.vender = async ({ q }) => {
     if (cart.forma_pago === CUENTA_CORRIENTE && !cart.cliente_id) return toast('Para vender a cuenta corriente elegí el cliente', true);
     const sinStock = cart.items.filter(i => i.producto_id && !i.es_servicio && i.cantidad > i.stock);
     if (sinStock.length && !confirm(`Hay ${sinStock.length} producto(s) sin stock suficiente según el sistema. ¿Registrar la venta igual?`)) return;
+    if (cart.editId) {
+      await store.editarVenta(cart.editId, { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago });
+      cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', editId: null, editNumero: null };
+      toast('Venta actualizada'); go('#/caja'); return;
+    }
     const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago });
-    cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo' };
+    cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', editId: null, editNumero: null };
     const m = modal(`Venta #${v.numero} registrada`, `<div class="empty" style="padding:1rem"><div class="total-box">${money(v.total)}</div><div class="muted">${esc(v.forma_pago)}</div></div>`,
       `<button class="btn" id="imp">Imprimir comprobante</button><button class="btn primary" data-close>Nueva venta</button>`);
     $('#imp', m.el).onclick = () => imprimirVenta(v.id);
@@ -367,12 +379,25 @@ async function ventaModal(id) {
     ${v.items.map(i => `<tr><td>${esc(i.descripcion)}</td><td class="num">${i.cantidad}</td><td class="num">${money(i.precio_unitario)}</td><td class="num">${money(i.subtotal)}</td></tr>`).join('')}
     ${v.descuento ? `<tr><td colspan="3">Descuento</td><td class="num">−${money(v.descuento)}</td></tr>` : ''}
     <tr><td colspan="3"><b>Total</b></td><td class="num"><b>${money(v.total)}</b></td></tr></tbody></table>`,
-    `${v.anulada ? '' : '<button class="btn danger" id="anular">Anular venta</button>'}<button class="btn" id="imp">Imprimir</button><button class="btn primary" data-close>Cerrar</button>`, { wide: true });
+    `${v.anulada ? '' : '<button class="btn" id="editar">Editar</button><button class="btn danger" id="anular">Anular venta</button>'}<button class="btn" id="imp">Imprimir</button><button class="btn primary" data-close>Cerrar</button>`, { wide: true });
   $('#imp', m.el).onclick = () => imprimirVenta(id);
   const an = $('#anular', m.el);
   if (an) an.onclick = () => run(async () => {
     if (!confirm('¿Anular esta venta? Se devuelve el stock y se registra un egreso en caja.')) return;
     await store.anularVenta(id); m.close(); toast('Venta anulada'); render();
+  });
+  const ed = $('#editar', m.el);
+  if (ed) ed.onclick = () => run(async () => {
+    if (cart.items.length && !confirm('Tenés una venta en curso sin terminar en "Vender". ¿Descartarla para editar esta?')) return;
+    const productos = await store.productos();
+    cart = {
+      editId: v.id, editNumero: v.numero, cliente_id: v.cliente_id ? String(v.cliente_id) : '', descuento: +v.descuento || 0, forma_pago: v.forma_pago,
+      items: v.items.map(i => {
+        const p = i.producto_id ? productos.find(x => x.id === i.producto_id) : null;
+        return { producto_id: i.producto_id, descripcion: i.descripcion, cantidad: +i.cantidad, precio_unitario: +i.precio_unitario, stock: p?.stock ?? 0, es_servicio: p ? p.es_servicio : true };
+      }),
+    };
+    m.close(); go('#/vender');
   });
 }
 
@@ -1117,8 +1142,8 @@ function anticipoModal(o, onDone) {
 async function cargoManualModal(clienteId = null) {
   const clientes = clienteId ? [] : await store.clientes();
   const m = modal('Cargar deuda manual', `
-    ${clienteId ? '' : `<div class="field"><label>Cliente *</label><select class="input" id="cli"><option value="">Elegí un cliente…</option>
-      ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}<option value="__nuevo">+ Cliente nuevo…</option></select></div>`}
+    ${clienteId ? '' : `<div class="field"><label>Cliente *</label><select class="input" id="cli"><option value="">Elegí un cliente…</option><option value="__nuevo">+ Cliente nuevo…</option>
+      ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select></div>`}
     <div class="field"><label>Monto *</label><input class="input" type="number" step="any" min="0" id="monto"></div>
     <div class="field"><label>Concepto *</label><input class="input" id="concepto" placeholder="ej: Saldo anterior, trabajo a domicilio"></div>`,
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Cargar</button>`);
