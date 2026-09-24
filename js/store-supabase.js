@@ -118,6 +118,10 @@ export const store = {
     const id = await q(sb.rpc('registrar_compra', { p_proveedor_id: proveedor_id || null, p_nro_comprobante: nro_comprobante || '', p_items: items, p_notas: notas }));
     return { id };
   },
+  async editarCompra(id, { proveedor_id, nro_comprobante, items, notas = '' }) {
+    await q(sb.rpc('editar_compra', { p_compra_id: id, p_proveedor_id: proveedor_id || null, p_nro_comprobante: nro_comprobante || '', p_items: items, p_notas: notas }));
+  },
+  async eliminarCompra(id) { await q(sb.rpc('eliminar_compra', { p_compra_id: id })); },
 
   // Service técnico
   async ordenes() { return q(sb.from('ordenes_servicio').select(ORDEN_SEL).order('fecha_ingreso', { ascending: false }).limit(2000)); },

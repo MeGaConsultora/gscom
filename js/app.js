@@ -19,6 +19,20 @@ const matches = (q, ...fields) => { const t = norm(q).trim(); return !t || t.spl
 const pill = estado => { const e = estadoInfo(estado); return `<span class="pill ${e.color}">${esc(e.label)}</span>`; };
 const ACTIVAS = o => !['entregado'].includes(o.estado);
 
+// Búsqueda de productos: por nombre, marca, categoría, descripción o código
+const buscarProductos = (productos, cats, t, filtro = () => true) => productos.filter(p => filtro(p) && (p.codigo_barras === t
+  || matches(t, p.nombre, p.marca, p.descripcion, p.codigo_barras, cats.find(c => c.id === p.categoria_id)?.nombre))).slice(0, 8);
+
+// Contenido de un resultado de búsqueda con todos los datos, para no confundir productos parecidos
+function prodSugHTML(p, cats, { costo = false } = {}) {
+  const extra = [p.marca, cats.find(c => c.id === p.categoria_id)?.nombre].filter(Boolean).map(esc).join(' · ');
+  const stockCls = p.stock <= 0 ? 'color:var(--bad)' : p.stock <= p.stock_minimo ? 'color:var(--warn)' : '';
+  return `<span style="min-width:0"><b>${esc(p.nombre)}</b>${extra ? ` <span class="muted">· ${extra}</span>` : ''}
+      ${p.descripcion ? `<span class="small muted" style="display:block">${esc(p.descripcion)}</span>` : ''}
+      <span class="small muted mono" style="display:block">${esc(p.codigo_barras)}${costo ? ` · costo ${money(p.precio_costo)}` : ''} · venta ${money(p.precio_venta)}</span></span>
+    <span class="nowrap small" style="${stockCls}">${p.es_servicio ? 'servicio' : `stock ${p.stock}`}</span>`;
+}
+
 function toast(msg, err = false) {
   const t = document.createElement('div');
   t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg;
@@ -150,7 +164,7 @@ function bindRowLinks() {
 let cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo' };
 
 ROUTES.vender = async ({ q }) => {
-  const [productos, clientes] = await Promise.all([store.productos(), store.clientes()]);
+  const [productos, clientes, cats] = await Promise.all([store.productos(), store.clientes(), store.categorias()]);
   if (q.get('cliente')) cart.cliente_id = q.get('cliente');
 
   view().innerHTML = `
@@ -195,14 +209,14 @@ ROUTES.vender = async ({ q }) => {
   }
   let results = [], sel = 0;
   const paintSug = () => {
-    sug.innerHTML = results.map((p, i) => `<div class="${i === sel ? 'sel' : ''}" data-i="${i}"><span>${esc(p.nombre)} <span class="small muted mono">${esc(p.codigo_barras)}</span></span><span class="nowrap">${money(p.precio_venta)}</span></div>`).join('')
+    sug.innerHTML = results.map((p, i) => `<div class="${i === sel ? 'sel' : ''}" data-i="${i}">${prodSugHTML(p, cats)}</div>`).join('')
       || '<div class="muted">Sin resultados</div>';
     $$('[data-i]', sug).forEach(d => d.onmousedown = e => { e.preventDefault(); add(results[+d.dataset.i]); });
   };
   scan.oninput = () => {
     const t = scan.value.trim();
     if (!t) { sug.hidden = true; return; }
-    results = productos.filter(p => p.codigo_barras === t || matches(t, p.nombre, p.marca, p.codigo_barras)).slice(0, 8);
+    results = buscarProductos(productos, cats, t);
     sel = 0; sug.hidden = false; paintSug();
   };
   scan.onkeydown = e => {
@@ -316,7 +330,7 @@ ROUTES.productos = async ({ q }) => {
   const catName = id => categorias.find(c => c.id === id)?.nombre || '';
   const chips = [['todos', 'Todos'], ['bajo', 'Stock bajo'], ...categorias.map(c => [String(c.id), c.nombre])];
   const lista = () => productos.filter(p => (filtro === 'todos' || (filtro === 'bajo' ? (!p.es_servicio && p.stock <= p.stock_minimo) : p.categoria_id === +filtro))
-    && (texto === p.codigo_barras || matches(texto, p.nombre, p.marca, p.codigo_barras)));
+    && (texto === p.codigo_barras || matches(texto, p.nombre, p.marca, p.descripcion, p.codigo_barras, catName(p.categoria_id))));
   function paint() {
     $('#cats').innerHTML = chips.map(([k, l]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}</button>`).join('');
     $$('#cats .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
@@ -324,7 +338,7 @@ ROUTES.productos = async ({ q }) => {
     $('#rows').innerHTML = l.map(p => `<tr class="click" data-id="${p.id}">
       <td><input type="checkbox" data-sel="${p.id}" ${prodSel.has(p.id) ? 'checked' : ''}></td>
       <td class="mono small">${esc(p.codigo_barras)}${p.codigo_interno ? ' <span class="pill blue" title="Código generado por GScom">int</span>' : ''}</td>
-      <td>${esc(p.nombre)}${p.marca ? `<div class="small muted">${esc(p.marca)}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
+      <td>${esc(p.nombre)}${p.marca || p.descripcion ? `<div class="small muted">${[p.marca, p.descripcion].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
       <td class="num">${p.es_servicio ? '<span class="muted">—</span>' : `<span class="pill ${p.stock <= 0 ? 'red' : p.stock <= p.stock_minimo ? 'amber' : 'green'}">${p.stock}</span>`}</td>
       <td class="num muted">${money(p.precio_costo)}</td><td class="num"><b>${money(p.precio_venta)}</b></td></tr>`).join('')
       || '<tr><td colspan="7" class="empty">No hay productos que coincidan.</td></tr>';
@@ -350,6 +364,7 @@ async function productoModal(id, opts = {}) {
     <div class="field"><label>Nombre *</label><input class="input" name="nombre" value="${esc(v.nombre)}"></div>
     <div class="row"><div class="field"><label>Marca</label><input class="input" name="marca" value="${esc(v.marca)}"></div>
       <div class="field"><label>Categoría</label><select class="input" name="categoria_id"><option value="">—</option>${categorias.map(c => `<option value="${c.id}" ${c.id === v.categoria_id ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}<option value="__nueva">+ Nueva categoría…</option></select></div></div>
+    <div class="field"><label>Descripción / detalle</label><input class="input" name="descripcion" value="${esc(v.descripcion)}" placeholder="ej: USB, negro, teclado en español · 1TB 7200rpm"></div>
     <div class="field"><label>Código de barras</label><input class="input mono" name="codigo_barras" value="${esc(v.codigo_barras)}" ${id ? 'readonly' : ''} placeholder="Escaneá el código de fábrica, o dejalo vacío para generar uno interno">
       ${id ? `<div style="margin-top:.5rem">${barcodeSVG(v.codigo_barras, { height: 40 })}</div>` : ''}</div>
     <div class="row"><div class="field"><label>Precio de costo</label><input class="input" name="precio_costo" type="number" step="any" min="0" value="${v.precio_costo}"></div>
@@ -377,7 +392,7 @@ async function productoModal(id, opts = {}) {
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el);
     if (!f.nombre || f.precio_venta === '') return toast('Completá nombre y precio de venta', true);
-    const data = { ...(id ? { id } : {}), nombre: f.nombre, marca: f.marca, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
+    const data = { ...(id ? { id } : {}), nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
       precio_costo: +f.precio_costo || 0, precio_venta: +f.precio_venta || 0, stock_minimo: +f.stock_minimo || 0, es_servicio: f.es_servicio };
     if (!id) { data.codigo_barras = f.codigo_barras; data.stock = +f.stock || 0; }
     const r = await store.guardarProducto(data);
@@ -608,7 +623,7 @@ function stepper(estado) {
 }
 
 async function detalleOrden(id) {
-  const [o, productos, n] = await Promise.all([store.orden(id), store.productos(), store.negocio()]);
+  const [o, productos, n, cats] = await Promise.all([store.orden(id), store.productos(), store.negocio(), store.categorias()]);
   if (!o) { view().innerHTML = '<div class="empty">Orden no encontrada</div>'; return; }
   const url = trackingURL(o.token);
   const items = o.items.slice();
@@ -697,9 +712,9 @@ async function detalleOrden(id) {
   const br = $('#buscar-rep'), sug = $('#sug');
   br.oninput = () => {
     const t = br.value.trim(); if (!t) { sug.hidden = true; return; }
-    const r = productos.filter(p => p.codigo_barras === t || matches(t, p.nombre, p.codigo_barras)).slice(0, 8);
+    const r = buscarProductos(productos, cats, t);
     sug.hidden = false;
-    sug.innerHTML = r.map(p => `<div data-id="${p.id}"><span>${esc(p.nombre)}</span><span>${money(p.precio_venta)}</span></div>`).join('') || '<div class="muted">Sin resultados</div>';
+    sug.innerHTML = r.map(p => `<div data-id="${p.id}">${prodSugHTML(p, cats)}</div>`).join('') || '<div class="muted">Sin resultados</div>';
     $$('[data-id]', sug).forEach(d => d.onmousedown = e => {
       e.preventDefault(); const p = productos.find(x => x.id === +d.dataset.id);
       items.push({ producto_id: p.id, descripcion: p.nombre, cantidad: 1, precio_unitario: p.precio_venta });
@@ -824,16 +839,46 @@ ROUTES.compras = async ({ id }) => {
   const enCurso = compraDraft && compraDraft.items.length;
   view().innerHTML = `
   <div class="page-head"><h1>Compras y proveedores</h1><div class="actions"><button class="btn" id="prov">+ Proveedor</button>
-    <a class="btn primary" href="#/compras/nueva">${enCurso ? `Continuar carga (${compraDraft.items.length})` : 'Ingresar mercadería'}</a></div></div>
+    <a class="btn primary" href="#/compras/nueva">${enCurso ? `${compraDraft.editId ? 'Continuar edición' : 'Continuar carga'} (${compraDraft.items.length})` : 'Ingresar mercadería'}</a></div></div>
   <div class="split">
     <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Proveedor</th><th>Comprobante</th><th>Ítems</th><th class="num">Total</th></tr></thead><tbody>
-      ${compras.map(c => `<tr><td>${fdate(c.fecha)}</td><td>${esc(provName(c.proveedor_id))}</td><td>${esc(c.nro_comprobante) || '—'}</td>
+      ${compras.map(c => `<tr class="click" data-compra="${c.id}"><td>${fdate(c.fecha)}</td><td>${esc(provName(c.proveedor_id))}</td><td>${esc(c.nro_comprobante) || '—'}</td>
         <td class="small">${c.items.map(i => `${i.cantidad}× ${esc(productos.find(p => p.id === i.producto_id)?.nombre || '')}`).join(', ')}</td><td class="num">${money(c.total)}</td></tr>`).join('')
       || '<tr><td colspan="5" class="empty">Todavía no se registraron compras. Usá "Ingresar mercadería" cuando llegue un pedido: suma el stock y actualiza costos y precios.</td></tr>'}</tbody></table></div>
     <div class="card card-pad"><h2>Proveedores</h2>${proveedores.map(p => `<div class="equipo"><b>${esc(p.nombre)}</b><div class="small muted">${esc(p.cuit)} ${p.telefono ? '· ' + esc(p.telefono) : ''}</div></div>`).join('') || '<div class="muted small">Sin proveedores.</div>'}</div>
   </div>`;
   $('#prov').onclick = () => proveedorModal(() => render());
+  $$('tr[data-compra]').forEach(tr => tr.onclick = () => compraModal(compras.find(c => c.id === +tr.dataset.compra), productos, provName));
 };
+
+function compraModal(c, productos, provName) {
+  const prod = id => productos.find(p => p.id === id);
+  const m = modal(`Compra #${c.id}`, `
+    <dl class="kv" style="margin-bottom:1rem"><dt>Fecha</dt><dd>${fdatetime(c.fecha)}</dd><dt>Proveedor</dt><dd>${esc(provName(c.proveedor_id))}</dd>
+      <dt>Comprobante</dt><dd>${esc(c.nro_comprobante) || '—'}</dd>${c.notas ? `<dt>Notas</dt><dd>${esc(c.notas)}</dd>` : ''}</dl>
+    <table class="tbl"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Costo unit.</th><th class="num">Subtotal</th></tr></thead><tbody>
+      ${c.items.map(i => `<tr><td>${esc(prod(i.producto_id)?.nombre || '(producto eliminado)')}<div class="small muted mono">${esc(prod(i.producto_id)?.codigo_barras || '')}</div></td>
+        <td class="num">${i.cantidad}</td><td class="num">${money(i.costo_unitario)}</td><td class="num">${money(i.cantidad * i.costo_unitario)}</td></tr>`).join('')}
+      <tr><td colspan="3"><b>Total</b></td><td class="num"><b>${money(c.total)}</b></td></tr></tbody></table>`,
+    `<button class="btn danger" id="del">Eliminar</button><button class="btn" id="edit">Editar</button><button class="btn primary" data-close>Cerrar</button>`, { wide: true });
+
+  $('#edit', m.el).onclick = () => {
+    if (compraDraft?.items.length && !confirm('Tenés otra carga de compra sin terminar. ¿Descartarla para editar esta?')) return;
+    compraDraft = {
+      editId: c.id, proveedor_id: c.proveedor_id ? String(c.proveedor_id) : '', nro_comprobante: c.nro_comprobante || '', notas: c.notas || '',
+      items: c.items.map(i => { const p = prod(i.producto_id) || {};
+        return { producto_id: i.producto_id, nombre: p.nombre || '(producto eliminado)', codigo_barras: p.codigo_barras || '', stock: p.stock ?? 0,
+          cantidad: +i.cantidad, costo_unitario: +i.costo_unitario, precio_venta: +p.precio_venta || 0, precio_venta_orig: +p.precio_venta || 0 }; }),
+    };
+    m.close(); go('#/compras/nueva');
+  };
+  $('#del', m.el).onclick = () => run(async () => {
+    const detalle = c.items.map(i => `• ${i.cantidad} × ${prod(i.producto_id)?.nombre || ''}`).join('\n');
+    if (!confirm(`¿Eliminar la compra #${c.id}?\n\nSe va a RESTAR del stock lo que había sumado:\n${detalle}`)) return;
+    await store.eliminarCompra(c.id);
+    m.close(); toast('Compra eliminada · stock corregido'); render();
+  });
+}
 
 function proveedorModal(onSaved) {
   const m = modal('Nuevo proveedor', `<div class="field"><label>Nombre *</label><input class="input" name="nombre"></div>
@@ -846,13 +891,14 @@ function proveedorModal(onSaved) {
 }
 
 async function nuevaCompra() {
-  const [proveedores, productos] = await Promise.all([store.proveedores(), store.productos()]);
+  const [proveedores, productos, cats] = await Promise.all([store.proveedores(), store.productos(), store.categorias()]);
   compraDraft ??= nuevoDraft();
   const d = compraDraft;
 
   view().innerHTML = `
-  <div class="page-head"><div><a href="#/compras" class="small muted">← Compras</a><h1>Ingresar mercadería</h1></div>
-    <div class="actions"><button class="btn danger" id="descartar">Descartar</button></div></div>
+  <div class="page-head"><div><a href="#/compras" class="small muted">← Compras</a><h1>${d.editId ? `Editar compra #${d.editId}` : 'Ingresar mercadería'}</h1></div>
+    <div class="actions"><button class="btn danger" id="descartar">${d.editId ? 'Cancelar edición' : 'Descartar'}</button></div></div>
+  ${d.editId ? '<div class="small" style="background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px;margin-bottom:1rem">Al guardar, el stock se corrige según la diferencia con lo cargado originalmente.</div>' : ''}
   <div class="card card-pad" style="margin-bottom:1rem">
     <div class="row">
       <div class="field"><label>Proveedor</label><select class="input" id="prov"><option value="">— Sin especificar —</option>
@@ -870,7 +916,7 @@ async function nuevaCompra() {
       <div class="field" style="flex:2"><label>Notas</label><input class="input" id="notas" value="${esc(d.notas)}" placeholder="(opcional)"></div>
       <div class="field right" style="flex:1"><div class="small muted">Total de la compra</div><div class="total-box" id="total"></div></div>
     </div>
-    <button class="btn ok lg block" id="registrar">Registrar compra</button>
+    <button class="btn ok lg block" id="registrar">${d.editId ? 'Guardar cambios' : 'Registrar compra'}</button>
   </div>`;
 
   const prov = $('#prov');
@@ -926,7 +972,7 @@ async function nuevaCompra() {
   let results = [], sel = 0;
   const paintSug = () => {
     const t = b.value.trim();
-    s.innerHTML = results.map((p, i) => `<div class="${i === sel ? 'sel' : ''}" data-i="${i}"><span>${esc(p.nombre)} <span class="small muted mono">${esc(p.codigo_barras)}</span></span><span class="muted nowrap">stock ${p.stock}</span></div>`).join('')
+    s.innerHTML = results.map((p, i) => `<div class="${i === sel ? 'sel' : ''}" data-i="${i}">${prodSugHTML(p, cats, { costo: true })}</div>`).join('')
       + `<div class="${sel === results.length ? 'sel' : ''}" data-nuevo><span><b>+ Crear producto nuevo</b> «${esc(t)}»</span></div>`;
     $$('[data-i]', s).forEach(x => x.onmousedown = e => { e.preventDefault(); addP(results[+x.dataset.i]); });
     $('[data-nuevo]', s).onmousedown = e => { e.preventDefault(); crearProducto(t); };
@@ -934,7 +980,7 @@ async function nuevaCompra() {
   b.oninput = () => {
     const t = b.value.trim();
     if (!t) { s.hidden = true; return; }
-    results = productos.filter(p => !p.es_servicio && (p.codigo_barras === t || matches(t, p.nombre, p.marca, p.codigo_barras))).slice(0, 8);
+    results = buscarProductos(productos, cats, t, p => !p.es_servicio);
     sel = 0; s.hidden = false; paintSug();
   };
   b.onkeydown = e => {
@@ -952,19 +998,21 @@ async function nuevaCompra() {
   b.onblur = () => setTimeout(() => s.hidden = true, 150);
 
   $('#descartar').onclick = () => {
-    if (d.items.length && !confirm('¿Descartar esta carga? Se pierden los productos agregados.')) return;
+    if (d.items.length && !confirm(d.editId ? '¿Cancelar la edición? La compra queda como estaba.' : '¿Descartar esta carga? Se pierden los productos agregados.')) return;
     compraDraft = null; go('#/compras');
   };
   $('#registrar').onclick = () => run(async () => {
     if (!d.items.length) return toast('No agregaste productos', true);
     const btn = $('#registrar'); btn.disabled = true;
     try {
-      await store.registrarCompra({ proveedor_id: d.proveedor_id ? +d.proveedor_id : null, nro_comprobante: d.nro_comprobante.trim(), notas: d.notas.trim(),
-        items: d.items.map(({ producto_id, cantidad, costo_unitario }) => ({ producto_id, cantidad, costo_unitario })) });
+      const datos = { proveedor_id: d.proveedor_id ? +d.proveedor_id : null, nro_comprobante: d.nro_comprobante.trim(), notas: d.notas.trim(),
+        items: d.items.map(({ producto_id, cantidad, costo_unitario }) => ({ producto_id, cantidad, costo_unitario })) };
+      if (d.editId) await store.editarCompra(d.editId, datos);
+      else await store.registrarCompra(datos);
       for (const i of d.items.filter(i => i.precio_venta !== i.precio_venta_orig)) await store.guardarProducto({ id: i.producto_id, precio_venta: i.precio_venta });
     } finally { btn.disabled = false; }
     const n = d.items.length; compraDraft = null;
-    toast(`Compra registrada · ${n} producto(s) con stock actualizado`); go('#/compras');
+    toast(d.editId ? 'Compra actualizada · stock corregido' : `Compra registrada · ${n} producto(s) con stock actualizado`); go('#/compras');
   });
 
   paint();

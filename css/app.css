@@ -149,9 +149,10 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .qty button { border: 0; background: #f5f6f8; width: 28px; height: 30px; cursor: pointer; }
 .qty input { width: 36px; border: 0; text-align: center; outline: none; }
 .total-box { font-size: 2rem; font-weight: 600; font-variant-numeric: tabular-nums; }
-.suggest { position: absolute; left: 0; right: 0; top: 100%; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); z-index: 20; max-height: 300px; overflow-y: auto; margin-top: 4px; }
-.suggest div { padding: .55rem .8rem; cursor: pointer; display: flex; justify-content: space-between; gap: 1rem; }
-.suggest div:hover, .suggest div.sel { background: var(--accent-soft); }
+.suggest { position: absolute; left: 0; right: 0; top: 100%; background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); z-index: 20; max-height: 420px; overflow-y: auto; margin-top: 4px; }
+.suggest > div { padding: .55rem .8rem; cursor: pointer; display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; border-bottom: 1px solid var(--line); }
+.suggest > div:last-child { border-bottom: 0; }
+.suggest > div:hover, .suggest > div.sel { background: var(--accent-soft); }
 .pay-opts { display: grid; grid-template-columns: repeat(2, 1fr); gap: .4rem; }
 .pay-opts .chip { text-align: center; border-radius: 8px; padding: .5rem; }
 

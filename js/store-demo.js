@@ -147,6 +147,25 @@ export const store = {
     }
     save(); return clone(c);
   },
+  async editarCompra(id, { proveedor_id, nro_comprobante, items, notas = '' }) {
+    const c = byId('compras', id); if (!c) throw new Error('La compra no existe');
+    db.compra_items.filter(i => i.compra_id === c.id).forEach(i => movStock(i.producto_id, -i.cantidad, 'ajuste', { compra_id: c.id, nota: `Corrección de compra #${c.id}` }));
+    db.compra_items = db.compra_items.filter(i => i.compra_id !== c.id);
+    for (const i of items) {
+      insert('compra_items', { compra_id: c.id, ...i });
+      movStock(i.producto_id, i.cantidad, 'compra', { compra_id: c.id, nota: `Compra #${c.id} (editada)` });
+      byId('productos', i.producto_id).precio_costo = i.costo_unitario;
+    }
+    Object.assign(c, { proveedor_id: proveedor_id || null, nro_comprobante, notas, total: items.reduce((s, i) => s + i.cantidad * i.costo_unitario, 0) });
+    save();
+  },
+  async eliminarCompra(id) {
+    const c = byId('compras', id); if (!c) throw new Error('La compra no existe');
+    db.compra_items.filter(i => i.compra_id === c.id).forEach(i => movStock(i.producto_id, -i.cantidad, 'anulacion', { compra_id: c.id, nota: `Eliminación de compra #${c.id}` }));
+    db.compra_items = db.compra_items.filter(i => i.compra_id !== c.id);
+    db.compras = db.compras.filter(x => x.id !== c.id);
+    save();
+  },
 
   // Service técnico
   async ordenes() { return clone(db.ordenes_servicio.slice().reverse().map(o => ({ ...o, cliente: byId('clientes', o.cliente_id), equipo: byId('equipos', o.equipo_id) }))); },
