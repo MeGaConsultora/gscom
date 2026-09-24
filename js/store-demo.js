@@ -63,7 +63,10 @@ export const store = {
   async producto(id) { return clone(byId('productos', id)); },
   async productoPorCodigo(code) { return clone(db.productos.find(p => p.activo && p.codigo_barras === String(code).trim()) || null); },
   async guardarProducto(p) {
-    if (p.id) { Object.assign(byId('productos', p.id), p); save(); return clone(byId('productos', p.id)); }
+    if (p.id) {
+      if (p.codigo_barras && db.productos.some(x => x.id !== p.id && x.codigo_barras === p.codigo_barras)) throw new Error('Ya existe un producto con ese código de barras');
+      Object.assign(byId('productos', p.id), p); save(); return clone(byId('productos', p.id));
+    }
     const nuevo = { codigo_barras: '', codigo_interno: false, descripcion: '', marca: '', categoria_id: null,
       precio_costo: 0, precio_venta: 0, stock: 0, stock_minimo: 0, es_servicio: false, activo: true, created_at: now(), ...p };
     const stockInicial = +nuevo.stock || 0; nuevo.stock = 0;
@@ -82,7 +85,7 @@ export const store = {
   async guardarCliente(c) {
     c = { ...c, nombre: nombreCliente(c) };  // igual que el trigger armar_nombre_cliente de la base
     if (c.id) { Object.assign(byId('clientes', c.id), c); save(); return clone(byId('clientes', c.id)); }
-    const r = insert('clientes', { apellido: '', nombres: '', dni_cuit: '', telefono: '', email: '', direccion: '', notas: '', created_at: now(), ...c });
+    const r = insert('clientes', { apellido: '', nombres: '', dni_cuit: '', telefono: '', email: '', direccion: '', notas: '', condicion_iva: 'Consumidor Final', created_at: now(), ...c });
     save(); return clone(r);
   },
   async equipos(clienteId) { return clone(db.equipos.filter(e => e.cliente_id === +clienteId)); },

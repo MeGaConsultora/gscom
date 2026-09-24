@@ -1,4 +1,4 @@
-import { store, ESTADOS, estadoInfo, FORMAS_PAGO, FORMAS_COBRO, CUENTA_CORRIENTE, TIPOS_EQUIPO, resetDemo } from './store.js';
+import { store, ESTADOS, estadoInfo, FORMAS_PAGO, FORMAS_COBRO, CUENTA_CORRIENTE, TIPOS_EQUIPO, CONDICIONES_IVA, resetDemo } from './store.js';
 
 // =====================================================================
 // Utilidades
@@ -429,7 +429,7 @@ async function productoModal(id, opts = {}) {
     <div class="row"><div class="field"><label>Marca</label><input class="input" name="marca" value="${esc(v.marca)}"></div>
       <div class="field"><label>Categoría</label><select class="input" name="categoria_id"><option value="">—</option>${categorias.map(c => `<option value="${c.id}" ${c.id === v.categoria_id ? 'selected' : ''}>${esc(c.nombre)}</option>`).join('')}<option value="__nueva">+ Nueva categoría…</option></select></div></div>
     <div class="field"><label>Descripción / detalle</label><input class="input" name="descripcion" value="${esc(v.descripcion)}" placeholder="ej: USB, negro, teclado en español · 1TB 7200rpm"></div>
-    <div class="field"><label>Código de barras</label><input class="input mono" name="codigo_barras" value="${esc(v.codigo_barras)}" ${id ? 'readonly' : ''} placeholder="Escaneá el código de fábrica, o dejalo vacío para generar uno interno">
+    <div class="field"><label>Código de barras</label><input class="input mono" name="codigo_barras" value="${esc(v.codigo_barras)}" placeholder="Escaneá el código de fábrica, o dejalo vacío para generar uno interno">
       ${id ? `<div style="margin-top:.5rem">${barcodeSVG(v.codigo_barras, { height: 40 })}</div>` : ''}</div>
     <div class="row"><div class="field"><label>Precio de costo</label><input class="input" name="precio_costo" type="number" step="any" min="0" value="${v.precio_costo}"></div>
       <div class="field"><label>Precio de venta *</label><input class="input" name="precio_venta" type="number" step="any" min="0" value="${v.precio_venta}"></div>
@@ -458,7 +458,8 @@ async function productoModal(id, opts = {}) {
     if (!f.nombre || f.precio_venta === '') return toast('Completá nombre y precio de venta', true);
     const data = { ...(id ? { id } : {}), nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
       precio_costo: +f.precio_costo || 0, precio_venta: +f.precio_venta || 0, stock_minimo: +f.stock_minimo || 0, es_servicio: f.es_servicio };
-    if (!id) { data.codigo_barras = f.codigo_barras; data.stock = +f.stock || 0; }
+    data.codigo_barras = f.codigo_barras;
+    if (!id) data.stock = +f.stock || 0;
     const r = await store.guardarProducto(data);
     m.close(); toast(id ? 'Producto actualizado' : `Producto creado · código ${r.codigo_barras}`);
     opts.onSaved ? opts.onSaved(r) : render();
@@ -525,7 +526,7 @@ ROUTES.clientes = async ({ id }) => {
 };
 
 function clienteModal(c, onSaved) {
-  const v = c || { apellido: '', nombres: '', telefono: '', dni_cuit: '', email: '', direccion: '', notas: '' };
+  const v = c || { apellido: '', nombres: '', telefono: '', dni_cuit: '', email: '', direccion: '', notas: '', condicion_iva: CONDICIONES_IVA[0] };
   const m = modal(c ? 'Editar cliente' : 'Nuevo cliente', `
     <div class="row"><div class="field"><label>Apellido / Razón social *</label><input class="input" name="apellido" value="${esc(v.apellido ?? v.nombre)}"></div>
       <div class="field"><label>Nombres</label><input class="input" name="nombres" value="${esc(v.nombres)}" placeholder="(vacío si es empresa)"></div></div>
@@ -533,6 +534,7 @@ function clienteModal(c, onSaved) {
       <div class="field"><label>DNI / CUIT</label><input class="input" name="dni_cuit" value="${esc(v.dni_cuit)}"></div></div>
     <div class="row"><div class="field"><label>Email</label><input class="input" name="email" type="email" value="${esc(v.email)}"></div>
       <div class="field"><label>Dirección</label><input class="input" name="direccion" value="${esc(v.direccion)}"></div></div>
+    <div class="field"><label>Condición IVA</label><select class="input" name="condicion_iva">${CONDICIONES_IVA.map(o => `<option ${o === (v.condicion_iva || CONDICIONES_IVA[0]) ? 'selected' : ''}>${o}</option>`).join('')}</select></div>
     <div class="field"><label>Notas internas</label><textarea class="input" name="notas">${esc(v.notas)}</textarea></div>`,
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
   $('#ok', m.el).onclick = () => run(async () => {
@@ -592,6 +594,7 @@ async function fichaCliente(id) {
       <div class="card card-pad"><h2>Datos <button class="btn sm" id="editar">Editar</button></h2>
         <dl class="kv"><dt>Teléfono</dt><dd>${esc(c.telefono) || '—'} ${c.telefono ? `<a class="small" target="_blank" rel="noopener" href="${waLink(c.telefono, `Hola ${primerNombre(c)}, te escribimos de GScom.`)}">WhatsApp</a>` : ''}</dd>
         <dt>DNI / CUIT</dt><dd>${esc(c.dni_cuit) || '—'}</dd><dt>Email</dt><dd>${esc(c.email) || '—'}</dd><dt>Dirección</dt><dd>${esc(c.direccion) || '—'}</dd>
+        <dt>Condición IVA</dt><dd>${esc(c.condicion_iva) || CONDICIONES_IVA[0]}</dd>
         <dt>Cliente desde</dt><dd>${fdate(c.created_at)}</dd></dl>
         ${c.notas ? `<div class="small" style="margin-top:.8rem;background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px">📝 ${esc(c.notas)}</div>` : ''}</div>
       <div class="card card-pad"><h2>Equipos <button class="btn sm" id="add-eq">+ Agregar</button></h2>
