@@ -1118,10 +1118,16 @@ async function cargoManualModal(clienteId = null) {
   const clientes = clienteId ? [] : await store.clientes();
   const m = modal('Cargar deuda manual', `
     ${clienteId ? '' : `<div class="field"><label>Cliente *</label><select class="input" id="cli"><option value="">Elegí un cliente…</option>
-      ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select></div>`}
+      ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}<option value="__nuevo">+ Cliente nuevo…</option></select></div>`}
     <div class="field"><label>Monto *</label><input class="input" type="number" step="any" min="0" id="monto"></div>
     <div class="field"><label>Concepto *</label><input class="input" id="concepto" placeholder="ej: Saldo anterior, trabajo a domicilio"></div>`,
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Cargar</button>`);
+  const cliSel = $('#cli', m.el);
+  if (cliSel) cliSel.onchange = () => {
+    if (cliSel.value !== '__nuevo') return;
+    cliSel.value = '';
+    clienteModal(null, c => { const o = new Option(c.nombre, c.id, true, true); cliSel.add(o, cliSel.options.length - 1); });
+  };
   $('#ok', m.el).onclick = () => run(async () => {
     const cid = clienteId || +$('#cli', m.el).value, monto = +$('#monto', m.el).value, concepto = $('#concepto', m.el).value.trim();
     if (!cid || !(monto > 0) || !concepto) return toast('Completá cliente, monto y concepto', true);
