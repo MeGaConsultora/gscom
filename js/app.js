@@ -421,6 +421,7 @@ ROUTES.productos = async ({ q }) => {
   const aRevisar = p => (p.descripcion || '').startsWith('⚠');
   view().innerHTML = `
   <div class="page-head"><h1>Productos y stock <span class="muted small">(${productos.length})</span></h1><div class="actions">
+    <button class="btn danger" id="del-sel" hidden>Eliminar seleccionados</button>
     <button class="btn" id="etiquetas">Imprimir etiquetas <span id="nsel"></span></button><button class="btn primary" id="nuevo">+ Nuevo producto</button></div></div>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="row" style="align-items:center">
     <div class="search" style="flex:3"><input class="input" id="buscar" placeholder="Buscar por nombre, marca, proveedor o código (también podés escanear)"></div>
@@ -449,7 +450,14 @@ ROUTES.productos = async ({ q }) => {
     $$('[data-sel]').forEach(cb => cb.onchange = () => { cb.checked ? prodSel.add(+cb.dataset.sel) : prodSel.delete(+cb.dataset.sel); paintSel(); });
     paintSel();
   }
-  const paintSel = () => $('#nsel').textContent = prodSel.size ? `(${prodSel.size})` : '';
+  const paintSel = () => { $('#nsel').textContent = prodSel.size ? `(${prodSel.size})` : ''; $('#del-sel').hidden = !prodSel.size; };
+  $('#del-sel').onclick = () => run(async () => {
+    const ids = [...prodSel].filter(id => productos.some(p => p.id === id));
+    if (!ids.length || !confirm(`¿Eliminar ${ids.length} producto(s)?\n\nLos que ya tengan ventas, compras o service se dan de baja (el historial se conserva) y liberan su código de barras.`)) return;
+    let eliminados = 0, bajas = 0;
+    for (const id of ids) { (await store.eliminarProducto(id)) === 'baja' ? bajas++ : eliminados++; prodSel.delete(id); }
+    toast(`${eliminados} eliminado(s)${bajas ? ` · ${bajas} dado(s) de baja` : ''}`); render();
+  });
   $('#buscar').oninput = e => { texto = e.target.value.trim(); paint(); };
   $('#prov').value = prov;
   $('#prov').onchange = e => { prov = e.target.value; paint(); };
@@ -485,8 +493,14 @@ async function productoModal(id, opts = {}) {
       <div class="field" style="flex:0"><button class="btn" id="aj-ok">Ajustar</button></div></div>
       <details><summary class="small muted" style="cursor:pointer">Ver movimientos (${movs.length})</summary>
       <table class="tbl small" style="margin-top:.5rem"><tbody>${movs.slice(0, 30).map(mv => `<tr><td>${fdatetime(mv.created_at)}</td><td>${esc(mv.tipo)}</td><td class="muted">${esc(mv.nota || '')}</td><td class="num"><b style="color:${mv.cantidad < 0 ? 'var(--bad)' : 'var(--ok)'}">${mv.cantidad > 0 ? '+' : ''}${mv.cantidad}</b></td></tr>`).join('')}</tbody></table></details></div>` : ''}`,
-    `${id ? '<button class="btn" id="etq">Imprimir etiqueta</button>' : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
+    `${id ? '<button class="btn danger" id="del" style="margin-right:auto">Eliminar</button><button class="btn" id="etq">Imprimir etiqueta</button>' : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
 
+  const del = $('#del', m.el);
+  if (del) del.onclick = () => run(async () => {
+    if (!confirm(`¿Eliminar "${v.nombre}"?\n\nSi ya se vendió, compró o usó en un service, se da de baja (deja de aparecer, pero el historial se conserva) y su código de barras queda libre.`)) return;
+    const r = await store.eliminarProducto(id);
+    prodSel.delete(id); m.close(); toast(r === 'baja' ? 'Producto dado de baja (tenía historial)' : 'Producto eliminado'); render();
+  });
   const margen = () => { const c = +$('[name=precio_costo]', m.el).value, pv = +$('[name=precio_venta]', m.el).value; $('#margen', m.el).value = c > 0 && pv > 0 ? Math.round((pv / c - 1) * 100) + '%' : '—'; };
   $$('[name=precio_costo],[name=precio_venta]', m.el).forEach(i => i.oninput = margen); margen();
   $('[name=categoria_id]', m.el).onchange = async e => {

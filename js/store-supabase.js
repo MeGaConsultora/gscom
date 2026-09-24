@@ -54,6 +54,7 @@ export const store = {
     if (+stock) await this.ajustarStock(r.id, +stock, 'Stock inicial');
     return r;
   },
+  async eliminarProducto(id) { return q(sb.rpc('eliminar_producto', { p_id: id })); },  // 'eliminado' | 'baja'
   async ajustarStock(productoId, cantidad, nota) {
     await q(sb.from('stock_movimientos').insert({ producto_id: productoId, cantidad, tipo: 'ajuste', nota: nota || '' }));
   },

@@ -76,6 +76,16 @@ export const store = {
     if (stockInicial) movStock(r.id, stockInicial, 'ajuste', { nota: 'Stock inicial' });
     save(); return clone(r);
   },
+  async eliminarProducto(id) {
+    const p = byId('productos', id); if (!p) throw new Error('El producto no existe');
+    const usado = [db.venta_items, db.compra_items, db.orden_items].some(t => t.some(i => i.producto_id === p.id));
+    if (!usado) {
+      db.stock_movimientos = db.stock_movimientos.filter(m => m.producto_id !== p.id);
+      db.productos = db.productos.filter(x => x.id !== p.id); save(); return 'eliminado';
+    }
+    Object.assign(p, { activo: false, codigo_barras: null, descripcion: `${p.descripcion || ''} [dado de baja; código ${p.codigo_barras || '—'}]`.trim() });
+    save(); return 'baja';
+  },
   async ajustarStock(productoId, cantidad, nota) { movStock(productoId, cantidad, 'ajuste', { nota }); save(); },
   async movimientosStock(productoId) { return clone(db.stock_movimientos.filter(m => m.producto_id === +productoId).reverse()); },
 
