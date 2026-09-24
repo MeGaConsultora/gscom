@@ -184,6 +184,10 @@ export const store = {
     await q(sb.from('cc_movimientos').insert({ cliente_id: clienteId, tipo: 'cargo', monto: +monto, concepto }));
   },
   async anularCobroCuenta(ccId) { await q(sb.rpc('anular_cobro_cuenta', { p_cc_id: ccId })); },
+  async editarCargoManual(id, { concepto, monto }) {
+    await q(sb.rpc('editar_cargo_manual', { p_id: id, p_monto: +monto, p_concepto: concepto }));
+  },
+  async eliminarCargoManual(id) { await q(sb.rpc('eliminar_cargo_manual', { p_id: id })); },
 
   // Avisos: presupuestos respondidos por el cliente que todavía no se atendieron
   async presupuestosRespondidos() {

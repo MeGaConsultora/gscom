@@ -194,6 +194,17 @@ export const store = {
   async cargarDeuda(clienteId, { monto, concepto }) {
     insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'cargo', monto: +monto, concepto, forma_pago: '', anulado: false }); save();
   },
+  async editarCargoManual(id, { concepto, monto }) {
+    const m = byId('cc_movimientos', id);
+    if (!m || m.tipo !== 'cargo' || m.venta_id || m.orden_id) throw new Error('Este cargo no se puede editar directamente: viene de una venta o de una orden de service');
+    if (!(+monto > 0)) throw new Error('El monto tiene que ser mayor a cero');
+    Object.assign(m, { concepto, monto: +monto }); save();
+  },
+  async eliminarCargoManual(id) {
+    const m = byId('cc_movimientos', id);
+    if (!m || m.tipo !== 'cargo' || m.venta_id || m.orden_id) throw new Error('Este cargo no se puede eliminar directamente: viene de una venta o de una orden de service');
+    db.cc_movimientos = db.cc_movimientos.filter(x => x.id !== m.id); save();
+  },
   async anularCobroCuenta(ccId) {
     const m = byId('cc_movimientos', ccId);
     if (m.tipo !== 'pago') throw new Error('Solo se pueden anular cobros');

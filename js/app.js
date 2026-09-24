@@ -1089,7 +1089,8 @@ async function cuentaCliente(clienteId) {
       <td>${esc(m.concepto)}${m.forma_pago ? ` <span class="small muted">· ${esc(m.forma_pago)}</span>` : ''}
         ${m.venta_id ? ` <a href="#" class="small" data-venta="${m.venta_id}">ver venta</a>` : ''}${m.orden_id ? ` <a class="small" href="#/service/${m.orden_id}">ver orden</a>` : ''}</td>
       <td class="num">${m.monto > 0 ? money(m.monto) : ''}</td><td class="num">${m.monto < 0 ? money(-m.monto) : ''}</td><td class="num"><b>${money(m.acum)}</b></td>
-      <td class="right">${m.tipo === 'pago' && !m.anulado ? `<button class="btn sm danger" data-anular="${m.id}">Anular</button>` : ''}</td></tr>`).join('')
+      <td class="right">${m.tipo === 'pago' && !m.anulado ? `<button class="btn sm danger" data-anular="${m.id}">Anular</button>`
+        : m.tipo === 'cargo' && !m.venta_id && !m.orden_id ? `<button class="btn sm" data-editar-cargo="${m.id}">Editar</button> <button class="btn sm danger" data-eliminar-cargo="${m.id}">Eliminar</button>` : ''}</td></tr>`).join('')
     || '<tr><td colspan="7" class="empty">Sin movimientos.</td></tr>'}</tbody></table></div>`;
   $('#cobrar').onclick = () => cobrarModal(c.id, c.nombre, saldo, render);
   $('#cargo').onclick = () => cargoManualModal(c.id);
@@ -1098,6 +1099,27 @@ async function cuentaCliente(clienteId) {
     if (!confirm('¿Anular este cobro? La deuda vuelve a la cuenta y se descuenta de caja.')) return;
     await store.anularCobroCuenta(+b.dataset.anular); toast('Cobro anulado'); render();
   }));
+  $$('[data-editar-cargo]').forEach(b => b.onclick = () => {
+    const mv = movs.find(x => x.id === +b.dataset.editarCargo);
+    editarCargoModal(mv, () => render());
+  });
+  $$('[data-eliminar-cargo]').forEach(b => b.onclick = () => run(async () => {
+    if (!confirm('¿Eliminar este cargo? Se resta del saldo del cliente.')) return;
+    await store.eliminarCargoManual(+b.dataset.eliminarCargo); toast('Cargo eliminado'); render();
+  }));
+}
+
+function editarCargoModal(mv, onDone) {
+  const m = modal('Editar cargo', `
+    <div class="field"><label>Concepto</label><input class="input" id="concepto" value="${esc(mv.concepto)}"></div>
+    <div class="field"><label>Monto</label><input class="input" type="number" step="any" min="0" id="monto" value="${mv.monto}"></div>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
+  $('#ok', m.el).onclick = () => run(async () => {
+    const concepto = $('#concepto', m.el).value.trim(), monto = +$('#monto', m.el).value;
+    if (!concepto || !(monto > 0)) return toast('Completá concepto y monto', true);
+    await store.editarCargoManual(mv.id, { concepto, monto });
+    m.close(); toast('Cargo actualizado'); onDone();
+  });
 }
 
 function cobrarModal(clienteId, nombre, saldo, onDone) {
