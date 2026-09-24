@@ -133,6 +133,12 @@ function parseHash() {
 async function render() {
   $$('.modal-bg').forEach(m => m.remove()); // cerrar modales al cambiar de pantalla
   const r = parseHash();
+  // Si se sale de Vender a mitad de la edición de una venta, la edición se cancela:
+  // así, al volver a Vender, nunca se guarda una venta nueva encima de una vieja.
+  if (r.name !== 'vender' && cart.editId) {
+    toast(`Se canceló la edición de la venta #${cart.editNumero}: quedó como estaba`);
+    cart = carritoVacio();
+  }
   $$('nav.tabs a').forEach(a => a.classList.toggle('active', a.dataset.r === r.name));
   const fn = ROUTES[r.name] || ROUTES.inicio;
   view().innerHTML = '<div class="empty">Cargando…</div>';
@@ -257,7 +263,10 @@ ROUTES.vender = async ({ q }) => {
 
   view().innerHTML = `
   <div class="page-head"><h1>${cart.editId ? `Editar venta #${cart.editNumero}` : 'Nueva venta'}</h1><div class="actions"><button class="btn" id="manual">+ Ítem manual</button><button class="btn danger" id="vaciar">${cart.editId ? 'Cancelar edición' : 'Vaciar'}</button></div></div>
-  ${cart.editId ? '<div class="small" style="background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px;margin-bottom:1rem">Al guardar, el stock y la caja/cuenta corriente se corrigen según la diferencia con la venta original.</div>' : ''}
+  ${cart.editId ? `<div style="background:var(--warn-soft);border:2px solid var(--warn);padding:.8rem 1rem;border-radius:10px;margin-bottom:1rem">
+    <b>✏️ Estás EDITANDO la venta #${cart.editNumero}${cart.orig?.clienteNombre ? ` de ${esc(cart.orig.clienteNombre)}` : ''}</b>, no haciendo una venta nueva.
+    <div class="small" style="margin-top:.2rem">Al guardar, el stock y la caja/cuenta corriente se corrigen según la diferencia con la venta original.
+    Si querías hacer una venta nueva, tocá <b>Cancelar edición</b>.</div></div>` : ''}
   <div class="split">
     <div class="card card-pad">
       <div class="search" style="position:relative">
@@ -374,6 +383,15 @@ ROUTES.vender = async ({ q }) => {
     const sinStock = cart.items.filter(i => i.producto_id && !i.es_servicio && i.cantidad > i.stock);
     if (sinStock.length && !confirm(`Hay ${sinStock.length} producto(s) sin stock suficiente según el sistema. ¿Registrar la venta igual?`)) return;
     if (cart.editId) {
+      // Si cambia el cliente o el total, pedir confirmación explícita con el antes y el después
+      const o = cart.orig || {};
+      const nuevoCli = cart.cliente_id ? clientes.find(c => c.id === +cart.cliente_id)?.nombre : 'Consumidor final';
+      const nuevoTotal = cart.items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0) - (+cart.descuento || 0);
+      const cambios = [
+        String(o.cliente_id || '') !== String(cart.cliente_id || '') ? `• Cliente: ${o.clienteNombre || 'Consumidor final'} → ${nuevoCli}` : '',
+        o.total != null && Math.abs(o.total - nuevoTotal) > 0.009 ? `• Total: ${money(o.total)} → ${money(nuevoTotal)}` : '',
+      ].filter(Boolean);
+      if (cambios.length && !confirm(`Vas a MODIFICAR la venta #${cart.editNumero} (no es una venta nueva):\n\n${cambios.join('\n')}\n\n¿Confirmás?`)) return;
       await store.editarVenta(cart.editId, { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago, notas: (cart.notas || '').trim() });
       cart = carritoVacio();
       toast('Venta actualizada'); go('#/caja'); return;
@@ -422,6 +440,7 @@ async function ventaModal(id) {
     const productos = await store.productos();
     cart = {
       editId: v.id, editNumero: v.numero, cliente_id: v.cliente_id ? String(v.cliente_id) : '', descuento: +v.descuento || 0, forma_pago: v.forma_pago, notas: v.notas || '',
+      orig: { cliente_id: v.cliente_id, clienteNombre: v.cliente?.nombre || '', total: +v.total },
       items: v.items.map(i => {
         const p = i.producto_id ? productos.find(x => x.id === i.producto_id) : null;
         return { producto_id: i.producto_id, descripcion: i.descripcion, cantidad: +i.cantidad, precio_unitario: +i.precio_unitario, stock: p?.stock ?? 0, es_servicio: p ? p.es_servicio : true };
