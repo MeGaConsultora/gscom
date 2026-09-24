@@ -62,11 +62,17 @@ function modal(title, body, foot = '', { wide = false } = {}) {
 }
 const formData = el => Object.fromEntries($$('[name]', el).map(i => [i.name, i.type === 'checkbox' ? i.checked : i.value.trim()]));
 
-function printHTML(html) {
+// pagina: regla @page para este tipo de impresión (ticketera, A4, etiquetas)
+function printHTML(html, pagina = 'margin: 8mm') {
   const area = $('#print-area');
   area.innerHTML = html;
+  let st = $('#print-page');
+  if (!st) { st = document.createElement('style'); st.id = 'print-page'; document.head.appendChild(st); }
+  st.textContent = `@media print { @page { ${pagina} } }`;
   setTimeout(() => window.print(), 150);
 }
+const PAGINA_TICKET = 'margin: 0';                 // ticketera 57/58 mm: el tamaño lo da la impresora
+const PAGINA_A4 = 'size: A4 portrait; margin: 0';
 
 function barcodeSVG(code, opts = {}) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -367,7 +373,7 @@ async function imprimirVenta(id) {
     ${v.descuento ? `<table><tr><td>Subtotal</td><td style="text-align:right">${money(v.subtotal)}</td></tr><tr><td>Descuento</td><td style="text-align:right">-${money(v.descuento)}</td></tr></table>` : ''}
     <table><tr><td class="big">TOTAL</td><td class="big" style="text-align:right">${money(v.total)}</td></tr></table>
     <div>Pago: ${esc(v.forma_pago)}</div>${v.anulada ? '<div class="c big">*** ANULADA ***</div>' : ''}<hr>
-    <div class="c">Documento no válido como factura.<br>¡Gracias por su compra!</div></div>`);
+    <div class="c">Documento no válido como factura.<br>¡Gracias por su compra!</div></div>`, PAGINA_TICKET);
 }
 
 async function ventaModal(id) {
@@ -888,19 +894,45 @@ async function detalleOrden(id) {
   }
 }
 
-function imprimirOrden(o, n, url) {
+// Comprobante de ingreso: dos A6 (105 × 148 mm) lado a lado en la mitad superior de una A4.
+// Izquierda: original para el cliente (con QR). Derecha: duplicado para el local (con contraseña y firma).
+async function imprimirOrden(o, n, url) {
+  const anticipos = await store.anticiposOrden(o.id).catch(() => []);
+  const anticipado = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
   const eq = [o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' ');
-  printHTML(`<div class="ticket">
-    <div class="c big">${esc(n.nombre)}</div><div class="c">Service técnico<br>${esc(n.direccion)}<br>${esc(n.telefono)}</div><hr>
-    <div class="c big">ORDEN N° ${o.numero}</div><div class="c">${fdatetime(o.fecha_ingreso)}</div><hr>
-    <div>Cliente: ${esc(o.cliente.nombre)}<br>Tel: ${esc(o.cliente.telefono)}</div><hr>
-    <div>Equipo: ${esc(eq)}${o.equipo?.nro_serie ? `<br>S/N: ${esc(o.equipo.nro_serie)}` : ''}<br>Accesorios: ${esc(o.accesorios) || 'ninguno'}</div>
-    <div style="margin-top:1mm">Falla: ${esc(o.falla_reportada)}</div>
-    ${o.fecha_estimada ? `<div>Fecha estimada: ${fdate(o.fecha_estimada)}</div>` : ''}<hr>
-    <div class="c">Seguí el estado de tu equipo:</div><div class="c qr" style="margin:2mm 0">${qrSVG(url)}</div>
-    <div class="c" style="font-size:7pt;word-break:break-all">${esc(url)}</div><hr>
-    <div style="font-size:7.5pt">${esc(n.pie_comprobante)}</div>
-    <div style="margin-top:8mm">Firma cliente: ______________________</div></div>`);
+  const corto = (t, max) => { t = String(t || ''); return t.length > max ? t.slice(0, max - 1) + '…' : t; };
+  const fila = (k, v) => v ? `<tr><th>${k}</th><td>${v}</td></tr>` : '';
+
+  const copia = duplicado => `<div class="a6">
+    <div class="a6-head">
+      <img src="img/logo.png" alt="">
+      <div class="a6-neg"><b>${esc(n.nombre)}</b> · Service técnico<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}${n.whatsapp ? `<br>WhatsApp ${esc(n.whatsapp)}` : ''}</div>
+      <div class="a6-nro"><span>ORDEN N°</span><b>${o.numero}</b></div>
+    </div>
+    <div class="a6-copia">${duplicado ? 'DUPLICADO — LOCAL' : 'ORIGINAL — CLIENTE'} · Ingreso ${fdatetime(o.fecha_ingreso)}</div>
+    <table class="a6-datos">
+      ${fila('Cliente', esc(o.cliente.nombre))}
+      ${fila('Teléfono', esc(o.cliente.telefono))}
+      ${duplicado ? fila('DNI / CUIT', esc(o.cliente.dni_cuit)) : ''}
+      ${fila('Equipo', esc(eq))}
+      ${fila('N° de serie', esc(o.equipo?.nro_serie))}
+      ${fila('Accesorios', esc(o.accesorios) || 'Ninguno')}
+      ${fila('Falla', esc(corto(o.falla_reportada, duplicado ? 220 : 260)))}
+      ${fila('Fecha estimada', o.fecha_estimada ? fdate(o.fecha_estimada) : '')}
+      ${fila('Presupuesto', o.presupuesto != null ? money(o.presupuesto) : '')}
+      ${fila('Anticipo', anticipado ? money(anticipado) : '')}
+      ${duplicado ? fila('Contraseña', esc(o.contrasena_equipo)) + fila('Técnico', esc(o.tecnico)) : ''}
+    </table>
+    <div class="a6-pie">
+      ${duplicado
+        ? `<div class="a6-cond">${esc(n.pie_comprobante)}</div>
+           <div class="a6-firma"><span>Firma del cliente</span><span>Aclaración</span></div>`
+        : `<div class="a6-qr">${qrSVG(url)}<div><b>Seguí el estado de tu equipo</b> escaneando este código con la cámara del celular.
+             <div class="a6-cond">${esc(n.pie_comprobante)}</div></div></div>`}
+    </div>
+  </div>`;
+
+  printHTML(`<div class="hoja-a4"><div class="dos-a6">${copia(false)}${copia(true)}</div></div>`, PAGINA_A4);
 }
 
 // =====================================================================
