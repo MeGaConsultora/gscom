@@ -191,7 +191,7 @@ export const store = {
     });
     return clone(Object.values(por).sort((a, b) => b.saldo - a.saldo));
   },
-  async ccMovimientos(clienteId) { return clone(db.cc_movimientos.filter(m => m.cliente_id === +clienteId).reverse()); },
+  async ccMovimientos(clienteId) { return clone(db.cc_movimientos.filter(m => m.cliente_id === +clienteId).reverse().map(m => ({ ...m, venta: m.venta_id ? { notas: byId('ventas', m.venta_id)?.notas || '' } : null }))); },
   async ccMovimiento(id) { return clone(byId('cc_movimientos', id) || null); },
   async cobrarCuenta(clienteId, { monto, forma_pago, nota = '' }) {
     if (!(+monto > 0)) throw new Error('El monto a cobrar tiene que ser mayor a cero');

@@ -248,7 +248,8 @@ function bindRowLinks() {
 // =====================================================================
 // VENDER (punto de venta)
 // =====================================================================
-let cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', editId: null, editNumero: null };
+const carritoVacio = () => ({ items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', notas: '', editId: null, editNumero: null });
+let cart = carritoVacio();
 
 ROUTES.vender = async ({ q }) => {
   const [productos, clientes, cats] = await Promise.all([store.productos(), store.clientes(), store.categorias()]);
@@ -274,6 +275,8 @@ ROUTES.vender = async ({ q }) => {
       <div class="field"><label>Forma de pago</label><div class="pay-opts" id="pagos">
         ${FORMAS_COBRO.map(f => `<button class="chip" data-f="${f}">${f}</button>`).join('')}</div></div>
       <div class="field"><label>Descuento ($)</label><input class="input" id="desc" type="number" min="0" step="any" value="${cart.descuento || ''}" placeholder="0"></div>
+      <div class="field"><label>Observaciones <span class="muted">(interno, no sale en el comprobante)</span></label>
+        <input class="input" id="obs" value="${esc(cart.notas)}" placeholder="ej: Retiró Juan Pérez · Paga el viernes"></div>
       <hr style="border:0;border-top:1px solid var(--line);margin:.6rem 0 1rem">
       <div class="row small muted"><span>Subtotal</span><span class="right" id="subt"></span></div>
       <div class="row" style="align-items:baseline;margin:.3rem 0 1rem"><span>Total</span><span class="right total-box" id="tot"></span></div>
@@ -288,6 +291,7 @@ ROUTES.vender = async ({ q }) => {
   $$('#pagos .chip').forEach(b => b.onclick = () => { cart.forma_pago = b.dataset.f; paintPago(); });
   paintPago();
   $('#desc').oninput = e => { cart.descuento = +e.target.value || 0; paintCart(); };
+  $('#obs').oninput = e => cart.notas = e.target.value;
 
   function add(p) {
     const line = cart.items.find(i => i.producto_id === p.id);
@@ -347,9 +351,9 @@ ROUTES.vender = async ({ q }) => {
   $('#vaciar').onclick = () => {
     if (cart.editId) {
       if (cart.items.length && !confirm('¿Cancelar la edición? La venta queda como estaba.')) return;
-      cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', editId: null, editNumero: null }; go('#/caja'); return;
+      cart = carritoVacio(); go('#/caja'); return;
     }
-    cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', editId: null, editNumero: null }; render();
+    cart = carritoVacio(); render();
   };
   $('#manual').onclick = () => {
     const m = modal('Ítem manual', `<p class="small muted" style="margin-bottom:.8rem">Para algo que no está cargado como producto (no descuenta stock).</p>
@@ -370,12 +374,12 @@ ROUTES.vender = async ({ q }) => {
     const sinStock = cart.items.filter(i => i.producto_id && !i.es_servicio && i.cantidad > i.stock);
     if (sinStock.length && !confirm(`Hay ${sinStock.length} producto(s) sin stock suficiente según el sistema. ¿Registrar la venta igual?`)) return;
     if (cart.editId) {
-      await store.editarVenta(cart.editId, { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago });
-      cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', editId: null, editNumero: null };
+      await store.editarVenta(cart.editId, { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago, notas: (cart.notas || '').trim() });
+      cart = carritoVacio();
       toast('Venta actualizada'); go('#/caja'); return;
     }
-    const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago });
-    cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', editId: null, editNumero: null };
+    const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago, notas: (cart.notas || '').trim() });
+    cart = carritoVacio();
     const m = modal(`Venta #${v.numero} registrada`, `<div class="empty" style="padding:1rem"><div class="total-box">${money(v.total)}</div><div class="muted">${esc(v.forma_pago)}</div></div>`,
       `<button class="btn" id="imp">Imprimir comprobante</button><button class="btn primary" data-close>Nueva venta</button>`);
     $('#imp', m.el).onclick = () => imprimirVenta(v.id);
@@ -399,7 +403,8 @@ async function ventaModal(id) {
   const v = await store.venta(id);
   const m = modal(`Venta #${v.numero}`, `
     <dl class="kv" style="margin-bottom:1rem"><dt>Fecha</dt><dd>${fdatetime(v.fecha)}</dd><dt>Cliente</dt><dd>${v.cliente ? `<a href="#/clientes/${v.cliente.id}" data-close>${esc(v.cliente.nombre)}</a>` : 'Consumidor final'}</dd>
-    <dt>Forma de pago</dt><dd>${esc(v.forma_pago)}</dd>${v.anulada ? '<dt>Estado</dt><dd><span class="pill red">Anulada</span></dd>' : ''}</dl>
+    <dt>Forma de pago</dt><dd>${esc(v.forma_pago)}</dd>${v.anulada ? '<dt>Estado</dt><dd><span class="pill red">Anulada</span></dd>' : ''}
+    ${v.notas ? `<dt>Observaciones</dt><dd>📝 ${esc(v.notas)}</dd>` : ''}</dl>
     <table class="tbl"><thead><tr><th>Ítem</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Subtotal</th></tr></thead><tbody>
     ${v.items.map(i => `<tr><td>${esc(i.descripcion)}</td><td class="num">${i.cantidad}</td><td class="num">${money(i.precio_unitario)}</td><td class="num">${money(i.subtotal)}</td></tr>`).join('')}
     ${v.descuento ? `<tr><td colspan="3">Descuento</td><td class="num">−${money(v.descuento)}</td></tr>` : ''}
@@ -416,7 +421,7 @@ async function ventaModal(id) {
     if (cart.items.length && !confirm('Tenés una venta en curso sin terminar en "Vender". ¿Descartarla para editar esta?')) return;
     const productos = await store.productos();
     cart = {
-      editId: v.id, editNumero: v.numero, cliente_id: v.cliente_id ? String(v.cliente_id) : '', descuento: +v.descuento || 0, forma_pago: v.forma_pago,
+      editId: v.id, editNumero: v.numero, cliente_id: v.cliente_id ? String(v.cliente_id) : '', descuento: +v.descuento || 0, forma_pago: v.forma_pago, notas: v.notas || '',
       items: v.items.map(i => {
         const p = i.producto_id ? productos.find(x => x.id === i.producto_id) : null;
         return { producto_id: i.producto_id, descripcion: i.descripcion, cantidad: +i.cantidad, precio_unitario: +i.precio_unitario, stock: p?.stock ?? 0, es_servicio: p ? p.es_servicio : true };
@@ -644,7 +649,7 @@ async function fichaCliente(id) {
   const totalService = h.ordenes.reduce((s, o) => s + (o.total_cobrado || 0), 0);
   const eventos = [
     ...h.ventas.map(v => ({ fecha: v.fecha, tipo: 'venta', html: `<div class="what"><a href="#" data-venta="${v.id}">Compra #${v.numero}</a> · ${money(v.total)} ${v.anulada ? '<span class="pill red">Anulada</span>' : ''}</div>
-      <div class="detail">${v.items.map(i => `${i.cantidad > 1 ? i.cantidad + '× ' : ''}${esc(i.descripcion)}`).join(' · ')}</div>` })),
+      <div class="detail">${v.items.map(i => `${i.cantidad > 1 ? i.cantidad + '× ' : ''}${esc(i.descripcion)}`).join(' · ')}${v.notas ? `<br>📝 ${esc(v.notas)}` : ''}</div>` })),
     ...h.ordenes.map(o => ({ fecha: o.fecha_ingreso, tipo: 'service', html: `<div class="what"><a href="#/service/${o.id}">Service #${o.numero}</a> · ${esc([o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' '))} ${pill(o.estado)}</div>
       <div class="detail">Falla: ${esc(o.falla_reportada)}${o.trabajo_realizado ? `<br>Trabajo: ${esc(o.trabajo_realizado)}` : o.diagnostico ? `<br>Diagnóstico: ${esc(o.diagnostico)}` : ''}${o.total_cobrado ? `<br>Cobrado: ${money(o.total_cobrado)}` : ''}</div>` })),
   ].sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -1158,14 +1163,15 @@ async function cuentaCliente(clienteId) {
     <div class="card kpi"><div class="label">Total cargado</div><div class="value">${money(movs.filter(m => m.tipo === 'cargo').reduce((s, m) => s + +m.monto, 0))}</div></div>
     <div class="card kpi"><div class="label">Total pagado</div><div class="value">${money(-movs.filter(m => m.tipo === 'pago' && !m.anulado).reduce((s, m) => s + +m.monto, 0))}</div></div>
   </div>
-  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th class="num">Debe</th><th class="num">Haber</th><th class="num">Saldo</th><th></th></tr></thead><tbody>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Observaciones</th><th class="num">Debe</th><th class="num">Haber</th><th class="num">Saldo</th><th></th></tr></thead><tbody>
     ${conSaldo.map(m => `<tr><td class="nowrap">${fdatetime(m.fecha)}</td><td><span class="pill ${TIPO[m.tipo][1]}">${TIPO[m.tipo][0]}</span>${m.anulado ? ' <span class="pill red">Anulado</span>' : ''}</td>
       <td>${esc(m.concepto)}${m.forma_pago ? ` <span class="small muted">· ${esc(m.forma_pago)}</span>` : ''}
         ${m.venta_id ? ` <a href="#" class="small" data-venta="${m.venta_id}">ver venta</a>` : ''}${m.orden_id ? ` <a class="small" href="#/service/${m.orden_id}">ver orden</a>` : ''}</td>
+      <td class="small">${esc(m.venta?.notas || '')}</td>
       <td class="num">${m.monto > 0 ? money(m.monto) : ''}</td><td class="num">${m.monto < 0 ? money(-m.monto) : ''}</td><td class="num"><b>${money(m.acum)}</b></td>
       <td class="right nowrap">${m.tipo === 'pago' && !m.anulado ? `<button class="btn sm" data-recibo="${m.id}">Recibo</button> <button class="btn sm danger" data-anular="${m.id}">Anular</button>`
         : m.tipo === 'cargo' && !m.venta_id && !m.orden_id ? `<button class="btn sm" data-editar-cargo="${m.id}">Editar</button> <button class="btn sm danger" data-eliminar-cargo="${m.id}">Eliminar</button>` : ''}</td></tr>`).join('')
-    || '<tr><td colspan="7" class="empty">Sin movimientos.</td></tr>'}</tbody></table></div>`;
+    || '<tr><td colspan="8" class="empty">Sin movimientos.</td></tr>'}</tbody></table></div>`;
   $('#cobrar').onclick = () => cobrarModal(c.id, c.nombre, saldo, render);
   $('#cargo').onclick = () => cargoManualModal(c.id);
   $$('[data-venta]').forEach(a => a.onclick = e => { e.preventDefault(); ventaModal(+a.dataset.venta); });
@@ -1576,7 +1582,7 @@ ROUTES.ajustes = async () => {
       <button class="btn danger" id="reset">Restablecer datos de ejemplo</button></div>` : ''}
   </div></div>`;
   $('#guardar').onclick = () => run(async () => { const f = formData(view()); f.garantia_dias = +f.garantia_dias || 0; await store.guardarNegocio(f); toast('Datos guardados'); });
-  if ($('#reset')) $('#reset').onclick = () => { if (confirm('¿Borrar todo lo cargado y volver a los datos de ejemplo?')) { resetDemo(); cart = { items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo' }; prodSel.clear(); toast('Datos restablecidos'); go('#/inicio'); } };
+  if ($('#reset')) $('#reset').onclick = () => { if (confirm('¿Borrar todo lo cargado y volver a los datos de ejemplo?')) { resetDemo(); cart = carritoVacio(); prodSel.clear(); toast('Datos restablecidos'); go('#/inicio'); } };
 };
 
 // =====================================================================
