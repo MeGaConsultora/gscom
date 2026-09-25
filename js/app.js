@@ -160,7 +160,7 @@ async function render() {
     toast(`Se canceló la edición de la venta #${cart.editNumero}: quedó como estaba`);
     cart = carritoVacio();
   }
-  $$('nav.tabs a').forEach(a => a.classList.toggle('active', a.dataset.r === r.name));
+  $$('nav.tabs a').forEach(a => a.classList.toggle('active', a.dataset.r === (r.name === 'inventario' ? 'productos' : r.name)));
   const fn = ROUTES[r.name] || ROUTES.inicio;
   view().innerHTML = '<div class="empty">Cargando…</div>';
   await run(() => fn(r));
@@ -495,7 +495,7 @@ ROUTES.productos = async ({ q }) => {
   const aRevisar = p => (p.descripcion || '').startsWith('⚠');
   view().innerHTML = `
   <div class="page-head"><h1>Productos y stock <span class="muted small">(${productos.length})</span></h1><div class="actions">
-    <a class="btn" href="tienda.html" target="_blank" rel="noopener">Ver tienda ↗</a>
+    <a class="btn" href="#/inventario">Carga rápida de stock</a><a class="btn" href="tienda.html" target="_blank" rel="noopener">Ver tienda ↗</a>
     <button class="btn" id="pub-sel" hidden>Publicar en tienda</button><button class="btn" id="ocu-sel" hidden>Ocultar de tienda</button>
     <button class="btn danger" id="del-sel" hidden>Eliminar seleccionados</button>
     <button class="btn" id="pedido">Armar pedido <span id="nsel2"></span></button>
@@ -700,6 +700,113 @@ async function imprimirPedidos(pedidos, proveedores) {
       </tbody></table>
     </div>`).join(''), PAGINA_A4);
 }
+
+// =====================================================================
+// CARGA RÁPIDA DE STOCK (inventario)
+// Escribís la cantidad contada y Enter: se guarda y pasa al siguiente.
+// Con lector: escaneás, carga la cantidad, Enter y vuelve al escáner.
+// =====================================================================
+ROUTES.inventario = async () => {
+  const [todos, categorias, proveedores] = await Promise.all([store.productos(), store.categorias(), store.proveedores()]);
+  const productos = todos.filter(p => !p.es_servicio);
+  const catName = id => categorias.find(c => c.id === id)?.nombre || '';
+  let texto = '', cat = '', prov = '', estado = 'sincontar', mostrar = 150, volverAlEscaner = false;
+  const contado = p => !!p.ultimo_conteo;
+
+  view().innerHTML = `
+  <div class="page-head"><div><a href="#/productos" class="small muted">← Productos</a><h1>Carga rápida de stock</h1></div>
+    <div class="actions"><button class="btn" id="reiniciar" title="Para empezar un inventario nuevo más adelante">Reiniciar marcas de conteo</button></div></div>
+  <div class="card card-pad" style="margin-bottom:1rem">
+    <div class="row small" style="align-items:center;margin-bottom:.4rem"><span id="progreso-txt"></span><span class="right muted">Los que todavía no contaste siguen como "Por encargo" en la tienda</span></div>
+    <div style="height:10px;background:#eef0f3;border-radius:5px;overflow:hidden"><div id="progreso" style="height:100%;background:var(--ok);width:0;transition:width .3s"></div></div>
+  </div>
+  <div class="card card-pad" style="margin-bottom:1rem">
+    <div class="search" style="margin-bottom:.8rem"><input class="input scan-input" id="scan" placeholder="Escaneá el código (o buscá por nombre) y cargá la cantidad" autocomplete="off"></div>
+    <div class="row" style="align-items:center">
+      <select class="input" id="cat"><option value="">Todas las categorías</option>${categorias.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select>
+      <select class="input" id="prov"><option value="">Todos los proveedores</option>${proveedores.map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select>
+      <div class="chips" id="estados" style="margin:0"></div>
+    </div>
+    <p class="small muted" style="margin-top:.6rem">Escribí la cantidad que hay y tocá <b>Enter</b>: se guarda y salta al siguiente. Un 0 también cuenta (queda marcado como contado).</p>
+  </div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Código</th><th>Producto</th><th>Categoría</th><th class="num">En sistema</th><th style="width:120px">Contado</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div style="text-align:center;margin:1rem 0"><button class="btn" id="mas" hidden>Mostrar más</button></div>`;
+
+  const lista = () => productos.filter(p => (!cat || p.categoria_id === +cat) && (!prov || p.proveedor_id === +prov)
+    && (estado === 'todos' || (estado === 'contados' ? contado(p) : !contado(p)))
+    && (!texto || mismoCodigo(p.codigo_barras, texto) || matches(texto, p.nombre, p.marca, p.codigo_barras)));
+  const pintarProgreso = () => {
+    const n = productos.filter(contado).length;
+    $('#progreso-txt').innerHTML = `<b>${n}</b> de ${productos.length} productos contados`;
+    $('#progreso').style.width = `${productos.length ? n / productos.length * 100 : 0}%`;
+    $('#estados').innerHTML = [['sincontar', 'Sin contar', productos.length - n], ['contados', 'Contados', n], ['todos', 'Todos', productos.length]]
+      .map(([k, l, c]) => `<button class="chip ${estado === k ? 'active' : ''}" data-e="${k}">${l}<span class="count">${c}</span></button>`).join('');
+    $$('#estados .chip').forEach(b => b.onclick = () => { estado = b.dataset.e; mostrar = 150; pintar(); });
+  };
+  const marca = p => contado(p) ? `<span class="pill green" title="Contado el ${fdatetime(p.ultimo_conteo)}">✓ contado</span>` : '';
+  function pintar() {
+    const l = lista();
+    $('#rows').innerHTML = l.slice(0, mostrar).map(p => `<tr data-id="${p.id}">
+      <td class="mono small">${esc(p.codigo_barras)}</td><td>${esc(p.nombre)}${p.marca ? `<div class="small muted">${esc(p.marca)}</div>` : ''}</td>
+      <td class="small muted">${esc(catName(p.categoria_id))}</td><td class="num" data-stock>${p.stock}</td>
+      <td><input class="input" type="number" min="0" step="any" inputmode="numeric" data-cant="${p.id}" placeholder="${contado(p) ? p.stock : ''}"></td>
+      <td data-marca>${marca(p)}</td></tr>`).join('') || `<tr><td colspan="6" class="empty">${estado === 'sincontar' && !texto && !cat && !prov ? '🎉 ¡Todos los productos están contados!' : 'No hay productos con ese filtro.'}</td></tr>`;
+    $('#mas').hidden = l.length <= mostrar;
+    pintarProgreso();
+    $$('[data-cant]').forEach(inp => {
+      inp.onkeydown = e => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        guardar(inp).then(() => {
+          if (volverAlEscaner) { volverAlEscaner = false; $('#scan').value = ''; $('#scan').focus(); return; }
+          const inputs = $$('[data-cant]'), i = inputs.indexOf(inp);
+          (inputs[i + 1] || inp).focus(); inputs[i + 1]?.select();
+        });
+      };
+      inp.onchange = () => guardar(inp);
+    });
+  }
+  // Guarda si hay un número cargado; devuelve una promesa (para encadenar el salto al siguiente)
+  const guardando = new Set();
+  function guardar(inp) {
+    const id = +inp.dataset.cant, v = inp.value.trim();
+    if (v === '' || guardando.has(id)) return Promise.resolve();
+    const cant = +v.replace(',', '.');
+    if (!(cant >= 0)) { toast('Cargá una cantidad válida', true); return Promise.resolve(); }
+    guardando.add(id);
+    return run(async () => {
+      await store.contarStock(id, cant);
+      const p = productos.find(x => x.id === id); p.stock = cant; p.ultimo_conteo = new Date().toISOString();
+      const tr = inp.closest('tr');
+      tr.querySelector('[data-stock]').textContent = cant; tr.querySelector('[data-marca]').innerHTML = marca(p);
+      inp.value = ''; inp.placeholder = cant; tr.style.background = 'var(--ok-soft)';
+      pintarProgreso();
+    }).finally(() => guardando.delete(id));
+  }
+
+  const scan = $('#scan'); let t;
+  scan.oninput = () => { clearTimeout(t); t = setTimeout(() => { texto = scan.value.trim(); mostrar = 150; pintar(); }, 200); };
+  scan.onkeydown = e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault(); clearTimeout(t);
+    const q = scan.value.trim(); if (!q) return;
+    const p = productos.find(x => mismoCodigo(x.codigo_barras, q));
+    if (!p) { texto = q; pintar(); const primero = $('[data-cant]'); if (primero) { primero.focus(); } else toast('No se encontró ese código', true); return; }
+    // producto escaneado: mostrarlo aunque esté fuera del filtro, e ir a su cantidad
+    texto = q; if (!lista().includes(p)) { cat = ''; prov = ''; estado = 'todos'; $('#cat').value = ''; $('#prov').value = ''; }
+    pintar();
+    const inp = $(`[data-cant="${p.id}"]`); volverAlEscaner = true; inp.focus(); inp.select();
+  };
+  $('#cat').onchange = e => { cat = e.target.value; mostrar = 150; pintar(); };
+  $('#prov').onchange = e => { prov = e.target.value; mostrar = 150; pintar(); };
+  $('#mas').onclick = () => { mostrar += 150; pintar(); };
+  $('#reiniciar').onclick = () => run(async () => {
+    if (!confirm('¿Reiniciar las marcas de "contado" de todos los productos?\n\nEl stock NO cambia: solo se usa para empezar un inventario nuevo.')) return;
+    await store.reiniciarConteo(); toast('Marcas reiniciadas'); render();
+  });
+  pintar();
+  scan.focus();
+};
 
 // =====================================================================
 // CLIENTES

@@ -105,6 +105,13 @@ export const store = {
     save(); return 'baja';
   },
   async ajustarStock(productoId, cantidad, nota) { movStock(productoId, cantidad, 'ajuste', { nota }); save(); },
+  async contarStock(productoId, cantidad) {
+    if (!(+cantidad >= 0)) throw new Error('La cantidad contada no puede ser negativa');
+    const p = byId('productos', productoId), antes = p.stock;
+    if (+cantidad !== antes) movStock(p.id, +cantidad - antes, 'ajuste', { nota: `Conteo de inventario (había ${antes}, se contaron ${+cantidad})` });
+    p.ultimo_conteo = now(); save(); return +cantidad;
+  },
+  async reiniciarConteo() { db.productos.forEach(p => p.ultimo_conteo = null); save(); },
   async movimientosStock(productoId) { return clone(db.stock_movimientos.filter(m => m.producto_id === +productoId).reverse()); },
 
   // Clientes y equipos
