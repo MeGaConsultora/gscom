@@ -123,8 +123,8 @@ function waLink(telefono, texto) {
 // Router
 // =====================================================================
 const NAV = [
-  ['inicio', 'Inicio'], ['vender', 'Vender'], ['service', 'Service'], ['productos', 'Productos'],
-  ['clientes', 'Clientes'], ['fichero', 'Fichero'], ['caja', 'Caja'], ['compras', 'Compras'], ['pedidos', 'Pedidos'], ['proveedores', 'Proveedores'],
+  ['inicio', 'Inicio'], ['vender', 'Vender'], ['service', 'Service'], ['productos', 'Productos'], ['pedidos', 'Pedidos'],
+  ['clientes', 'Clientes'], ['fichero', 'Fichero'], ['caja', 'Caja'], ['compras', 'Compras'], ['proveedores', 'Proveedores'],
   ['reportes', 'Reportes'], ['ajustes', 'Ajustes'],
 ];
 const ROUTES = {};
