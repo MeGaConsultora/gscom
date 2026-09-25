@@ -203,7 +203,7 @@ dl.kv dt { color: var(--muted); }
 .ticket .c { text-align: center; }
 .ticket hr { border: 0; border-top: 1px dashed #000; margin: 1.5mm 0; }
 .ticket table { width: 100%; border-collapse: collapse; font-size: 7.5pt; }
-.ticket td { padding: .3mm 0; vertical-align: top; }
+.ticket td { padding: .3mm 0; vertical-align: top; word-break: break-word; overflow-wrap: break-word; }
 .ticket .big { font-size: 10pt; font-weight: 700; }
 
 /* Comprobante de service: 2 × A6 lado a lado en la mitad superior de una A4 */

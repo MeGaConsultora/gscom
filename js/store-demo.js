@@ -95,7 +95,7 @@ export const store = {
   async guardarCliente(c) {
     c = { ...c, nombre: nombreCliente(c) };  // igual que el trigger armar_nombre_cliente de la base
     if (c.id) { Object.assign(byId('clientes', c.id), c); save(); return clone(byId('clientes', c.id)); }
-    const r = insert('clientes', { apellido: '', nombres: '', dni_cuit: '', telefono: '', email: '', direccion: '', notas: '', condicion_iva: 'Consumidor Final', created_at: now(), ...c });
+    const r = insert('clientes', { apellido: '', nombres: '', dni_cuit: '', telefono: '', email: '', direccion: '', notas: '', condicion_iva: 'Consumidor Final', cuenta_corriente: false, created_at: now(), ...c });
     save(); return clone(r);
   },
   async equipos(clienteId) { return clone(db.equipos.filter(e => e.cliente_id === +clienteId)); },
@@ -196,6 +196,10 @@ export const store = {
       s.saldo += m.monto;
       if (m.tipo === 'cargo' && !m.anulado && (!s.deuda_desde || m.fecha < s.deuda_desde)) s.deuda_desde = m.fecha;
       if (!s.ultimo_movimiento || m.fecha > s.ultimo_movimiento) s.ultimo_movimiento = m.fecha;
+    });
+    // Clientes marcados "de cuenta corriente" sin movimientos todavía: aparecen igual, con saldo $0
+    db.clientes.filter(c => c.cuenta_corriente && !por[c.id]).forEach(c => {
+      por[c.id] = { cliente_id: c.id, nombre: c.nombre, telefono: c.telefono, saldo: 0, deuda_desde: null, ultimo_movimiento: null };
     });
     return clone(Object.values(por).sort((a, b) => b.saldo - a.saldo));
   },

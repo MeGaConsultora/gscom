@@ -632,6 +632,7 @@ function clienteModal(c, onSaved) {
     <div class="row"><div class="field"><label>Email</label><input class="input" name="email" type="email" value="${esc(v.email)}"></div>
       <div class="field"><label>Dirección</label><input class="input" name="direccion" value="${esc(v.direccion)}"></div></div>
     <div class="field"><label>Condición IVA</label><select class="input" name="condicion_iva">${CONDICIONES_IVA.map(o => `<option ${o === (v.condicion_iva || CONDICIONES_IVA[0]) ? 'selected' : ''}>${o}</option>`).join('')}</select></div>
+    <label class="small" style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem"><input type="checkbox" name="cuenta_corriente" ${v.cuenta_corriente ? 'checked' : ''}> Cliente de cuenta corriente (aparece en el Fichero aunque su saldo esté en $0)</label>
     <div class="field"><label>Notas internas</label><textarea class="input" name="notas">${esc(v.notas)}</textarea></div>`,
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
   $('#ok', m.el).onclick = () => run(async () => {
@@ -692,6 +693,7 @@ async function fichaCliente(id) {
         <dl class="kv"><dt>Teléfono</dt><dd>${esc(c.telefono) || '—'} ${c.telefono ? `<a class="small" target="_blank" rel="noopener" href="${waLink(c.telefono, `Hola ${primerNombre(c)}, te escribimos de GScom.`)}">WhatsApp</a>` : ''}</dd>
         <dt>DNI / CUIT</dt><dd>${esc(c.dni_cuit) || '—'}</dd><dt>Email</dt><dd>${esc(c.email) || '—'}</dd><dt>Dirección</dt><dd>${esc(c.direccion) || '—'}</dd>
         <dt>Condición IVA</dt><dd>${esc(c.condicion_iva) || CONDICIONES_IVA[0]}</dd>
+        ${c.cuenta_corriente ? `<dt>Cuenta corriente</dt><dd><a class="small" href="#/fichero/${c.id}">Sí · ver cuenta</a></dd>` : ''}
         <dt>Cliente desde</dt><dd>${fdate(c.created_at)}</dd></dl>
         ${c.notas ? `<div class="small" style="margin-top:.8rem;background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px">📝 ${esc(c.notas)}</div>` : ''}</div>
       <div class="card card-pad"><h2>Equipos <button class="btn sm" id="add-eq">+ Agregar</button></h2>
@@ -1140,6 +1142,7 @@ ROUTES.fichero = async ({ id }) => {
   const deudores = saldos.filter(s => s.saldo > 0.009);
   const total = deudores.reduce((s, d) => s + +d.saldo, 0);
   const aFavor = saldos.filter(s => s.saldo < -0.009);
+  const alDia = saldos.filter(s => Math.abs(s.saldo) <= 0.009).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
   view().innerHTML = `
   <div class="page-head"><h1>Fichero</h1><div class="actions"><button class="btn primary" id="cargar">+ Cargar deuda manual</button></div></div>
   <div class="grid grid-3" style="margin-bottom:1rem">
@@ -1149,14 +1152,14 @@ ROUTES.fichero = async ({ id }) => {
   </div>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar cliente"></div></div>
   <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Cliente</th><th>Teléfono</th><th>Debe desde</th><th>Último movimiento</th><th class="num">Saldo</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
-  <p class="small muted" style="margin-top:.8rem">Las ventas y los services entregados con forma de pago "Cuenta corriente" se cargan acá automáticamente.</p>`;
+  <p class="small muted" style="margin-top:.8rem">Incluye a quienes deben, tienen saldo a favor, o están marcados como "Cliente de cuenta corriente" aunque estén al día. Las ventas y los services entregados con forma de pago "Cuenta corriente" se cargan acá automáticamente.</p>`;
   const paint = t => {
-    const l = [...deudores, ...aFavor].filter(d => matches(t, d.nombre, d.telefono));
+    const l = [...deudores, ...aFavor, ...alDia].filter(d => matches(t, d.nombre, d.telefono));
     $('#rows').innerHTML = l.map(d => `<tr class="click" data-href="#/fichero/${d.cliente_id}"><td><b>${esc(d.nombre)}</b></td><td>${esc(d.telefono)}</td>
-      <td>${d.saldo > 0 ? `${fdate(d.deuda_desde)} <span class="small muted">(${daysSince(d.deuda_desde)} d)</span>` : '—'}</td><td>${fdate(d.ultimo_movimiento)}</td>
-      <td class="num"><b style="color:${d.saldo > 0 ? 'var(--bad)' : 'var(--ok)'}">${money(d.saldo)}</b></td>
-      <td class="right">${d.saldo > 0 ? `<button class="btn sm ok" data-cobrar="${d.cliente_id}">Cobrar</button>` : ''}</td></tr>`).join('')
-      || `<tr><td colspan="6" class="empty">${t ? 'Sin resultados.' : 'Nadie debe nada 🎉'}</td></tr>`;
+      <td>${d.saldo > 0.009 ? `${fdate(d.deuda_desde)} <span class="small muted">(${daysSince(d.deuda_desde)} d)</span>` : '—'}</td><td>${fdate(d.ultimo_movimiento)}</td>
+      <td class="num"><b style="color:${d.saldo > 0.009 ? 'var(--bad)' : d.saldo < -0.009 ? 'var(--ok)' : 'inherit'}">${money(d.saldo)}</b></td>
+      <td class="right">${d.saldo > 0.009 ? `<button class="btn sm ok" data-cobrar="${d.cliente_id}">Cobrar</button>` : ''}</td></tr>`).join('')
+      || `<tr><td colspan="6" class="empty">${t ? 'Sin resultados.' : 'Sin clientes de cuenta corriente todavía.'}</td></tr>`;
     bindRowLinks();
     $$('[data-cobrar]').forEach(b => b.onclick = e => { e.stopPropagation(); const d = deudores.find(x => x.cliente_id === +b.dataset.cobrar); run(() => cobrarModal(d.cliente_id, d.nombre, +d.saldo, render)); });
   };
@@ -1169,7 +1172,10 @@ async function cuentaCliente(clienteId) {
   const [c, movs, imps] = await Promise.all([store.cliente(clienteId), store.ccMovimientos(clienteId), store.ccImputaciones(clienteId).catch(() => [])]);
   if (!c) { view().innerHTML = '<div class="empty">Cliente no encontrado</div>'; return; }
   const saldo = movs.reduce((s, m) => s + +m.monto, 0);
-  const pendientes = deudaPorConcepto(movs, imps).grupos.filter(g => g.pendiente > 0.009);
+  const { grupos } = deudaPorConcepto(movs, imps);
+  const pendientes = grupos.filter(g => g.pendiente > 0.009);
+  // Total compras: total neto por venta/orden/cargo (ya corregido si se editó), no la suma bruta de todos los "cargo" cargados alguna vez
+  const totalCompras = grupos.reduce((s, g) => s + g.total, 0);
   // saldo acumulado línea por línea (de la más vieja a la más nueva)
   let acum = 0;
   const conSaldo = movs.slice().reverse().map(m => ({ ...m, acum: (acum += +m.monto) })).reverse();
@@ -1179,9 +1185,9 @@ async function cuentaCliente(clienteId) {
     <div class="actions"><a class="btn" href="#/clientes/${c.id}">Ficha del cliente</a><button class="btn" id="cargo">+ Cargar deuda</button>
       <button class="btn ok" id="cobrar" ${saldo > 0 ? '' : 'disabled'}>Cobrar</button></div></div>
   <div class="grid grid-3" style="margin-bottom:1rem">
-    <div class="card kpi"><div class="label">Saldo</div><div class="value" style="color:${saldo > 0 ? 'var(--bad)' : 'var(--ok)'}">${money(saldo)}</div><div class="sub">${saldo > 0 ? 'adeuda' : saldo < 0 ? 'a favor del cliente' : 'al día'}</div></div>
-    <div class="card kpi"><div class="label">Total cargado</div><div class="value">${money(movs.filter(m => m.tipo === 'cargo').reduce((s, m) => s + +m.monto, 0))}</div></div>
+    <div class="card kpi"><div class="label">Total compras</div><div class="value">${money(totalCompras)}</div></div>
     <div class="card kpi"><div class="label">Total pagado</div><div class="value">${money(-movs.filter(m => m.tipo === 'pago' && !m.anulado).reduce((s, m) => s + +m.monto, 0))}</div></div>
+    <div class="card kpi"><div class="label">Saldo</div><div class="value" style="color:${saldo > 0 ? 'var(--bad)' : 'var(--ok)'}">${money(saldo)}</div><div class="sub">${saldo > 0 ? 'adeuda' : saldo < 0 ? 'a favor del cliente' : 'al día'}</div></div>
   </div>
   ${pendientes.length ? `<div class="card card-pad" style="margin-bottom:1rem"><h2>Qué debe</h2>
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Concepto</th><th>Observaciones</th><th class="num">Total</th><th class="num">Pagado</th><th class="num">Pendiente</th><th></th></tr></thead><tbody>
