@@ -280,7 +280,7 @@ ROUTES.vender = async ({ q }) => {
       <div class="field"><label>Cliente</label>
         <div class="row" style="gap:.4rem"><select class="input" id="cliente"><option value="">Consumidor final</option>
           ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.dni_cuit ? ' — ' + esc(c.dni_cuit) : ''}</option>`).join('')}</select>
-          <button class="btn" id="nuevo-cli" style="flex:0" title="Nuevo cliente">+</button></div></div>
+          <button class="btn" id="nuevo-cli" style="flex:0 0 auto" title="Nuevo cliente">+</button></div></div>
       <div class="field"><label>Forma de pago</label><div class="pay-opts" id="pagos">
         ${FORMAS_COBRO.map(f => `<button class="chip" data-f="${f}">${f}</button>`).join('')}</div></div>
       <div class="field"><label>Descuento ($)</label><input class="input" id="desc" type="number" min="0" step="any" value="${cart.descuento || ''}" placeholder="0"></div>
@@ -530,10 +530,12 @@ async function productoModal(id, opts = {}) {
     <div class="row">${id || opts.sinStock ? '' : `<div class="field"><label>Stock inicial</label><input class="input" name="stock" type="number" step="any" value="${v.stock}"></div>`}
       <div class="field"><label>Stock mínimo (alerta)</label><input class="input" name="stock_minimo" type="number" step="any" min="0" value="${v.stock_minimo}"></div></div>
     <label class="small" style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem"><input type="checkbox" name="es_servicio" ${v.es_servicio ? 'checked' : ''}> Es un servicio / mano de obra (no maneja stock)</label>
-    ${id && !v.es_servicio ? `<div class="card card-pad" style="background:#fafbfc"><h2 style="margin-bottom:.5rem">Stock actual: ${v.stock}</h2>
-      <div class="row" style="align-items:flex-end"><div class="field"><label>Ajuste (+ entra / − sale)</label><input class="input" id="aj-cant" type="number" step="any" placeholder="ej: -1"></div>
+    ${id && !v.es_servicio ? `<div class="card card-pad" style="background:#fafbfc"><h2 style="margin-bottom:.5rem">Stock</h2>
+      <div class="field" style="max-width:160px"><label>Cantidad actual</label><input class="input" id="stock-actual" type="number" step="any" value="${v.stock}"></div>
+      <p class="small muted" style="margin:.2rem 0 1rem">Corregila acá directamente (ej: después de un conteo físico) — se guarda al tocar "Guardar" y queda como un ajuste en el historial.</p>
+      <div class="row" style="align-items:flex-end"><div class="field"><label>Ajuste rápido (+ entra / − sale)</label><input class="input" id="aj-cant" type="number" step="any" placeholder="ej: -1"></div>
       <div class="field"><label>Motivo</label><input class="input" id="aj-nota" placeholder="ej: rotura, conteo, devolución"></div>
-      <div class="field" style="flex:0"><button class="btn" id="aj-ok">Ajustar</button></div></div>
+      <div class="field" style="flex:0 0 auto"><button class="btn" id="aj-ok">Ajustar</button></div></div>
       <details><summary class="small muted" style="cursor:pointer">Ver movimientos (${movs.length})</summary>
       <table class="tbl small" style="margin-top:.5rem"><tbody>${movs.slice(0, 30).map(mv => `<tr><td>${fdatetime(mv.created_at)}</td><td>${esc(mv.tipo)}</td><td class="muted">${esc(mv.nota || '')}</td><td class="num"><b style="color:${mv.cantidad < 0 ? 'var(--bad)' : 'var(--ok)'}">${mv.cantidad > 0 ? '+' : ''}${mv.cantidad}</b></td></tr>`).join('')}</tbody></table></details></div>` : ''}`,
     `${id ? '<button class="btn danger" id="del" style="margin-right:auto">Eliminar</button><button class="btn" id="etq">Imprimir etiqueta</button>' : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
@@ -560,6 +562,11 @@ async function productoModal(id, opts = {}) {
     data.codigo_barras = f.codigo_barras;
     if (!id) data.stock = +f.stock || 0;
     const r = await store.guardarProducto(data);
+    const stockInput = $('#stock-actual', m.el);
+    if (stockInput) {
+      const diff = +stockInput.value - +v.stock;
+      if (diff) await store.ajustarStock(id, diff, 'Corrección de stock');
+    }
     m.close(); toast(id ? 'Producto actualizado' : `Producto creado · código ${r.codigo_barras}`);
     opts.onSaved ? opts.onSaved(r) : render();
   });
