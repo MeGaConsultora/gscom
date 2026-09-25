@@ -71,7 +71,8 @@ function modal(title, body, foot = '', { wide = false } = {}) {
     <div class="modal-body">${body}</div>${foot ? `<div class="modal-foot">${foot}</div>` : ''}</div>`;
   const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); };
   const onKey = e => { if (e.key === 'Escape') close(); };
-  bg.addEventListener('mousedown', e => { if (e.target === bg) close(); });
+  // Clic afuera cierra; pero no si el clic fue en la barra de desplazamiento (antes se perdía lo cargado)
+  bg.addEventListener('mousedown', e => { if (e.target === bg && e.clientX < bg.clientWidth) close(); });
   bg.addEventListener('click', e => { if (e.target.closest('[data-close]')) close(); });
   document.addEventListener('keydown', onKey);
   document.body.appendChild(bg);
@@ -119,7 +120,7 @@ function waLink(telefono, texto) {
 // =====================================================================
 const NAV = [
   ['inicio', 'Inicio'], ['vender', 'Vender'], ['service', 'Service'], ['productos', 'Productos'],
-  ['clientes', 'Clientes'], ['fichero', 'Fichero'], ['caja', 'Caja'], ['compras', 'Compras'], ['proveedores', 'Proveedores'],
+  ['clientes', 'Clientes'], ['fichero', 'Fichero'], ['caja', 'Caja'], ['compras', 'Compras'], ['pedidos', 'Pedidos'], ['proveedores', 'Proveedores'],
   ['reportes', 'Reportes'], ['ajustes', 'Ajustes'],
 ];
 const ROUTES = {};
@@ -506,7 +507,7 @@ ROUTES.productos = async ({ q }) => {
   $('#all').onchange = e => { lista().forEach(p => e.target.checked ? prodSel.add(p.id) : prodSel.delete(p.id)); paint(); };
   $('#nuevo').onclick = () => productoModal(null);
   $('#etiquetas').onclick = () => etiquetasModal([...prodSel]);
-  $('#pedido').onclick = () => run(() => pedidoModal(prodSel.size ? [...prodSel] : lista().filter(p => !p.es_servicio && p.stock <= p.stock_minimo).map(p => p.id)));
+  $('#pedido').onclick = () => armarPedido(prodSel.size ? [...prodSel] : lista().filter(p => !p.es_servicio && p.stock <= p.stock_minimo).map(p => p.id), productos);
   paint();
   $('#buscar').focus();
 };
@@ -604,44 +605,36 @@ async function etiquetasModal(ids) {
   $('#print', m.el).onclick = () => { printHTML(`<div class="label-grid">${html(false)}</div>`); };
 }
 
-// Pedido de mercadería: agrupa lo seleccionado por proveedor habitual, con la
-// cantidad sugerida para llegar al stock mínimo (editable antes de imprimir).
-async function pedidoModal(ids) {
-  const [productos, proveedores, n] = await Promise.all([store.productos(), store.proveedores(), store.negocio()]);
+// Pedido de mercadería: se arma en su propia pantalla (Pedidos → nuevo).
+// Borrador en memoria: sobrevive si se cambia de pestaña a mitad del armado.
+let pedidoDraft = null;
+function armarPedido(ids, productos) {
   const items = productos.filter(p => ids.includes(p.id) && !p.es_servicio);
   if (!items.length) return toast('Marcá productos (casillas de la izquierda) o filtrá por "Stock bajo" antes de armar el pedido', true);
-  const provName = id => proveedores.find(x => x.id === id)?.nombre || 'Sin proveedor asignado';
-  const grupos = {};
-  items.forEach(p => { (grupos[p.proveedor_id || 0] ??= []).push(p); });
-  const claves = Object.keys(grupos).sort((a, b) => provName(+a || null).localeCompare(provName(+b || null)));
+  pedidoDraft ??= { notas: '', items: [] };
+  items.forEach(p => {
+    if (pedidoDraft.items.some(i => i.producto_id === p.id)) return;
+    pedidoDraft.items.push({ producto_id: p.id, descripcion: p.nombre, marca: p.marca || '', codigo: p.codigo_barras || '', stock: p.stock, stock_minimo: p.stock_minimo,
+      proveedor_id: p.proveedor_id ? String(p.proveedor_id) : '', habitual: p.proveedor_id ? String(p.proveedor_id) : '', cantidad: Math.max(p.stock_minimo - p.stock, 1) });
+  });
+  prodSel.clear();
+  go('#/pedidos/nuevo');
+}
 
-  const m = modal('Armar pedido de mercadería', `
-    <p class="small muted" style="margin-bottom:.8rem">Cantidad sugerida: lo que falta para llegar al stock mínimo. Ajustá lo que haga falta antes de imprimir — se imprime una hoja por proveedor.</p>
-    ${claves.map(k => `<h2 style="font-size:.9rem;margin:1rem 0 .4rem">${esc(provName(+k || null))} <span class="muted small">(${grupos[k].length})</span></h2>
-      <table class="tbl small"><tbody>${grupos[k].map(p => `<tr><td>${esc(p.nombre)}${p.marca ? `<div class="small muted">${esc(p.marca)}</div>` : ''}</td>
-        <td class="num muted">Stock ${p.stock}</td><td class="num muted">Mín. ${p.stock_minimo}</td>
-        <td style="width:90px"><input class="input" type="number" min="0" step="any" value="${Math.max(p.stock_minimo - p.stock, 0)}" data-n="${p.id}"></td></tr>`).join('')}</tbody></table>`).join('')}`,
-    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="print">Imprimir pedido</button>`, { wide: true });
-
-  $('#print', m.el).onclick = () => {
-    const hojas = claves.map(k => ({
-      nombre: provName(+k || null),
-      filas: grupos[k].map(p => ({ p, cant: +$(`[data-n="${p.id}"]`, m.el).value || 0 })).filter(x => x.cant > 0),
-    })).filter(g => g.filas.length);
-    if (!hojas.length) return toast('Cargá alguna cantidad a pedir', true);
-    const fecha = fdate(new Date().toISOString());
-    const html = hojas.map((g, i) => `
-      <div class="hoja-pedido" ${i < hojas.length - 1 ? 'style="page-break-after:always"' : ''}>
-        <div class="ped-head"><b>${esc(n.nombre)}</b><br>${esc(n.direccion)}${n.telefono ? ` · ${esc(n.telefono)}` : ''}</div>
-        <h1>Pedido de mercadería</h1>
-        <div class="ped-sub">Proveedor: <b>${esc(g.nombre)}</b> · ${fecha}</div>
-        <table class="ped-tbl"><thead><tr><th>Código</th><th>Producto</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Pedir</th></tr></thead><tbody>
-        ${g.filas.map(({ p, cant }) => `<tr><td class="mono">${esc(p.codigo_barras)}</td><td>${esc(p.nombre)}${p.marca ? ` · ${esc(p.marca)}` : ''}</td>
-          <td class="num">${p.stock}</td><td class="num">${p.stock_minimo}</td><td class="num"><b>${cant}</b></td></tr>`).join('')}
-        </tbody></table>
-      </div>`).join('');
-    printHTML(html, PAGINA_A4);
-  };
+// Hoja(s) A4 para imprimir: una por proveedor
+async function imprimirPedidos(pedidos, proveedores) {
+  const n = await store.negocio();
+  const provName = id => proveedores.find(x => x.id === +id)?.nombre || 'Sin proveedor asignado';
+  printHTML(pedidos.map((p, i) => `
+    <div class="hoja-pedido" ${i < pedidos.length - 1 ? 'style="page-break-after:always"' : ''}>
+      <div class="ped-head"><b>${esc(n.nombre)}</b><br>${esc(n.direccion)}${n.telefono ? ` · ${esc(n.telefono)}` : ''}</div>
+      <h1>Pedido de mercadería${p.numero ? ` N° ${p.numero}` : ''}</h1>
+      <div class="ped-sub">Proveedor: <b>${esc(provName(p.proveedor_id))}</b> · ${fdate(p.fecha || new Date().toISOString())}</div>
+      ${p.notas ? `<div class="ped-sub">Notas: ${esc(p.notas)}</div>` : ''}
+      <table class="ped-tbl"><thead><tr><th>Código</th><th>Producto</th><th class="num">Cantidad</th></tr></thead><tbody>
+      ${p.items.map(i => `<tr><td class="mono">${esc(i.codigo)}</td><td>${esc(i.descripcion)}</td><td class="num"><b>${+i.cantidad}</b></td></tr>`).join('')}
+      </tbody></table>
+    </div>`).join(''), PAGINA_A4);
 }
 
 // =====================================================================
@@ -1679,11 +1672,187 @@ async function nuevaCompra() {
       for (const i of d.items.filter(i => i.precio_venta !== i.precio_venta_orig)) await store.guardarProducto({ id: i.producto_id, precio_venta: i.precio_venta });
     } finally { btn.disabled = false; }
     const n = d.items.length; compraDraft = null;
-    toast(d.editId ? 'Compra actualizada · stock corregido' : `Compra registrada · ${n} producto(s) con stock actualizado`); go('#/compras');
+    toast(d.editId ? 'Compra actualizada · stock corregido' : `Compra registrada · ${n} producto(s) con stock actualizado`);
+    // Si la compra salió de un pedido, ofrecer cerrarlo
+    if (d.pedido_id && confirm(`¿Marcar el pedido N° ${d.pedido_numero} como recibido?`)) {
+      await store.actualizarPedido(d.pedido_id, { estado: 'recibido', fecha_recibido: new Date().toISOString() });
+      toast(`Pedido N° ${d.pedido_numero} recibido`);
+    }
+    go('#/compras');
   });
 
   paint();
   b.focus();
+}
+
+// =====================================================================
+// PEDIDOS DE MERCADERÍA (no tocan stock)
+// =====================================================================
+const ESTADO_PEDIDO = { pendiente: ['Pendiente', 'amber'], recibido: ['Recibido', 'green'], cancelado: ['Cancelado', 'gray'] };
+const pillPedido = e => `<span class="pill ${ESTADO_PEDIDO[e][1]}">${ESTADO_PEDIDO[e][0]}</span>`;
+
+ROUTES.pedidos = async ({ id, q }) => {
+  if (id === 'nuevo') return nuevoPedido();
+  if (id) return detallePedido(+id);
+  const [pedidos, proveedores] = await Promise.all([store.pedidos(), store.proveedores()]);
+  const provName = id => proveedores.find(x => x.id === id)?.nombre || 'Sin proveedor';
+  let filtro = q.get('estado') || 'pendiente';
+  const cuenta = e => pedidos.filter(p => e === 'todos' || p.estado === e).length;
+  view().innerHTML = `
+  <div class="page-head"><h1>Pedidos a proveedores</h1><div class="actions">
+    ${pedidoDraft?.items.length ? `<a class="btn primary" href="#/pedidos/nuevo">Continuar armado (${pedidoDraft.items.length})</a>` : '<a class="btn primary" href="#/productos?bajo=1">Armar pedido desde Productos</a>'}</div></div>
+  <p class="small muted" style="margin:-.6rem 0 1rem">Los pedidos no mueven stock: cuando llega la mercadería se ingresa en Compras → Ingresar mercadería (desde el pedido podés precargarla).</p>
+  <div class="chips" id="chips"></div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Fecha</th><th>Proveedor</th><th>Productos</th><th>Estado</th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  const paint = () => {
+    $('#chips').innerHTML = ['pendiente', 'recibido', 'cancelado', 'todos'].map(e => `<button class="chip ${filtro === e ? 'active' : ''}" data-e="${e}">${e === 'todos' ? 'Todos' : ESTADO_PEDIDO[e][0]}<span class="count">${cuenta(e)}</span></button>`).join('');
+    $$('#chips .chip').forEach(c => c.onclick = () => { filtro = c.dataset.e; paint(); });
+    $('#rows').innerHTML = pedidos.filter(p => filtro === 'todos' || p.estado === filtro).map(p => `<tr class="click" data-href="#/pedidos/${p.id}">
+      <td class="mono"><b>${p.numero}</b></td><td class="nowrap">${fdate(p.fecha)}</td><td>${esc(provName(p.proveedor_id))}</td>
+      <td class="small">${p.items.length} producto(s) · ${p.items.slice(0, 3).map(i => esc(i.descripcion)).join(', ')}${p.items.length > 3 ? '…' : ''}</td>
+      <td>${pillPedido(p.estado)}${p.estado === 'recibido' && p.fecha_recibido ? ` <span class="small muted">${fdate(p.fecha_recibido)}</span>` : ''}</td></tr>`).join('')
+      || '<tr><td colspan="5" class="empty">No hay pedidos en este estado.</td></tr>';
+    bindRowLinks();
+  };
+  paint();
+};
+
+async function nuevoPedido() {
+  if (!pedidoDraft?.items.length) { go('#/pedidos'); return toast('Marcá productos en Productos y tocá "Armar pedido"', true); }
+  const [proveedores, productos, cats] = await Promise.all([store.proveedores(), store.productos(), store.categorias()]);
+  const d = pedidoDraft;
+  const provName = id => proveedores.find(x => x.id === +id)?.nombre || 'Sin proveedor asignado';
+  const opciones = sel => `<option value="">— Sin proveedor —</option>${proveedores.map(p => `<option value="${p.id}" ${String(p.id) === sel ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}`;
+
+  view().innerHTML = `
+  <div class="page-head"><div><a href="#/pedidos" class="small muted">← Pedidos</a><h1>Armar pedido de mercadería</h1></div>
+    <div class="actions"><button class="btn danger" id="descartar">Descartar</button></div></div>
+  <p class="small muted" style="margin:-.6rem 0 1rem">Cantidad sugerida: lo que falta para llegar al stock mínimo. El proveedor viene del habitual de cada producto, pero lo podés cambiar: se arma un pedido por proveedor.</p>
+  <div class="card card-pad" style="margin-bottom:1rem">
+    <div class="search" style="position:relative"><input class="input" id="b" placeholder="Agregar otro producto al pedido (buscar o escanear)" autocomplete="off"><div class="suggest" id="s" hidden></div></div>
+  </div>
+  <div id="grupos"></div>
+  <div class="card card-pad" style="margin-top:1rem">
+    <div class="field"><label>Notas para el proveedor (opcional, salen impresas)</label><input class="input" id="notas" value="${esc(d.notas)}" placeholder="ej: entregar antes del viernes"></div>
+    <button class="btn ok lg block" id="guardar">Guardar pedido(s)</button>
+  </div>`;
+
+  function paint() {
+    const grupos = {};
+    d.items.forEach((it, k) => (grupos[it.proveedor_id || ''] ??= []).push([it, k]));
+    const claves = Object.keys(grupos).sort((a, b) => provName(a).localeCompare(provName(b)));
+    $('#grupos').innerHTML = claves.map(pk => `<div class="card card-pad" style="margin-bottom:1rem">
+      <h2>${esc(provName(pk))} <span class="muted small">(${grupos[pk].length} producto(s))</span></h2>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Producto</th><th class="num">Stock</th><th class="num">Mín.</th><th style="width:220px">Proveedor</th><th style="width:100px">Cantidad</th><th></th></tr></thead><tbody>
+      ${grupos[pk].map(([it, k]) => `<tr><td>${esc(it.descripcion)}<div class="small muted">${[it.marca, it.codigo].filter(Boolean).map(esc).join(' · ')}</div></td>
+        <td class="num">${it.stock}</td><td class="num muted">${it.stock_minimo}</td>
+        <td><select class="input" data-prov="${k}">${opciones(it.proveedor_id)}</select>
+          ${it.proveedor_id !== it.habitual ? `<div class="small muted">habitual: ${esc(provName(it.habitual))}</div>` : ''}</td>
+        <td><input class="input" type="number" min="0" step="any" value="${it.cantidad}" data-cant="${k}"></td>
+        <td><button class="x" data-del="${k}" title="Quitar">×</button></td></tr>`).join('')}
+      </tbody></table></div></div>`).join('') || '<div class="card card-pad empty">No quedan productos en el pedido.</div>';
+    $$('[data-prov]').forEach(s => s.onchange = () => { d.items[+s.dataset.prov].proveedor_id = s.value; paint(); });
+    $$('[data-cant]').forEach(inp => inp.onchange = () => { d.items[+inp.dataset.cant].cantidad = Math.max(0, +inp.value || 0); });
+    $$('[data-del]').forEach(bt => bt.onclick = () => { d.items.splice(+bt.dataset.del, 1); paint(); });
+  }
+  paint();
+
+  // agregar productos sueltos
+  const b = $('#b'), s = $('#s');
+  const addP = p => {
+    if (!d.items.some(i => i.producto_id === p.id)) d.items.push({ producto_id: p.id, descripcion: p.nombre, marca: p.marca || '', codigo: p.codigo_barras || '', stock: p.stock,
+      stock_minimo: p.stock_minimo, proveedor_id: p.proveedor_id ? String(p.proveedor_id) : '', habitual: p.proveedor_id ? String(p.proveedor_id) : '', cantidad: Math.max(p.stock_minimo - p.stock, 1) });
+    b.value = ''; s.hidden = true; paint(); b.focus();
+  };
+  b.oninput = () => {
+    const t = b.value.trim(); if (!t) { s.hidden = true; return; }
+    const r = buscarProductos(productos, cats, t, p => !p.es_servicio);
+    s.hidden = false;
+    s.innerHTML = (r.map(p => `<div data-id="${p.id}">${prodSugHTML(p, cats, { costo: true })}</div>`).join('') || '<div class="muted">Sin resultados</div>') + masResultados(r);
+    $$('[data-id]', s).forEach(x => x.onmousedown = e => { e.preventDefault(); addP(productos.find(p => p.id === +x.dataset.id)); });
+  };
+  b.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); const p = productos.find(x => mismoCodigo(x.codigo_barras, b.value.trim())); if (p) addP(p); } };
+  b.onblur = () => setTimeout(() => s.hidden = true, 150);
+  $('#notas').oninput = e => d.notas = e.target.value;
+
+  $('#descartar').onclick = () => { if (!confirm('¿Descartar este pedido sin guardarlo?')) return; pedidoDraft = null; go('#/pedidos'); };
+  $('#guardar').onclick = () => run(async () => {
+    const grupos = {};
+    d.items.filter(i => +i.cantidad > 0).forEach(i => (grupos[i.proveedor_id || ''] ??= []).push(i));
+    const claves = Object.keys(grupos);
+    if (!claves.length) return toast('Cargá alguna cantidad a pedir', true);
+    const btn = $('#guardar'); btn.disabled = true;
+    const creados = [];
+    try {
+      for (const pk of claves) {
+        const items = grupos[pk].map(({ producto_id, descripcion, codigo, cantidad }) => ({ producto_id, descripcion, codigo, cantidad: +cantidad }));
+        creados.push(await store.crearPedido({ proveedor_id: pk ? +pk : null, items, notas: d.notas.trim() }));
+      }
+    } finally { btn.disabled = false; }
+    pedidoDraft = null;
+    const pedidos = await Promise.all(creados.map(id => store.pedido(id)));
+    // ir a la lista sin disparar "hashchange" (que cerraría el cartel de abajo)
+    history.replaceState(null, '', '#/pedidos'); await render();
+    const m = modal(`${pedidos.length} pedido(s) guardado(s)`, `<p>${pedidos.map(p => `N° <b>${p.numero}</b> · ${esc(provName(p.proveedor_id))} (${p.items.length} producto(s))`).join('<br>')}</p>
+      <p class="small muted" style="margin-top:.6rem">Quedan como <b>Pendientes</b> hasta que los marques como recibidos.</p>`,
+      `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="imp">Imprimir</button>`);
+    $('#imp', m.el).onclick = () => run(() => imprimirPedidos(pedidos, proveedores));
+  });
+}
+
+async function detallePedido(id) {
+  const [p, proveedores, productos] = await Promise.all([store.pedido(id), store.proveedores(), store.productos()]);
+  if (!p) { view().innerHTML = '<div class="empty">Pedido no encontrado</div>'; return; }
+  const provName = pid => proveedores.find(x => x.id === pid)?.nombre || 'Sin proveedor';
+  const pendiente = p.estado === 'pendiente';
+  const items = p.items.map(i => ({ ...i }));
+  view().innerHTML = `
+  <div class="page-head"><div><a href="#/pedidos" class="small muted">← Pedidos</a><h1>Pedido N° ${p.numero} ${pillPedido(p.estado)}</h1></div>
+    <div class="actions">
+      <button class="btn" id="imp">Imprimir</button>
+      ${pendiente ? '<button class="btn" id="compra">Cargar como compra</button><button class="btn danger" id="cancelar">Cancelar pedido</button><button class="btn ok" id="recibido">Marcar recibido</button>'
+        : '<button class="btn" id="reabrir">Volver a pendiente</button>'}</div></div>
+  <div class="split">
+    <div class="card card-pad"><h2>Productos</h2>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Código</th><th>Producto</th><th class="num">Stock actual</th><th style="width:110px" class="num">Cantidad</th>${pendiente ? '<th></th>' : ''}</tr></thead><tbody id="items"></tbody></table></div>
+      ${pendiente ? '<button class="btn" id="guardar-items" style="margin-top:.8rem" hidden>Guardar cambios</button>' : ''}</div>
+    <div class="card card-pad"><h2>Datos</h2>
+      <dl class="kv"><dt>Proveedor</dt><dd>${esc(provName(p.proveedor_id))}</dd><dt>Fecha</dt><dd>${fdatetime(p.fecha)}</dd>
+        ${p.fecha_recibido ? `<dt>Recibido</dt><dd>${fdatetime(p.fecha_recibido)}</dd>` : ''}
+        <dt>Notas</dt><dd>${esc(p.notas) || '—'}</dd></dl>
+      <p class="small muted" style="margin-top:1rem">El pedido no mueve stock. Para ingresar la mercadería usá <b>Cargar como compra</b> (abre Compras → Ingresar mercadería con estos productos) o cargala directo en Compras.</p></div>
+  </div>`;
+  const stockDe = pid => productos.find(x => x.id === pid)?.stock ?? '—';
+  const paint = () => {
+    $('#items').innerHTML = items.map((i, k) => `<tr><td class="mono small">${esc(i.codigo)}</td><td>${esc(i.descripcion)}</td><td class="num muted">${stockDe(i.producto_id)}</td>
+      <td class="num">${pendiente ? `<input class="input" type="number" min="0" step="any" value="${+i.cantidad}" data-cant="${k}">` : `<b>${+i.cantidad}</b>`}</td>
+      ${pendiente ? `<td><button class="x" data-del="${k}" title="Quitar">×</button></td>` : ''}</tr>`).join('') || '<tr><td colspan="5" class="empty">Sin productos.</td></tr>';
+    const cambio = () => { const g = $('#guardar-items'); if (g) g.hidden = false; };
+    $$('[data-cant]').forEach(inp => inp.onchange = () => { items[+inp.dataset.cant].cantidad = Math.max(0, +inp.value || 0); cambio(); });
+    $$('[data-del]').forEach(bt => bt.onclick = () => { items.splice(+bt.dataset.del, 1); paint(); cambio(); });
+  };
+  paint();
+  const estado = (cambios, msg) => run(async () => { await store.actualizarPedido(id, cambios); toast(msg); render(); });
+  $('#imp').onclick = () => run(() => imprimirPedidos([{ ...p, items }], proveedores));
+  if (pendiente) {
+    $('#guardar-items').onclick = () => run(async () => {
+      if (!items.some(i => +i.cantidad > 0)) return toast('El pedido tiene que tener al menos un producto', true);
+      await store.actualizarItemsPedido(id, items.map(({ producto_id, descripcion, codigo, cantidad }) => ({ producto_id, descripcion, codigo, cantidad: +cantidad })));
+      toast('Pedido actualizado'); render();
+    });
+    $('#recibido').onclick = () => { if (confirm(`¿Marcar el pedido N° ${p.numero} como recibido?\n\nRecordá que el stock se carga en Compras → Ingresar mercadería.`)) estado({ estado: 'recibido', fecha_recibido: new Date().toISOString() }, 'Pedido recibido'); };
+    $('#cancelar').onclick = () => { if (confirm(`¿Cancelar el pedido N° ${p.numero}?`)) estado({ estado: 'cancelado' }, 'Pedido cancelado'); };
+    $('#compra').onclick = () => {
+      if (compraDraft?.items.length && !confirm('Tenés otra carga de compra sin terminar. ¿Reemplazarla por este pedido?')) return;
+      compraDraft = { proveedor_id: p.proveedor_id ? String(p.proveedor_id) : '', nro_comprobante: '', notas: `Pedido N° ${p.numero}`, pedido_id: p.id, pedido_numero: p.numero,
+        items: items.filter(i => i.producto_id && productos.some(x => x.id === i.producto_id)).map(i => { const pr = productos.find(x => x.id === i.producto_id);
+          return { producto_id: pr.id, nombre: pr.nombre, codigo_barras: pr.codigo_barras, stock: pr.stock, cantidad: +i.cantidad,
+            costo_unitario: +pr.precio_costo || 0, precio_venta: +pr.precio_venta || 0, precio_venta_orig: +pr.precio_venta || 0 }; }) };
+      go('#/compras/nueva');
+    };
+  } else {
+    $('#reabrir').onclick = () => estado({ estado: 'pendiente', fecha_recibido: null }, 'Pedido pendiente otra vez');
+  }
 }
 
 // =====================================================================

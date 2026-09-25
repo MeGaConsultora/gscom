@@ -262,6 +262,33 @@ export const store = {
     db.compras.filter(c => c.proveedor_id === +id).forEach(c => c.proveedor_id = null);
     db.proveedores = db.proveedores.filter(p => p.id !== +id); save();
   },
+  // Pedidos de mercadería (no tocan stock)
+  async pedidos() {
+    db.pedidos ||= []; db.pedido_items ||= [];
+    return clone(db.pedidos.slice().reverse().map(p => ({ ...p, items: db.pedido_items.filter(i => i.pedido_id === p.id) })));
+  },
+  async pedido(id) {
+    db.pedidos ||= []; db.pedido_items ||= [];
+    const p = byId('pedidos', id); return p ? clone({ ...p, items: db.pedido_items.filter(i => i.pedido_id === p.id) }) : null;
+  },
+  async crearPedido({ proveedor_id, items, notas = '' }) {
+    db.pedidos ||= []; db.pedido_items ||= [];
+    const validos = items.filter(i => +i.cantidad > 0);
+    if (!validos.length) throw new Error('El pedido no tiene productos');
+    db.seq.pedido_numero = (db.seq.pedido_numero || 0) + 1;
+    const p = insert('pedidos', { numero: db.seq.pedido_numero, proveedor_id: proveedor_id || null, fecha: now(), estado: 'pendiente', fecha_recibido: null, notas });
+    validos.forEach(i => insert('pedido_items', { pedido_id: p.id, producto_id: i.producto_id || null, descripcion: i.descripcion, codigo: i.codigo || '', cantidad: +i.cantidad }));
+    save(); return p.id;
+  },
+  async actualizarItemsPedido(id, items) {
+    const p = byId('pedidos', id);
+    if (p.estado !== 'pendiente') throw new Error('Solo se puede modificar un pedido pendiente');
+    db.pedido_items = db.pedido_items.filter(i => i.pedido_id !== p.id);
+    items.filter(i => +i.cantidad > 0).forEach(i => insert('pedido_items', { pedido_id: p.id, producto_id: i.producto_id || null, descripcion: i.descripcion, codigo: i.codigo || '', cantidad: +i.cantidad }));
+    save();
+  },
+  async actualizarPedido(id, cambios) { Object.assign(byId('pedidos', id), cambios); save(); },
+
   async compras() { return clone(db.compras.slice().reverse().map(c => ({ ...c, items: db.compra_items.filter(i => i.compra_id === c.id) }))); },
   async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {
     const c = insert('compras', { fecha: now(), proveedor_id: proveedor_id || null, nro_comprobante, notas,

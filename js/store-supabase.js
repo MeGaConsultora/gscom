@@ -133,6 +133,15 @@ export const store = {
     return id ? q(sb.from('proveedores').update(datos).eq('id', id).select().single())
               : q(sb.from('proveedores').insert(datos).select().single());
   },
+  // Pedidos de mercadería (no tocan stock)
+  async pedidos() { return todas(() => sb.from('pedidos').select('*, items:pedido_items(*)').order('fecha', { ascending: false }).order('id', { ascending: false }), 2000); },
+  async pedido(id) { return q(sb.from('pedidos').select('*, items:pedido_items(*)').eq('id', id).order('id', { referencedTable: 'pedido_items' }).maybeSingle()); },
+  async crearPedido({ proveedor_id, items, notas = '' }) {
+    return q(sb.rpc('crear_pedido', { p_proveedor_id: proveedor_id || null, p_items: items, p_notas: notas }));
+  },
+  async actualizarItemsPedido(id, items) { await q(sb.rpc('actualizar_items_pedido', { p_pedido_id: id, p_items: items })); },
+  async actualizarPedido(id, cambios) { await q(sb.from('pedidos').update(cambios).eq('id', id)); },
+
   async compras() { return q(sb.from('compras').select('*, items:compra_items(*)').order('fecha', { ascending: false }).limit(500)); },
   async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {
     const id = await q(sb.rpc('registrar_compra', { p_proveedor_id: proveedor_id || null, p_nro_comprobante: nro_comprobante || '', p_items: items, p_notas: notas }));
