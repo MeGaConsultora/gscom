@@ -463,6 +463,7 @@ ROUTES.productos = async ({ q }) => {
   view().innerHTML = `
   <div class="page-head"><h1>Productos y stock <span class="muted small">(${productos.length})</span></h1><div class="actions">
     <button class="btn danger" id="del-sel" hidden>Eliminar seleccionados</button>
+    <button class="btn" id="pedido">Armar pedido <span id="nsel2"></span></button>
     <button class="btn" id="etiquetas">Imprimir etiquetas <span id="nsel"></span></button><button class="btn primary" id="nuevo">+ Nuevo producto</button></div></div>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="row" style="align-items:center">
     <div class="search" style="flex:3"><input class="input" id="buscar" placeholder="Buscar por nombre, marca, proveedor o código (también podés escanear)"></div>
@@ -491,7 +492,7 @@ ROUTES.productos = async ({ q }) => {
     $$('[data-sel]').forEach(cb => cb.onchange = () => { cb.checked ? prodSel.add(+cb.dataset.sel) : prodSel.delete(+cb.dataset.sel); paintSel(); });
     paintSel();
   }
-  const paintSel = () => { $('#nsel').textContent = prodSel.size ? `(${prodSel.size})` : ''; $('#del-sel').hidden = !prodSel.size; };
+  const paintSel = () => { $('#nsel').textContent = $('#nsel2').textContent = prodSel.size ? `(${prodSel.size})` : ''; $('#del-sel').hidden = !prodSel.size; };
   $('#del-sel').onclick = () => run(async () => {
     const ids = [...prodSel].filter(id => productos.some(p => p.id === id));
     if (!ids.length || !confirm(`¿Eliminar ${ids.length} producto(s)?\n\nLos que ya tengan ventas, compras o service se dan de baja (el historial se conserva) y liberan su código de barras.`)) return;
@@ -505,6 +506,7 @@ ROUTES.productos = async ({ q }) => {
   $('#all').onchange = e => { lista().forEach(p => e.target.checked ? prodSel.add(p.id) : prodSel.delete(p.id)); paint(); };
   $('#nuevo').onclick = () => productoModal(null);
   $('#etiquetas').onclick = () => etiquetasModal([...prodSel]);
+  $('#pedido').onclick = () => run(() => pedidoModal(prodSel.size ? [...prodSel] : lista().filter(p => !p.es_servicio && p.stock <= p.stock_minimo).map(p => p.id)));
   paint();
   $('#buscar').focus();
 };
@@ -593,6 +595,46 @@ async function etiquetasModal(ids) {
   const prev = () => $('#prev', m.el).innerHTML = html(true);
   $('#conprecio', m.el).onchange = prev; prev();
   $('#print', m.el).onclick = () => { printHTML(`<div class="label-grid">${html(false)}</div>`); };
+}
+
+// Pedido de mercadería: agrupa lo seleccionado por proveedor habitual, con la
+// cantidad sugerida para llegar al stock mínimo (editable antes de imprimir).
+async function pedidoModal(ids) {
+  const [productos, proveedores, n] = await Promise.all([store.productos(), store.proveedores(), store.negocio()]);
+  const items = productos.filter(p => ids.includes(p.id) && !p.es_servicio);
+  if (!items.length) return toast('Marcá productos (casillas de la izquierda) o filtrá por "Stock bajo" antes de armar el pedido', true);
+  const provName = id => proveedores.find(x => x.id === id)?.nombre || 'Sin proveedor asignado';
+  const grupos = {};
+  items.forEach(p => { (grupos[p.proveedor_id || 0] ??= []).push(p); });
+  const claves = Object.keys(grupos).sort((a, b) => provName(+a || null).localeCompare(provName(+b || null)));
+
+  const m = modal('Armar pedido de mercadería', `
+    <p class="small muted" style="margin-bottom:.8rem">Cantidad sugerida: lo que falta para llegar al stock mínimo. Ajustá lo que haga falta antes de imprimir — se imprime una hoja por proveedor.</p>
+    ${claves.map(k => `<h2 style="font-size:.9rem;margin:1rem 0 .4rem">${esc(provName(+k || null))} <span class="muted small">(${grupos[k].length})</span></h2>
+      <table class="tbl small"><tbody>${grupos[k].map(p => `<tr><td>${esc(p.nombre)}${p.marca ? `<div class="small muted">${esc(p.marca)}</div>` : ''}</td>
+        <td class="num muted">Stock ${p.stock}</td><td class="num muted">Mín. ${p.stock_minimo}</td>
+        <td style="width:90px"><input class="input" type="number" min="0" step="any" value="${Math.max(p.stock_minimo - p.stock, 0)}" data-n="${p.id}"></td></tr>`).join('')}</tbody></table>`).join('')}`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="print">Imprimir pedido</button>`, { wide: true });
+
+  $('#print', m.el).onclick = () => {
+    const hojas = claves.map(k => ({
+      nombre: provName(+k || null),
+      filas: grupos[k].map(p => ({ p, cant: +$(`[data-n="${p.id}"]`, m.el).value || 0 })).filter(x => x.cant > 0),
+    })).filter(g => g.filas.length);
+    if (!hojas.length) return toast('Cargá alguna cantidad a pedir', true);
+    const fecha = fdate(new Date().toISOString());
+    const html = hojas.map((g, i) => `
+      <div class="hoja-pedido" ${i < hojas.length - 1 ? 'style="page-break-after:always"' : ''}>
+        <div class="ped-head"><b>${esc(n.nombre)}</b><br>${esc(n.direccion)}${n.telefono ? ` · ${esc(n.telefono)}` : ''}</div>
+        <h1>Pedido de mercadería</h1>
+        <div class="ped-sub">Proveedor: <b>${esc(g.nombre)}</b> · ${fecha}</div>
+        <table class="ped-tbl"><thead><tr><th>Código</th><th>Producto</th><th class="num">Stock</th><th class="num">Mínimo</th><th class="num">Pedir</th></tr></thead><tbody>
+        ${g.filas.map(({ p, cant }) => `<tr><td class="mono">${esc(p.codigo_barras)}</td><td>${esc(p.nombre)}${p.marca ? ` · ${esc(p.marca)}` : ''}</td>
+          <td class="num">${p.stock}</td><td class="num">${p.stock_minimo}</td><td class="num"><b>${cant}</b></td></tr>`).join('')}
+        </tbody></table>
+      </div>`).join('');
+    printHTML(html, PAGINA_A4);
+  };
 }
 
 // =====================================================================
