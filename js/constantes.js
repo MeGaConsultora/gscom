@@ -18,3 +18,13 @@ export const TIPOS_EQUIPO = ['Notebook', 'PC de escritorio', 'All in One', 'Celu
 // Deja la venta o el service como deuda del cliente (Fichero) en vez de entrar a caja
 export const CUENTA_CORRIENTE = 'Cuenta corriente';
 export const FORMAS_COBRO = [...FORMAS_PAGO, CUENTA_CORRIENTE];
+
+// Número de WhatsApp en formato internacional argentino (549 + área + número),
+// aunque se haya cargado como "3493 457459" o "03493-457459"
+export function numeroWhatsApp(telefono) {
+  let d = String(telefono || '').replace(/\D/g, '');
+  if (d.startsWith('0')) d = d.slice(1);
+  if (d && !d.startsWith('54')) d = '549' + d;
+  return d;
+}
+export const linkWhatsApp = (telefono, texto) => `https://wa.me/${numeroWhatsApp(telefono)}?text=${encodeURIComponent(texto)}`;

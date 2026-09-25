@@ -4,7 +4,7 @@
 // proveedores ni cantidades exactas. El carrito vive en el navegador del
 // cliente y el pedido se envía por WhatsApp.
 // =====================================================================
-import { store } from './store.js';
+import { store, linkWhatsApp } from './store.js';
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
@@ -141,7 +141,7 @@ function verCarrito() {
       const lineas = ids.map(id => { const p = prod(id); return `• ${carrito[id]} × ${p.nombre} — ${money(carrito[id] * p.precio)}${p.estado === 'encargo' ? ' (por encargo)' : ''}`; });
       const texto = `Hola ${neg.nombre || 'GScom'}! Quiero hacer este pedido desde la tienda online:\n\n${lineas.join('\n')}\n\nTotal estimado: ${money(total)}`
         + `${nombre ? `\nNombre: ${nombre}` : ''}${coment ? `\nComentario: ${coment}` : ''}\n\nQuedo a la espera de la confirmación. ¡Gracias!`;
-      window.open(`https://wa.me/${String(neg.whatsapp).replace(/\D/g, '')}?text=${encodeURIComponent(texto)}`, '_blank', 'noopener');
+      window.open(linkWhatsApp(neg.whatsapp, texto), '_blank', 'noopener');
     };
   };
   pintarLineas();
@@ -150,7 +150,7 @@ function verCarrito() {
 // ---------- Arranque ----------
 function pintarPie() {
   const n = catalogo.negocio;
-  const wa = n.whatsapp ? `https://wa.me/${String(n.whatsapp).replace(/\D/g, '')}?text=${encodeURIComponent('Hola! Tengo una consulta desde la tienda online.')}` : '';
+  const wa = n.whatsapp ? linkWhatsApp(n.whatsapp, 'Hola! Tengo una consulta desde la tienda online.') : '';
   $('#pie').innerHTML = `<b>${esc(n.nombre || 'GScom')}</b><br>${[n.direccion, n.telefono && `Tel. ${n.telefono}`].filter(Boolean).map(esc).join(' · ')}
     ${n.horario ? `<br>${esc(n.horario)}` : ''}${wa ? `<br><a href="${wa}" target="_blank" rel="noopener">Escribinos por WhatsApp</a>` : ''}
     <br><span class="small">Precios en pesos argentinos, sujetos a cambio sin previo aviso. Imágenes ilustrativas.</span>`;

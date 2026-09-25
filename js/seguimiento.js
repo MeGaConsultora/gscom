@@ -1,4 +1,4 @@
-import { store, estadoInfo } from './store.js';
+import { store, estadoInfo, linkWhatsApp } from './store.js';
 
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const fdate = iso => iso ? new Date(/^\d{4}-\d{2}-\d{2}$/.test(iso) ? iso + 'T00:00' : iso).toLocaleDateString('es-AR', { day: 'numeric', month: 'long' }) : '';
@@ -18,7 +18,7 @@ function render(o) {
   const pos = ['repuesto', 'derivado'].includes(o.estado) ? 3 : o.estado === 'sin_reparacion' ? 4 : FLUJO.indexOf(o.estado);
   const ultimo = [...o.historial].reverse().find(h => h.estado === o.estado && h.comentario && !esRespuestaCliente(h.comentario));
   const n = o.negocio;
-  const wa = texto => n.whatsapp ? `https://wa.me/${n.whatsapp.replace(/\D/g, '')}?text=${encodeURIComponent(texto)}` : '';
+  const wa = texto => n.whatsapp ? linkWhatsApp(n.whatsapp, texto) : '';
   const pendiente = o.estado === 'presupuesto' && o.presupuesto != null && o.presupuesto_aprobado == null;
   document.title = `Orden #${o.numero} — ${e.label}`;
 
