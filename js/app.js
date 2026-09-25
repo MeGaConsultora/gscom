@@ -26,6 +26,10 @@ const respuestaPresu = o => o.estado !== 'presupuesto' || o.presupuesto_aprobado
 // Códigos de barras: sin distinguir mayúsculas (algunos lectores devuelven "AHRX93708" en vez de "ahrx93708")
 const mismoCodigo = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 
+// Stock bajo = hay que reponer: solo productos con un mínimo definido (> 0) y stock en el mínimo o por debajo.
+// Los de mínimo 0 no se reponen automáticamente (se ven con el filtro "Sin stock").
+const faltaStock = p => !p.es_servicio && +p.stock_minimo > 0 && +p.stock <= +p.stock_minimo;
+
 // Búsqueda de productos: por nombre, marca, categoría, descripción o código.
 // Orden: código exacto → nombre que empieza con lo buscado → nombre que lo contiene → resto;
 // con stockPrimero, dentro de cada grupo van primero los que tienen stock.
@@ -49,7 +53,7 @@ const masResultados = r => r.total > r.length
 // Contenido de un resultado de búsqueda con todos los datos, para no confundir productos parecidos
 function prodSugHTML(p, cats, { costo = false } = {}) {
   const extra = [p.marca, cats.find(c => c.id === p.categoria_id)?.nombre].filter(Boolean).map(esc).join(' · ');
-  const stockCls = p.stock <= 0 ? 'color:var(--bad)' : p.stock <= p.stock_minimo ? 'color:var(--warn)' : '';
+  const stockCls = p.stock <= 0 ? 'color:var(--bad)' : faltaStock(p) ? 'color:var(--warn)' : '';
   return `<span style="min-width:0"><b>${esc(p.nombre)}</b>${extra ? ` <span class="muted">· ${extra}</span>` : ''}
       ${p.descripcion ? `<span class="small muted" style="display:block">${esc(p.descripcion)}</span>` : ''}
       <span class="small muted mono" style="display:block">${esc(p.codigo_barras)}${costo ? ` · costo ${money(p.precio_costo)}` : ''} · venta ${money(p.precio_venta)}</span></span>
@@ -207,7 +211,7 @@ ROUTES.inicio = async () => {
   const efectivo = caja.filter(m => isToday(m.fecha) && m.forma_pago === 'Efectivo').reduce((s, m) => s + (m.tipo === 'ingreso' ? m.monto : -m.monto), 0);
   const activas = ordenes.filter(ACTIVAS);
   const listas = ordenes.filter(o => o.estado === 'listo' || o.estado === 'sin_reparacion');
-  const bajos = productos.filter(p => !p.es_servicio && p.stock <= p.stock_minimo);
+  const bajos = productos.filter(faltaStock);
 
   view().innerHTML = `
   <div class="page-head"><h1>Resumen de hoy</h1>
@@ -474,8 +478,8 @@ ROUTES.productos = async ({ q }) => {
 
   const catName = id => categorias.find(c => c.id === id)?.nombre || '';
   const nRevisar = productos.filter(aRevisar).length;
-  const chips = [['todos', 'Todos'], ['bajo', 'Stock bajo'], ...(nRevisar ? [['revisar', `⚠ A revisar (${nRevisar})`]] : []), ...categorias.map(c => [String(c.id), c.nombre])];
-  const lista = () => productos.filter(p => (filtro === 'todos' || (filtro === 'bajo' ? (!p.es_servicio && p.stock <= p.stock_minimo) : filtro === 'revisar' ? aRevisar(p) : p.categoria_id === +filtro))
+  const chips = [['todos', 'Todos'], ['bajo', 'Stock bajo'], ['sinstock', 'Sin stock'], ...(nRevisar ? [['revisar', `⚠ A revisar (${nRevisar})`]] : []), ...categorias.map(c => [String(c.id), c.nombre])];
+  const lista = () => productos.filter(p => (filtro === 'todos' || (filtro === 'bajo' ? faltaStock(p) : filtro === 'sinstock' ? (!p.es_servicio && p.stock <= 0) : filtro === 'revisar' ? aRevisar(p) : p.categoria_id === +filtro))
     && (!prov || p.proveedor_id === +prov)
     && (mismoCodigo(p.codigo_barras, texto) || matches(texto, p.nombre, p.marca, p.descripcion, p.codigo_barras, catName(p.categoria_id), provName(p.proveedor_id))));
   function paint() {
@@ -486,7 +490,7 @@ ROUTES.productos = async ({ q }) => {
       <td><input type="checkbox" data-sel="${p.id}" ${prodSel.has(p.id) ? 'checked' : ''}></td>
       <td class="mono small">${esc(p.codigo_barras)}${p.codigo_interno ? ' <span class="pill blue" title="Código generado por GScom">int</span>' : ''}</td>
       <td>${esc(p.nombre)}${p.marca || p.descripcion || p.proveedor_id ? `<div class="small muted">${[p.marca, p.descripcion, provName(p.proveedor_id) && `Prov.: ${provName(p.proveedor_id)}`].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
-      <td class="num">${p.es_servicio ? '<span class="muted">—</span>' : `<span class="pill ${p.stock <= 0 ? 'red' : p.stock <= p.stock_minimo ? 'amber' : 'green'}">${p.stock}</span>`}</td>
+      <td class="num">${p.es_servicio ? '<span class="muted">—</span>' : `<span class="pill ${p.stock <= 0 ? 'red' : faltaStock(p) ? 'amber' : 'green'}">${p.stock}</span>`}</td>
       <td class="num muted">${money(p.precio_costo)}</td><td class="num"><b>${money(p.precio_venta)}</b></td></tr>`).join('')
       || '<tr><td colspan="7" class="empty">No hay productos que coincidan.</td></tr>';
     $$('#rows tr[data-id]').forEach(tr => tr.onclick = e => { if (e.target.matches('input')) return; productoModal(+tr.dataset.id); });
@@ -507,7 +511,7 @@ ROUTES.productos = async ({ q }) => {
   $('#all').onchange = e => { lista().forEach(p => e.target.checked ? prodSel.add(p.id) : prodSel.delete(p.id)); paint(); };
   $('#nuevo').onclick = () => productoModal(null);
   $('#etiquetas').onclick = () => etiquetasModal([...prodSel]);
-  $('#pedido').onclick = () => armarPedido(prodSel.size ? [...prodSel] : lista().filter(p => !p.es_servicio && p.stock <= p.stock_minimo).map(p => p.id), productos);
+  $('#pedido').onclick = () => armarPedido(prodSel.size ? [...prodSel] : lista().filter(faltaStock).map(p => p.id), productos);
   paint();
   $('#buscar').focus();
 };
@@ -610,7 +614,7 @@ async function etiquetasModal(ids) {
 let pedidoDraft = null;
 function armarPedido(ids, productos) {
   const items = productos.filter(p => ids.includes(p.id) && !p.es_servicio);
-  if (!items.length) return toast('Marcá productos (casillas de la izquierda) o filtrá por "Stock bajo" antes de armar el pedido', true);
+  if (!items.length) return toast('No hay productos para pedir: marcá productos con las casillas, o cargales un stock mínimo para que aparezcan en "Stock bajo"', true);
   pedidoDraft ??= { notas: '', items: [] };
   items.forEach(p => {
     if (pedidoDraft.items.some(i => i.producto_id === p.id)) return;
@@ -1809,7 +1813,7 @@ async function detallePedido(id) {
   view().innerHTML = `
   <div class="page-head"><div><a href="#/pedidos" class="small muted">← Pedidos</a><h1>Pedido N° ${p.numero} ${pillPedido(p.estado)}</h1></div>
     <div class="actions">
-      <button class="btn" id="imp">Imprimir</button>
+      <button class="btn" id="imp">Imprimir / PDF</button><button class="btn" id="xls">Excel</button><button class="btn wa" id="wa">WhatsApp</button>
       ${pendiente ? '<button class="btn" id="compra">Cargar como compra</button><button class="btn danger" id="cancelar">Cancelar pedido</button><button class="btn ok" id="recibido">Marcar recibido</button>'
         : '<button class="btn" id="reabrir">Volver a pendiente</button>'}</div></div>
   <div class="split">
@@ -1834,6 +1838,24 @@ async function detallePedido(id) {
   paint();
   const estado = (cambios, msg) => run(async () => { await store.actualizarPedido(id, cambios); toast(msg); render(); });
   $('#imp').onclick = () => run(() => imprimirPedidos([{ ...p, items }], proveedores));
+  const prov = proveedores.find(x => x.id === p.proveedor_id);
+  $('#xls').onclick = () => run(async () => {
+    const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+    const n = await store.negocio();
+    const filas = [[`${n.nombre} — Pedido de mercadería N° ${p.numero}`], [`Proveedor: ${provName(p.proveedor_id)}`, '', `Fecha: ${fdate(p.fecha)}`],
+      ...(p.notas ? [[`Notas: ${p.notas}`]] : []), [], ['Código', 'Producto', 'Cantidad'],
+      ...items.filter(i => +i.cantidad > 0).map(i => [i.codigo, i.descripcion, +i.cantidad])];
+    const hoja = XLSX.utils.aoa_to_sheet(filas);
+    hoja['!cols'] = [{ wch: 18 }, { wch: 60 }, { wch: 10 }];
+    const libro = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(libro, hoja, 'Pedido');
+    XLSX.writeFile(libro, `Pedido ${p.numero} - ${provName(p.proveedor_id).replace(/[\\/:*?"<>|]/g, '')}.xlsx`);
+  });
+  $('#wa').onclick = () => run(async () => {
+    const n = await store.negocio();
+    const texto = `Hola! Les paso un pedido de ${n.nombre} (N° ${p.numero}):\n\n${items.filter(i => +i.cantidad > 0).map(i => `• ${+i.cantidad} × ${i.descripcion}${i.codigo ? ` (${i.codigo})` : ''}`).join('\n')}${p.notas ? `\n\n${p.notas}` : ''}\n\nGracias!`;
+    if (prov?.telefono) window.open(waLink(prov.telefono, texto), '_blank', 'noopener');
+    else window.open(`https://wa.me/?text=${encodeURIComponent(texto)}`, '_blank', 'noopener');  // sin teléfono: elegís el contacto en WhatsApp
+  });
   if (pendiente) {
     $('#guardar-items').onclick = () => run(async () => {
       if (!items.some(i => +i.cantidad > 0)) return toast('El pedido tiene que tener al menos un producto', true);
