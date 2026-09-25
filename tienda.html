@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GScom — Tienda de informática</title>
+<meta name="description" content="GScom: insumos, periféricos, redes, almacenamiento y más. Consultá precios y disponibilidad y hacé tu pedido por WhatsApp.">
+<meta property="og:title" content="GScom — Tienda de informática">
+<meta property="og:description" content="Insumos, periféricos, redes y más. Hacé tu pedido por WhatsApp.">
+<meta property="og:image" content="img/logo.png">
+<link rel="icon" type="image/png" sizes="64x64" href="img/favicon.png">
+<meta name="theme-color" content="#0b0c0e">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/tienda.css">
+</head>
+<body class="tienda">
+<header class="t-top">
+  <a class="brand" href="tienda.html" style="text-decoration:none"><img src="img/logo.png" alt="GScom"><div><span>GScom</span><small>Tienda</small></div></a>
+  <div class="search t-search"><input class="input" id="q" type="search" placeholder="¿Qué estás buscando?" autocomplete="off"></div>
+</header>
+<nav class="t-cats" id="cats"></nav>
+<main class="t-main">
+  <div class="t-bar">
+    <div class="small muted" id="cuenta"></div>
+    <div class="t-bar-der">
+      <label class="small" style="display:flex;gap:.35rem;align-items:center"><input type="checkbox" id="solo-disp"> Solo con stock</label>
+      <select class="input" id="orden" style="width:auto">
+        <option value="nombre">Nombre A–Z</option><option value="menor">Menor precio</option><option value="mayor">Mayor precio</option>
+      </select>
+    </div>
+  </div>
+  <div class="t-grid" id="grid"><div class="empty">Cargando productos…</div></div>
+  <div style="text-align:center;margin:1.5rem 0"><button class="btn" id="mas" hidden>Ver más productos</button></div>
+</main>
+<footer class="t-foot" id="pie"></footer>
+<button class="t-carrito-btn" id="carrito-btn" hidden><span>🛒</span> <b id="carrito-n">0</b> · <span id="carrito-total"></span></button>
+<script type="module" src="js/tienda.js"></script>
+</body>
+</html>

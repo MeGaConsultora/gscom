@@ -76,6 +76,24 @@ export const store = {
     if (stockInicial) movStock(r.id, stockInicial, 'ajuste', { nota: 'Stock inicial' });
     save(); return clone(r);
   },
+  // Tienda online (misma lógica que catalogo_tienda de la base)
+  async catalogoTienda() {
+    const reservado = pid => (db.encargos || []).filter(e => e.estado === 'reservado' && e.producto_id === pid).reduce((s, e) => s + +e.cantidad, 0);
+    const productos = db.productos.filter(p => p.activo && p.publicado !== false && !p.es_servicio && p.precio_venta > 0).map(p => {
+      const disp = Math.max(p.stock - reservado(p.id), 0);
+      return { id: p.id, nombre: p.nombre, marca: p.marca, descripcion: /^⚠|\[dado de baja/.test(p.descripcion || '') ? '' : p.descripcion,
+        categoria: byId('categorias', p.categoria_id)?.nombre || null, precio: p.precio_venta, foto: p.foto_url || '',
+        estado: disp <= 0 ? 'encargo' : disp <= Math.max(p.stock_minimo, 1) ? 'ultimas' : 'disponible' };
+    }).sort((a, b) => a.nombre.localeCompare(b.nombre));
+    const n = db.negocio;
+    return clone({ negocio: { nombre: n.nombre, direccion: n.direccion, telefono: n.telefono, whatsapp: n.whatsapp, email: n.email, horario: n.horario }, productos });
+  },
+  async publicarProductos(ids, publicado) { ids.forEach(id => { const p = byId('productos', id); if (p) p.publicado = publicado; }); save(); },
+  async subirFotoProducto(productoId, blob) {
+    const url = await new Promise((ok, mal) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = mal; r.readAsDataURL(blob); });
+    byId('productos', productoId).foto_url = url; save(); return url;
+  },
+  async quitarFotoProducto(productoId) { byId('productos', productoId).foto_url = ''; save(); },
   async eliminarProducto(id) {
     const p = byId('productos', id); if (!p) throw new Error('El producto no existe');
     const usado = [db.venta_items, db.compra_items, db.orden_items].some(t => t.some(i => i.producto_id === p.id));

@@ -1,0 +1,45 @@
+/* ---------- Tienda online (público) ---------- */
+body.tienda { background: #f4f5f7; }
+.t-top { background: var(--header); color: #fff; display: flex; align-items: center; gap: 1rem; padding: .7rem 1.25rem; position: sticky; top: 0; z-index: 40; }
+.t-top .brand img { width: 42px; height: 42px; }
+.t-search { flex: 1; max-width: 640px; margin-left: auto; }
+.t-search input { background: #1b1e24; border-color: #2a2e36; color: #fff; }
+.t-search input::placeholder { color: #8b93a0; }
+.t-cats { display: flex; gap: .4rem; overflow-x: auto; scrollbar-width: none; padding: .7rem 1.25rem; background: #fff; border-bottom: 1px solid var(--line); position: sticky; top: 66px; z-index: 30; }
+.t-cats::-webkit-scrollbar { display: none; }
+.t-cats .chip { white-space: nowrap; }
+.t-main { max-width: 1280px; margin: 0 auto; padding: 1rem 1.25rem 6rem; }
+.t-bar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; margin-bottom: .9rem; flex-wrap: wrap; }
+.t-bar-der { display: flex; gap: .8rem; align-items: center; }
+.t-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: .9rem; }
+.t-card { background: #fff; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; cursor: pointer; transition: box-shadow .15s, transform .15s; }
+.t-card:hover { box-shadow: 0 6px 20px rgba(20,23,28,.08); transform: translateY(-1px); }
+.t-img { aspect-ratio: 1 / 1; background: #fff; display: grid; place-items: center; border-bottom: 1px solid #f0f1f3; position: relative; }
+.t-img img { width: 100%; height: 100%; object-fit: contain; padding: .6rem; }
+.t-ph { width: 60%; aspect-ratio: 1; border-radius: 50%; background: #f2f4f7; display: grid; place-items: center; font-size: 2.2rem; color: #9aa3af; }
+.t-badge { position: absolute; top: .5rem; left: .5rem; font-size: .7rem; }
+.t-body { padding: .7rem .8rem .8rem; display: flex; flex-direction: column; gap: .25rem; flex: 1; }
+.t-marca { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+.t-nombre { font-size: .88rem; font-weight: 500; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; min-height: 3.3em; }
+.t-precio { font-size: 1.2rem; font-weight: 700; margin-top: auto; padding-top: .3rem; }
+.t-card .btn { margin-top: .4rem; }
+.t-foot { background: var(--header); color: #aab1bc; padding: 1.5rem 1.25rem 5rem; font-size: .88rem; text-align: center; line-height: 1.7; }
+.t-foot b { color: #fff; }
+.t-foot a { color: #fff; }
+.t-carrito-btn { position: fixed; right: 16px; bottom: 16px; z-index: 60; background: var(--ok); color: #fff; border: 0; border-radius: 30px; padding: .8rem 1.2rem; font-size: 1rem; box-shadow: 0 8px 24px rgba(0,0,0,.25); cursor: pointer; }
+.t-linea { display: grid; grid-template-columns: 56px minmax(0,1fr) auto; gap: .7rem; align-items: center; padding: .6rem 0; border-bottom: 1px solid var(--line); }
+.t-linea img, .t-linea .t-ph-mini { width: 56px; height: 56px; object-fit: contain; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+.t-ph-mini { display: grid; place-items: center; color: #9aa3af; }
+.t-det { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 1.2rem; }
+.t-det .t-img { border: 1px solid var(--line); border-radius: 10px; }
+@media (max-width: 640px) {
+  .t-top { flex-wrap: wrap; padding: .6rem 12px; }
+  .t-top .brand small { display: none; }
+  .t-search { order: 3; flex-basis: 100%; max-width: none; }
+  .t-cats { top: 112px; padding: .6rem 12px; }
+  .t-main { padding: .8rem 12px 6rem; }
+  .t-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+  .t-nombre { font-size: .82rem; }
+  .t-precio { font-size: 1.05rem; }
+  .t-det { grid-template-columns: minmax(0,1fr); }
+}

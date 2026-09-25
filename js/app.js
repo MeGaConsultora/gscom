@@ -85,6 +85,22 @@ function modal(title, body, foot = '', { wide = false } = {}) {
 }
 const formData = el => Object.fromEntries($$('[name]', el).map(i => [i.name, i.type === 'checkbox' ? i.checked : i.value.trim()]));
 
+// Achica una foto (máx. 900 px de lado) y la pasa a JPEG, para que la tienda cargue rápido y no gaste espacio
+function achicarImagen(archivo, max = 900) {
+  return new Promise((ok, mal) => {
+    const img = new Image(), url = URL.createObjectURL(archivo);
+    img.onload = () => {
+      const k = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      const g = c.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      c.toBlob(b => b ? ok(b) : mal(new Error('No se pudo procesar la imagen')), 'image/jpeg', 0.82);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); mal(new Error('El archivo no es una imagen válida')); };
+    img.src = url;
+  });
+}
+
 // pagina: regla @page para este tipo de impresión (ticketera, A4, etiquetas)
 function printHTML(html, pagina = 'margin: 8mm') {
   const area = $('#print-area');
@@ -479,6 +495,8 @@ ROUTES.productos = async ({ q }) => {
   const aRevisar = p => (p.descripcion || '').startsWith('⚠');
   view().innerHTML = `
   <div class="page-head"><h1>Productos y stock <span class="muted small">(${productos.length})</span></h1><div class="actions">
+    <a class="btn" href="tienda.html" target="_blank" rel="noopener">Ver tienda ↗</a>
+    <button class="btn" id="pub-sel" hidden>Publicar en tienda</button><button class="btn" id="ocu-sel" hidden>Ocultar de tienda</button>
     <button class="btn danger" id="del-sel" hidden>Eliminar seleccionados</button>
     <button class="btn" id="pedido">Armar pedido <span id="nsel2"></span></button>
     <button class="btn" id="etiquetas">Imprimir etiquetas <span id="nsel"></span></button><button class="btn primary" id="nuevo">+ Nuevo producto</button></div></div>
@@ -490,8 +508,8 @@ ROUTES.productos = async ({ q }) => {
 
   const catName = id => categorias.find(c => c.id === id)?.nombre || '';
   const nRevisar = productos.filter(aRevisar).length;
-  const chips = [['todos', 'Todos'], ['bajo', 'Stock bajo'], ['sinstock', 'Sin stock'], ...(nRevisar ? [['revisar', `⚠ A revisar (${nRevisar})`]] : []), ...categorias.map(c => [String(c.id), c.nombre])];
-  const lista = () => productos.filter(p => (filtro === 'todos' || (filtro === 'bajo' ? faltaStock(p) : filtro === 'sinstock' ? (!p.es_servicio && p.stock <= 0) : filtro === 'revisar' ? aRevisar(p) : p.categoria_id === +filtro))
+  const chips = [['todos', 'Todos'], ['bajo', 'Stock bajo'], ['sinstock', 'Sin stock'], ['ocultos', 'Ocultos en tienda'], ['sinfoto', 'Sin foto'], ...(nRevisar ? [['revisar', `⚠ A revisar (${nRevisar})`]] : []), ...categorias.map(c => [String(c.id), c.nombre])];
+  const lista = () => productos.filter(p => (filtro === 'todos' || (filtro === 'bajo' ? faltaStock(p) : filtro === 'sinstock' ? (!p.es_servicio && p.stock <= 0) : filtro === 'ocultos' ? p.publicado === false : filtro === 'sinfoto' ? (!p.es_servicio && !p.foto_url) : filtro === 'revisar' ? aRevisar(p) : p.categoria_id === +filtro))
     && (!prov || p.proveedor_id === +prov)
     && (mismoCodigo(p.codigo_barras, texto) || matches(texto, p.nombre, p.marca, p.descripcion, p.codigo_barras, catName(p.categoria_id), provName(p.proveedor_id))));
   function paint() {
@@ -501,7 +519,7 @@ ROUTES.productos = async ({ q }) => {
     $('#rows').innerHTML = l.map(p => `<tr class="click" data-id="${p.id}">
       <td><input type="checkbox" data-sel="${p.id}" ${prodSel.has(p.id) ? 'checked' : ''}></td>
       <td class="mono small">${esc(p.codigo_barras)}${p.codigo_interno ? ' <span class="pill blue" title="Código generado por GScom">int</span>' : ''}</td>
-      <td>${esc(p.nombre)}${p.marca || p.descripcion || p.proveedor_id ? `<div class="small muted">${[p.marca, p.descripcion, provName(p.proveedor_id) && `Prov.: ${provName(p.proveedor_id)}`].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
+      <td>${esc(p.nombre)}${p.foto_url ? ' <span title="Tiene foto">📷</span>' : ''}${p.publicado === false ? ' <span class="pill gray" title="No se muestra en la tienda online">oculto</span>' : ''}${p.marca || p.descripcion || p.proveedor_id ? `<div class="small muted">${[p.marca, p.descripcion, provName(p.proveedor_id) && `Prov.: ${provName(p.proveedor_id)}`].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
       <td class="num">${p.es_servicio ? '<span class="muted">—</span>' : `<span class="pill ${p.stock <= 0 ? 'red' : faltaStock(p) ? 'amber' : 'green'}">${p.stock}</span>${reservados.get(p.id) ? `<div class="small" style="color:#6b3fc4" title="Reservado para clientes">${reservados.get(p.id)} reserv.</div>` : ''}`}</td>
       <td class="num muted">${money(p.precio_costo)}</td><td class="num"><b>${money(p.precio_venta)}</b></td></tr>`).join('')
       || '<tr><td colspan="7" class="empty">No hay productos que coincidan.</td></tr>';
@@ -509,7 +527,14 @@ ROUTES.productos = async ({ q }) => {
     $$('[data-sel]').forEach(cb => cb.onchange = () => { cb.checked ? prodSel.add(+cb.dataset.sel) : prodSel.delete(+cb.dataset.sel); paintSel(); });
     paintSel();
   }
-  const paintSel = () => { $('#nsel').textContent = $('#nsel2').textContent = prodSel.size ? `(${prodSel.size})` : ''; $('#del-sel').hidden = !prodSel.size; };
+  const paintSel = () => { $('#nsel').textContent = $('#nsel2').textContent = prodSel.size ? `(${prodSel.size})` : ''; ['#del-sel', '#pub-sel', '#ocu-sel'].forEach(b => $(b).hidden = !prodSel.size); };
+  const publicarSel = publicado => run(async () => {
+    const ids = [...prodSel].filter(id => productos.some(p => p.id === id));
+    await store.publicarProductos(ids, publicado); prodSel.clear();
+    toast(`${ids.length} producto(s) ${publicado ? 'publicados en' : 'ocultos de'} la tienda`); render();
+  });
+  $('#pub-sel').onclick = () => publicarSel(true);
+  $('#ocu-sel').onclick = () => publicarSel(false);
   $('#del-sel').onclick = () => run(async () => {
     const ids = [...prodSel].filter(id => productos.some(p => p.id === id));
     if (!ids.length || !confirm(`¿Eliminar ${ids.length} producto(s)?\n\nLos que ya tengan ventas, compras o service se dan de baja (el historial se conserva) y liberan su código de barras.`)) return;
@@ -547,6 +572,11 @@ async function productoModal(id, opts = {}) {
     <div class="row">${id || opts.sinStock ? '' : `<div class="field"><label>Stock inicial</label><input class="input" name="stock" type="number" step="any" value="${v.stock}"></div>`}
       <div class="field"><label>Stock mínimo (alerta)</label><input class="input" name="stock_minimo" type="number" step="any" min="0" value="${v.stock_minimo}"></div></div>
     <label class="small" style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem"><input type="checkbox" name="es_servicio" ${v.es_servicio ? 'checked' : ''}> Es un servicio / mano de obra (no maneja stock)</label>
+    <div class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem"><h2 style="margin-bottom:.4rem">Tienda online</h2>
+      <label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="publicado" ${v.publicado !== false ? 'checked' : ''}> Mostrar en la tienda</label>
+      ${id ? `<div style="display:flex;gap:1rem;align-items:center;margin-top:.7rem"><div id="foto-prev"></div>
+        <div><input type="file" accept="image/*" id="foto-file" hidden><button class="btn sm" id="foto-subir">Subir / cambiar foto</button> <button class="btn sm danger" id="foto-quitar">Quitar foto</button>
+        <div class="small muted" style="margin-top:.3rem">Desde el celular podés sacarla con la cámara. Se achica sola antes de subirse.</div></div></div>` : '<p class="small muted" style="margin-top:.4rem">Guardá el producto para poder cargarle una foto.</p>'}</div>
     ${id && !v.es_servicio ? `<div class="card card-pad" style="background:#fafbfc"><h2 style="margin-bottom:.5rem">Stock</h2>
       <div class="field" style="max-width:160px"><label>Cantidad actual</label><input class="input" id="stock-actual" type="number" step="any" value="${v.stock}"></div>
       <p class="small muted" style="margin:.2rem 0 1rem">Corregila acá directamente (ej: después de un conteo físico) — se guarda al tocar "Guardar" y queda como un ajuste en el historial.</p>
@@ -557,6 +587,24 @@ async function productoModal(id, opts = {}) {
       <table class="tbl small" style="margin-top:.5rem"><tbody>${movs.slice(0, 30).map(mv => `<tr><td>${fdatetime(mv.created_at)}</td><td>${esc(mv.tipo)}</td><td class="muted">${esc(mv.nota || '')}</td><td class="num"><b style="color:${mv.cantidad < 0 ? 'var(--bad)' : 'var(--ok)'}">${mv.cantidad > 0 ? '+' : ''}${mv.cantidad}</b></td></tr>`).join('')}</tbody></table></details></div>` : ''}`,
     `${id ? '<button class="btn danger" id="del" style="margin-right:auto">Eliminar</button><button class="btn" id="etq">Imprimir etiqueta</button>' : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
 
+  // Foto para la tienda: se sube al momento (no espera a Guardar)
+  let foto = v.foto_url || '';
+  const pintarFoto = () => {
+    const prev = $('#foto-prev', m.el); if (!prev) return;
+    prev.innerHTML = foto ? `<img src="${esc(foto)}" alt="" style="width:96px;height:96px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px">`
+      : '<div style="width:96px;height:96px;border:1px dashed var(--line);border-radius:8px;display:grid;place-items:center" class="small muted">Sin foto</div>';
+    $('#foto-quitar', m.el).hidden = !foto;
+  };
+  pintarFoto();
+  if ($('#foto-subir', m.el)) {
+    $('#foto-subir', m.el).onclick = () => $('#foto-file', m.el).click();
+    $('#foto-file', m.el).onchange = ev => run(async () => {
+      const archivo = ev.target.files[0]; if (!archivo) return;
+      $('#foto-prev', m.el).innerHTML = '<div class="small muted" style="width:96px">Subiendo…</div>';
+      try { foto = await store.subirFotoProducto(id, await achicarImagen(archivo), foto); toast('Foto cargada'); } finally { pintarFoto(); ev.target.value = ''; }
+    });
+    $('#foto-quitar', m.el).onclick = () => run(async () => { if (!confirm('¿Quitar la foto?')) return; await store.quitarFotoProducto(id, foto); foto = ''; pintarFoto(); });
+  }
   const del = $('#del', m.el);
   if (del) del.onclick = () => run(async () => {
     if (!confirm(`¿Eliminar "${v.nombre}"?\n\nSi ya se vendió, compró o usó en un service, se da de baja (deja de aparecer, pero el historial se conserva) y su código de barras queda libre.`)) return;
@@ -574,7 +622,7 @@ async function productoModal(id, opts = {}) {
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el);
     if (!f.nombre || f.precio_venta === '') return toast('Completá nombre y precio de venta', true);
-    const data = { ...(id ? { id } : {}), nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, proveedor_id: f.proveedor_id ? +f.proveedor_id : null, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
+    const data = { ...(id ? { id } : {}), publicado: f.publicado, nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, proveedor_id: f.proveedor_id ? +f.proveedor_id : null, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
       precio_costo: +f.precio_costo || 0, precio_venta: +f.precio_venta || 0, stock_minimo: +f.stock_minimo || 0, es_servicio: f.es_servicio };
     data.codigo_barras = f.codigo_barras;
     if (!id) data.stock = +f.stock || 0;

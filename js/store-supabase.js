@@ -67,6 +67,30 @@ export const store = {
     return r;
   },
   async eliminarProducto(id) { return q(sb.rpc('eliminar_producto', { p_id: id })); },  // 'eliminado' | 'baja'
+
+  // Tienda online
+  async catalogoTienda() { return q(sb.rpc('catalogo_tienda')); },
+  async publicarProductos(ids, publicado) {
+    for (let i = 0; i < ids.length; i += 200) await q(sb.from('productos').update({ publicado }).in('id', ids.slice(i, i + 200)));
+  },
+  // Sube la foto (ya achicada a JPEG) y la deja asociada al producto; borra la anterior
+  async subirFotoProducto(productoId, blob, fotoAnterior = '') {
+    const ruta = `${productoId}-${Date.now()}.jpg`;
+    const { error } = await sb.storage.from('productos').upload(ruta, blob, { contentType: 'image/jpeg', upsert: true });
+    if (error) throw new Error(`No se pudo subir la foto: ${error.message}`);
+    const url = sb.storage.from('productos').getPublicUrl(ruta).data.publicUrl;
+    await q(sb.from('productos').update({ foto_url: url }).eq('id', productoId));
+    await this.borrarArchivoFoto(fotoAnterior);
+    return url;
+  },
+  async quitarFotoProducto(productoId, fotoAnterior = '') {
+    await q(sb.from('productos').update({ foto_url: '' }).eq('id', productoId));
+    await this.borrarArchivoFoto(fotoAnterior);
+  },
+  async borrarArchivoFoto(url) {
+    const ruta = (url || '').split('/storage/v1/object/public/productos/')[1];
+    if (ruta) await sb.storage.from('productos').remove([decodeURIComponent(ruta)]).catch(() => {});
+  },
   async ajustarStock(productoId, cantidad, nota) {
     await q(sb.from('stock_movimientos').insert({ producto_id: productoId, cantidad, tipo: 'ajuste', nota: nota || '' }));
   },
