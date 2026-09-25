@@ -43,3 +43,18 @@ body.tienda { background: #f4f5f7; }
   .t-precio { font-size: 1.05rem; }
   .t-det { grid-template-columns: minmax(0,1fr); }
 }
+
+/* Categorías en celular: botón + panel desde abajo (en computadora siguen los chips) */
+.t-catsm { display: none; }
+.t-catgrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+.t-cat { display: flex; flex-direction: column; align-items: center; gap: .15rem; padding: .8rem .4rem; border: 1px solid var(--line); border-radius: 10px; background: #fff; cursor: pointer; font-size: .9rem; text-align: center; }
+.t-cat.active { border-color: var(--accent); background: var(--accent-soft); font-weight: 600; }
+.t-cat-ic { font-size: 1.6rem; }
+@media (max-width: 640px) {
+  .t-cats { display: none; }
+  .t-catsm { display: flex; gap: .5rem; align-items: center; padding: .55rem 12px; background: #fff; border-bottom: 1px solid var(--line); position: sticky; top: 112px; z-index: 30; }
+  .t-catsm-btn { flex: 1; text-align: left; border: 1px solid var(--line); background: #fafbfc; border-radius: 8px; padding: .6rem .8rem; font-size: .95rem; cursor: pointer; }
+  .t-catsm-x { border: 1px solid var(--line); background: #fff; border-radius: 8px; width: 42px; height: 42px; font-size: 1.3rem; cursor: pointer; }
+  .modal-bg.sheet { align-items: flex-end; padding: 0; }
+  .modal-bg.sheet .modal { border-radius: 16px 16px 0 0; max-height: 85vh; overflow-y: auto; }
+}

@@ -19,7 +19,8 @@ const ESTADO = {
   ultimas: ['Últimas unidades', 'amber', 'Agregar'],
   encargo: ['Por encargo', 'violet', 'Encargar'],
 };
-const ICONO = { Cables: '🔌', 'Redes': '📶', 'Almacenamiento': '💾', 'Audio': '🎧', 'Gaming': '🎮', 'Energía': '🔋', 'Papel': '📄', 'Tóner': '🖨️', 'Cartuchos y tintas': '🖨️', 'Impresión': '🖨️' };
+const ICONO = { 'Cables y adaptadores': '🔌', Cables: '🔌', Redes: '📶', Almacenamiento: '💾', Audio: '🎧', 'TV y Audio': '📺', Gaming: '🎮', Energía: '🔋',
+  Papel: '📄', Tóner: '🖨️', 'Cartuchos y tintas': '🖨️', Impresión: '🖨️', Periféricos: '🖱️', Componentes: '🧩', Accesorios: '🎒' };
 const icono = p => ICONO[p.categoria] || '🖥️';
 
 let catalogo = { negocio: {}, productos: [] };
@@ -72,10 +73,23 @@ function pintar() {
   $$('.t-card').forEach(c => c.onclick = e => { if (e.target.closest('[data-add]')) return; detalle(prod(c.dataset.id)); });
   $$('[data-add]').forEach(b => b.onclick = () => agregar(+b.dataset.add, 1));
 }
+const categorias = () => [...new Set(catalogo.productos.map(p => p.categoria).filter(Boolean))].sort();
+function elegirCategoria(c) { filtro.cat = c; mostrados = POR_PAGINA; pintarCategorias(); pintar(); window.scrollTo({ top: 0, behavior: 'smooth' }); }
 function pintarCategorias() {
-  const cats = [...new Set(catalogo.productos.map(p => p.categoria).filter(Boolean))].sort();
-  $('#cats').innerHTML = [['', 'Todo'], ...cats.map(c => [c, c])].map(([k, l]) => `<button class="chip ${filtro.cat === k ? 'active' : ''}" data-c="${esc(k)}">${esc(l)}</button>`).join('');
-  $$('#cats .chip').forEach(b => b.onclick = () => { filtro.cat = b.dataset.c; mostrados = POR_PAGINA; pintarCategorias(); pintar(); window.scrollTo({ top: 0, behavior: 'smooth' }); });
+  // computadora: chips
+  $('#cats').innerHTML = [['', 'Todo'], ...categorias().map(c => [c, c])].map(([k, l]) => `<button class="chip ${filtro.cat === k ? 'active' : ''}" data-c="${esc(k)}">${esc(l)}</button>`).join('');
+  $$('#cats .chip').forEach(b => b.onclick = () => elegirCategoria(b.dataset.c));
+  // celular: botón que abre el panel de categorías
+  $('#cats-actual').textContent = filtro.cat || 'Todas';
+  $('#cats-quitar').hidden = !filtro.cat;
+}
+// Panel de categorías (celular): todas a la vista, con ícono y cantidad
+function panelCategorias() {
+  const cuenta = c => catalogo.productos.filter(p => !c || p.categoria === c).length;
+  const m = modal('Categorías', `<div class="t-catgrid">${[['', 'Todas', '🛍️'], ...categorias().map(c => [c, c, ICONO[c] || '🖥️'])].map(([k, l, ic]) =>
+    `<button class="t-cat ${filtro.cat === k ? 'active' : ''}" data-c="${esc(k)}"><span class="t-cat-ic">${ic}</span><span>${esc(l)}</span><span class="muted small">${cuenta(k)}</span></button>`).join('')}</div>`);
+  m.el.classList.add('sheet');
+  $$('.t-cat', m.el).forEach(b => b.onclick = () => { m.cerrar(); elegirCategoria(b.dataset.c); });
 }
 
 // ---------- Detalle ----------
@@ -169,5 +183,7 @@ async function iniciar() {
   $('#orden').onchange = e => { filtro.orden = e.target.value; pintar(); };
   $('#mas').onclick = () => { mostrados += POR_PAGINA; pintar(); };
   $('#carrito-btn').onclick = verCarrito;
+  $('#cats-btn').onclick = panelCategorias;
+  $('#cats-quitar').onclick = () => elegirCategoria('');
 }
 iniciar();
