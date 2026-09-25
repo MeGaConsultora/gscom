@@ -313,12 +313,13 @@ export const store = {
     db.encargos ||= [];
     db.seq.encargo_numero = (db.seq.encargo_numero || 0) + 1;
     const r = insert('encargos', { numero: db.seq.encargo_numero, fecha: now(), cliente_id: null, contacto: '', telefono: '', producto_id: null, cantidad: 1, precio: null,
-      proveedor_id: null, pedido_id: null, estado: 'pendiente', fecha_aviso: null, fecha_entrega: null, notas: '', ...e });
+      proveedor_id: null, pedido_id: null, estado: 'pendiente', fecha_aviso: null, fecha_entrega: null, notas: '', tipo: 'encargo', reservado_hasta: null, solicitud: null, ...e });
     save(); return clone(r);
   },
   async encargar(id, proveedor_id) {
     db.pedidos ||= []; db.pedido_items ||= [];
     const e = byId('encargos', id);
+    if (e.tipo === 'reserva') throw new Error('Una reserva de stock no se pide al proveedor');
     if (e.estado !== 'pendiente') throw new Error('El encargo ya fue pedido');
     let p = db.pedidos.filter(x => x.estado === 'pendiente' && (x.proveedor_id || null) === (proveedor_id || null)).pop();
     if (!p) { db.seq.pedido_numero = (db.seq.pedido_numero || 0) + 1; p = insert('pedidos', { numero: db.seq.pedido_numero, proveedor_id: proveedor_id || null, fecha: now(), estado: 'pendiente', fecha_recibido: null, notas: '' }); }

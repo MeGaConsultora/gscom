@@ -205,7 +205,7 @@ const go = h => { if (location.hash === h) render(); else location.hash = h; };
 // =====================================================================
 ROUTES.inicio = async () => {
   const [ventas, ordenes, productos, caja, clientes, encargos] = await Promise.all([store.ventas(), store.ordenes(), store.productos(), store.cajaMovimientos(), store.clientes(), store.encargos().catch(() => [])]);
-  const llegaron = encargos.filter(e => e.estado === 'recibido');
+  const llegaron = encargos.filter(listoParaRetirar);
   const cliNombre = id => clientes.find(c => c.id === id)?.nombre;
   const hoy = ventas.filter(v => !v.anulada && isToday(v.fecha));
   const totalHoy = hoy.reduce((s, v) => s + v.total, 0);
@@ -227,10 +227,10 @@ ROUTES.inicio = async () => {
       <div class="small muted" style="margin-top:.5rem">Desaparecen de acá cuando cambiás el estado de la orden (por ejemplo, a "En reparación").</div></div>` : '';
   })()}
   ${llegaron.length ? `<div class="card card-pad" style="margin-bottom:1rem;border-left:4px solid var(--accent)">
-    <h2>Encargos que llegaron <span class="badge" style="background:var(--accent)">${llegaron.length}</span> <a class="small" href="#/encargos?estado=recibido">Ver →</a></h2>
+    <h2>Encargos y reservas para retirar <span class="badge" style="background:var(--accent)">${llegaron.length}</span> <a class="small" href="#/encargos?estado=listos">Ver →</a></h2>
     ${llegaron.map(e => `<div class="row small" style="align-items:center;padding:.35rem 0;border-top:1px solid var(--line)">
-      <span><b>N° ${e.numero}</b> · ${esc(quienEncarga(e))} · ${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}${esc(e.descripcion)}</span>
-      <span class="right">${e.fecha_aviso ? '<span class="pill gray">avisado</span>' : '<span class="pill amber">sin avisar</span>'}</span></div>`).join('')}</div>` : ''}
+      <span><b>${e.tipo === 'reserva' ? 'Reserva' : 'Encargo'} N° ${e.numero}</b> · ${esc(quienEncarga(e))} · ${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}${esc(e.descripcion)}</span>
+      <span class="right">${reservaVencida(e) ? '<span class="pill red">reserva vencida</span> ' : ''}${e.fecha_aviso ? '<span class="pill gray">avisado</span>' : '<span class="pill amber">sin avisar</span>'}</span></div>`).join('')}</div>` : ''}
   <div class="grid grid-4" style="margin-bottom:1rem">
     <div class="card kpi"><div class="label">Ventas de hoy</div><div class="value">${money(totalHoy)}</div><div class="sub">${hoy.length} venta${hoy.length === 1 ? '' : 's'}</div></div>
     <div class="card kpi"><div class="label">Efectivo en caja (hoy)</div><div class="value">${money(efectivo)}</div><div class="sub">ingresos − egresos en efectivo</div></div>
@@ -269,7 +269,10 @@ const carritoVacio = () => ({ items: [], cliente_id: '', descuento: 0, forma_pag
 let cart = carritoVacio();
 
 ROUTES.vender = async ({ q }) => {
-  const [productos, clientes, cats] = await Promise.all([store.productos(), store.clientes(), store.categorias()]);
+  const [productos, clientes, cats, encargos] = await Promise.all([store.productos(), store.clientes(), store.categorias(), store.encargos().catch(() => [])]);
+  // lo reservado para OTROS clientes (si esta venta es la entrega de una reserva, esa no cuenta)
+  const reservadoOtros = pid => encargos.filter(e => e.estado === 'reservado' && e.producto_id === pid && e.id !== cart.encargoId).reduce((s, e) => s + +e.cantidad, 0);
+  const disponibleDe = i => i.stock - reservadoOtros(i.producto_id);
   if (q.get('cliente')) cart.cliente_id = q.get('cliente');
 
   view().innerHTML = `
@@ -352,7 +355,7 @@ ROUTES.vender = async ({ q }) => {
     if (!cart.items.length) box.innerHTML = '<div class="empty">Todavía no agregaste productos.</div>';
     else box.innerHTML = cart.items.map((i, n) => `
       <div class="cart-line"><div><div class="name">${esc(i.descripcion)}</div>
-        <div class="small muted">${money(i.precio_unitario)} c/u${!i.es_servicio && i.producto_id && i.cantidad > i.stock ? ` · <span style="color:var(--bad)">stock disponible: ${i.stock}</span>` : ''}</div></div>
+        <div class="small muted">${money(i.precio_unitario)} c/u${!i.es_servicio && i.producto_id && i.cantidad > disponibleDe(i) ? ` · <span style="color:var(--bad)">disponible: ${Math.max(disponibleDe(i), 0)}${reservadoOtros(i.producto_id) ? ` (${reservadoOtros(i.producto_id)} reservado/s para otros clientes)` : ''}</span>` : ''}</div></div>
         <div class="qty"><button data-m="${n}">−</button><input value="${i.cantidad}" data-q="${n}" inputmode="decimal"><button data-p="${n}">+</button></div>
         <div class="right"><b>${money(i.cantidad * i.precio_unitario)}</b></div>
         <button class="x" data-del="${n}" title="Quitar">×</button></div>`).join('');
@@ -391,8 +394,8 @@ ROUTES.vender = async ({ q }) => {
   $('#nuevo-cli').onclick = () => clienteModal(null, c => { cart.cliente_id = String(c.id); render(); });
   $('#cobrar').onclick = () => run(async () => {
     if (cart.forma_pago === CUENTA_CORRIENTE && !cart.cliente_id) return toast('Para vender a cuenta corriente elegí el cliente', true);
-    const sinStock = cart.items.filter(i => i.producto_id && !i.es_servicio && i.cantidad > i.stock);
-    if (sinStock.length && !confirm(`Hay ${sinStock.length} producto(s) sin stock suficiente según el sistema. ¿Registrar la venta igual?`)) return;
+    const sinStock = cart.items.filter(i => i.producto_id && !i.es_servicio && i.cantidad > disponibleDe(i));
+    if (sinStock.length && !confirm(`Hay ${sinStock.length} producto(s) sin stock disponible suficiente según el sistema (contando lo reservado para otros clientes). ¿Registrar la venta igual?`)) return;
     if (cart.editId) {
       // Si cambia el cliente o el total, pedir confirmación explícita con el antes y el después
       const o = cart.orig || {};
@@ -469,7 +472,8 @@ async function ventaModal(id) {
 let prodSel = new Set();
 
 ROUTES.productos = async ({ q }) => {
-  const [productos, categorias, proveedores] = await Promise.all([store.productos(), store.categorias(), store.proveedores()]);
+  const [productos, categorias, proveedores, encargos] = await Promise.all([store.productos(), store.categorias(), store.proveedores(), store.encargos().catch(() => [])]);
+  const reservados = reservasPorProducto(encargos);
   let filtro = q.get('bajo') ? 'bajo' : 'todos', texto = '', prov = q.get('prov') || '';
   const provName = id => proveedores.find(p => p.id === id)?.nombre || '';
   const aRevisar = p => (p.descripcion || '').startsWith('⚠');
@@ -498,7 +502,7 @@ ROUTES.productos = async ({ q }) => {
       <td><input type="checkbox" data-sel="${p.id}" ${prodSel.has(p.id) ? 'checked' : ''}></td>
       <td class="mono small">${esc(p.codigo_barras)}${p.codigo_interno ? ' <span class="pill blue" title="Código generado por GScom">int</span>' : ''}</td>
       <td>${esc(p.nombre)}${p.marca || p.descripcion || p.proveedor_id ? `<div class="small muted">${[p.marca, p.descripcion, provName(p.proveedor_id) && `Prov.: ${provName(p.proveedor_id)}`].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
-      <td class="num">${p.es_servicio ? '<span class="muted">—</span>' : `<span class="pill ${p.stock <= 0 ? 'red' : faltaStock(p) ? 'amber' : 'green'}">${p.stock}</span>`}</td>
+      <td class="num">${p.es_servicio ? '<span class="muted">—</span>' : `<span class="pill ${p.stock <= 0 ? 'red' : faltaStock(p) ? 'amber' : 'green'}">${p.stock}</span>${reservados.get(p.id) ? `<div class="small" style="color:#6b3fc4" title="Reservado para clientes">${reservados.get(p.id)} reserv.</div>` : ''}`}</td>
       <td class="num muted">${money(p.precio_costo)}</td><td class="num"><b>${money(p.precio_venta)}</b></td></tr>`).join('')
       || '<tr><td colspan="7" class="empty">No hay productos que coincidan.</td></tr>';
     $$('#rows tr[data-id]').forEach(tr => tr.onclick = e => { if (e.target.matches('input')) return; productoModal(+tr.dataset.id); });
@@ -1887,45 +1891,63 @@ async function detallePedido(id) {
 }
 
 // =====================================================================
-// ENCARGOS DE CLIENTES
-// Lo que un cliente nos pide conseguir. Se agrega a un pedido pendiente al
-// proveedor y su estado acompaña al del pedido.
+// ENCARGOS Y RESERVAS
+// Encargo: algo que un cliente nos pide conseguir → va a un pedido pendiente
+//   al proveedor y su estado acompaña al del pedido.
+// Reserva: algo que tenemos en stock y se aparta para el cliente → no pasa por
+//   pedidos; lo reservado se descuenta del stock DISPONIBLE (no del físico).
+// Si piden más de lo que hay, se crean una reserva y un encargo vinculados.
 // =====================================================================
 const ESTADO_ENCARGO = {
-  pendiente: ['A pedir', 'amber'], pedido: ['Pedido', 'blue'], recibido: ['Llegó', 'green'],
+  pendiente: ['A pedir', 'amber'], pedido: ['Pedido', 'blue'], recibido: ['Llegó', 'green'], reservado: ['Reservado', 'violet'],
   entregado: ['Entregado', 'gray'], cancelado: ['Cancelado', 'red'],
 };
 const pillEncargo = e => `<span class="pill ${ESTADO_ENCARGO[e][1]}">${ESTADO_ENCARGO[e][0]}</span>`;
 const quienEncarga = e => e.cliente?.nombre || e.contacto || 'Sin nombre';
 const telEncargo = e => e.cliente?.telefono || e.telefono || '';
+const listoParaRetirar = e => e.estado === 'recibido' || e.estado === 'reservado';
+const reservaVencida = e => e.estado === 'reservado' && e.reservado_hasta && e.reservado_hasta < new Date().toLocaleDateString('sv');
+// Unidades reservadas de cada producto (para calcular el stock disponible)
+const reservasPorProducto = encargos => encargos.filter(e => e.estado === 'reservado' && e.producto_id)
+  .reduce((m, e) => m.set(e.producto_id, (m.get(e.producto_id) || 0) + +e.cantidad), new Map());
 
 ROUTES.encargos = async ({ q }) => {
   const [encargos, proveedores] = await Promise.all([store.encargos(), store.proveedores()]);
   const provName = id => proveedores.find(x => x.id === id)?.nombre || 'Sin proveedor';
-  let filtro = q.get('estado') || 'activos', texto = '';
+  let filtro = q.get('estado') || 'activos', tipo = q.get('tipo') || 'todos', texto = '';
   const activo = e => !['entregado', 'cancelado'].includes(e.estado);
-  const opciones = [['activos', 'En curso', encargos.filter(activo).length], ...Object.entries(ESTADO_ENCARGO).map(([k, [l]]) => [k, l, encargos.filter(e => e.estado === k).length]), ['todos', 'Todos', encargos.length]];
+  const hermanos = e => e.solicitud ? encargos.filter(x => x.solicitud === e.solicitud && x.id !== e.id) : [];
   view().innerHTML = `
-  <div class="page-head"><h1>Encargos de clientes</h1><div class="actions"><button class="btn primary" id="nuevo">+ Nuevo encargo</button></div></div>
-  <p class="small muted" style="margin:-.6rem 0 1rem">Lo que un cliente nos pide conseguir. Cada encargo se suma al pedido pendiente de su proveedor; cuando el pedido se marca recibido, el encargo pasa a <b>Llegó</b> para avisarle al cliente.</p>
-  <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por cliente, producto o N° de encargo"></div></div>
-  <div class="chips" id="chips"></div>
+  <div class="page-head"><h1>Encargos y reservas</h1><div class="actions"><button class="btn primary" id="nuevo">+ Nuevo encargo / reserva</button></div></div>
+  <p class="small muted" style="margin:-.6rem 0 1rem"><b>Encargo:</b> algo que hay que pedirle al proveedor (se suma al pedido pendiente). <b>Reserva:</b> algo que tenemos en stock y apartamos para el cliente.
+    Cuando llega o queda reservado, se le avisa y se entrega con <b>Vender</b>.</p>
+  <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por cliente, producto o N°"></div></div>
+  <div class="chips" id="tipos"></div><div class="chips" id="chips"></div>
   <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Fecha</th><th>Quién</th><th>Qué</th><th>Proveedor / pedido</th><th>Estado</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const paint = () => {
+    const delTipo = encargos.filter(e => tipo === 'todos' || e.tipo === tipo);
+    $('#tipos').innerHTML = [['todos', 'Todo'], ['encargo', 'Encargos'], ['reserva', 'Reservas']].map(([k, l]) =>
+      `<button class="chip ${tipo === k ? 'active' : ''}" data-t="${k}">${l}<span class="count">${encargos.filter(e => k === 'todos' || e.tipo === k).length}</span></button>`).join('');
+    const opciones = [['activos', 'En curso', delTipo.filter(activo).length], ['listos', 'Para retirar', delTipo.filter(listoParaRetirar).length],
+      ...Object.entries(ESTADO_ENCARGO).map(([k, [l]]) => [k, l, delTipo.filter(e => e.estado === k).length]).filter(([, , n]) => n), ['todos', 'Todos', delTipo.length]];
     $('#chips').innerHTML = opciones.map(([k, l, n]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}<span class="count">${n}</span></button>`).join('');
+    $$('#tipos .chip').forEach(c => c.onclick = () => { tipo = c.dataset.t; paint(); });
     $$('#chips .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
-    const l = encargos.filter(e => (filtro === 'todos' || (filtro === 'activos' ? activo(e) : e.estado === filtro))
+    const l = delTipo.filter(e => (filtro === 'todos' || (filtro === 'activos' ? activo(e) : filtro === 'listos' ? listoParaRetirar(e) : e.estado === filtro))
       && (String(e.numero) === texto.replace('#', '') || matches(texto, quienEncarga(e), e.descripcion, e.notas)));
-    $('#rows').innerHTML = l.map(e => `<tr class="click" data-enc="${e.id}"><td class="mono"><b>${e.numero}</b></td><td class="nowrap">${fdate(e.fecha)}</td>
+    $('#rows').innerHTML = l.map(e => `<tr class="click" data-enc="${e.id}"><td class="mono"><b>${e.numero}</b><div class="small muted">${e.tipo === 'reserva' ? 'reserva' : 'encargo'}</div></td>
+      <td class="nowrap">${fdate(e.fecha)}</td>
       <td>${esc(quienEncarga(e))}${telEncargo(e) ? `<div class="small muted">${esc(telEncargo(e))}</div>` : ''}${!e.cliente_id ? '<div class="small muted">no es cliente</div>' : ''}</td>
-      <td>${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}${esc(e.descripcion)}${e.precio != null ? `<div class="small muted">acordado ${money(e.precio)}</div>` : ''}</td>
-      <td class="small">${esc(provName(e.proveedor_id))}${e.pedido ? `<br><a href="#/pedidos/${e.pedido.id}">Pedido N° ${e.pedido.numero}</a>` : ''}</td>
-      <td>${pillEncargo(e.estado)}${e.estado === 'recibido' && e.fecha_aviso ? '<div class="small muted">avisado</div>' : ''}</td>
-      <td class="right nowrap">${e.estado === 'recibido' ? `<button class="btn sm wa" data-avisar="${e.id}">Avisar</button> <button class="btn sm ok" data-entregar="${e.id}">Entregar</button>` : ''}
+      <td>${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}${esc(e.descripcion)}${e.precio != null ? `<div class="small muted">acordado ${money(e.precio)}</div>` : ''}
+        ${hermanos(e).map(h => `<div class="small" style="color:var(--accent)">🔗 misma solicitud: ${h.tipo === 'reserva' ? 'reserva' : 'encargo'} N° ${h.numero} (${+h.cantidad}) · ${ESTADO_ENCARGO[h.estado][0]}</div>`).join('')}</td>
+      <td class="small">${e.tipo === 'reserva' ? `<span class="muted">De stock</span>${e.reservado_hasta ? `<br>hasta ${fdate(e.reservado_hasta)}${reservaVencida(e) ? ' <span class="pill red">vencida</span>' : ''}` : ''}`
+        : `${esc(provName(e.proveedor_id))}${e.pedido ? `<br><a href="#/pedidos/${e.pedido.id}">Pedido N° ${e.pedido.numero}</a>` : ''}`}</td>
+      <td>${pillEncargo(e.estado)}${listoParaRetirar(e) && e.fecha_aviso ? '<div class="small muted">avisado</div>' : ''}</td>
+      <td class="right nowrap">${listoParaRetirar(e) ? `<button class="btn sm wa" data-avisar="${e.id}">Avisar</button> <button class="btn sm ok" data-entregar="${e.id}">Entregar</button>` : ''}
         ${e.estado === 'pendiente' ? `<button class="btn sm" data-encargar="${e.id}">Agregar a pedido</button>` : ''}</td></tr>`).join('')
-      || '<tr><td colspan="7" class="empty">No hay encargos acá.</td></tr>';
-    $$('tr[data-enc]').forEach(tr => tr.onclick = ev => { if (ev.target.closest('button, a')) return; encargoModal(encargos.find(x => x.id === +tr.dataset.enc)); });
-    $$('[data-avisar]').forEach(b => b.onclick = () => avisarEncargo(encargos.find(x => x.id === +b.dataset.avisar)));
+      || '<tr><td colspan="7" class="empty">No hay nada acá.</td></tr>';
+    $$('tr[data-enc]').forEach(tr => tr.onclick = ev => { if (ev.target.closest('button, a')) return; run(() => encargoModal(encargos.find(x => x.id === +tr.dataset.enc))); });
+    $$('[data-avisar]').forEach(b => b.onclick = () => { const e = encargos.find(x => x.id === +b.dataset.avisar); avisarEncargo(e, hermanos(e)); });
     $$('[data-entregar]').forEach(b => b.onclick = () => entregarEncargo(encargos.find(x => x.id === +b.dataset.entregar)));
     $$('[data-encargar]').forEach(b => b.onclick = () => agregarAPedidoModal(encargos.find(x => x.id === +b.dataset.encargar), proveedores));
   };
@@ -1934,14 +1956,19 @@ ROUTES.encargos = async ({ q }) => {
   paint();
 };
 
-// Alta y edición de un encargo
+// Alta y edición. Al dar de alta un producto con stock disponible se puede reservar;
+// si piden más de lo disponible, se reserva lo que hay y se encarga el resto.
 async function encargoModal(e) {
-  const [clientes, productos, proveedores, cats] = await Promise.all([store.clientes(), store.productos(), store.proveedores(), store.categorias()]);
+  const [clientes, productos, proveedores, cats, encargos] = await Promise.all([store.clientes(), store.productos(), store.proveedores(), store.categorias(), store.encargos()]);
   const nuevo = !e, editable = nuevo || e.estado === 'pendiente';
-  const v = e || { cliente_id: null, contacto: '', telefono: '', producto_id: null, descripcion: '', cantidad: 1, precio: null, proveedor_id: null, notas: '' };
+  const esReserva = !nuevo && e.tipo === 'reserva';
+  const v = e || { cliente_id: null, contacto: '', telefono: '', producto_id: null, descripcion: '', cantidad: 1, precio: null, proveedor_id: null, notas: '', reservado_hasta: null };
+  const reservados = reservasPorProducto(encargos);
+  const disponible = p => p ? Math.max(+p.stock - (reservados.get(p.id) || 0), 0) : 0;
   let productoId = v.producto_id;
   const opcProv = sel => `<option value="">— Sin proveedor —</option>${proveedores.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}`;
-  const m = modal(nuevo ? 'Nuevo encargo' : `Encargo N° ${e.numero}`, `
+  const titulo = nuevo ? 'Nuevo encargo / reserva' : `${esReserva ? 'Reserva' : 'Encargo'} N° ${e.numero}`;
+  const m = modal(titulo, `
     ${!nuevo ? `<div style="margin-bottom:.8rem">${pillEncargo(e.estado)} <span class="small muted">· ${fdatetime(e.fecha)}${e.pedido ? ` · <a href="#/pedidos/${e.pedido.id}" data-close>Pedido N° ${e.pedido.numero}</a>` : ''}</span></div>` : ''}
     <div class="field"><label>¿Quién lo pide?</label><select class="input" name="cliente_id" ${editable ? '' : 'disabled'}>
       <option value="">— No es cliente (cargar nombre y teléfono) —</option>
@@ -1953,21 +1980,48 @@ async function encargoModal(e) {
       <div class="small" id="prodinfo" style="margin-top:.3rem"></div></div>
     <div class="row"><div class="field"><label>Cantidad</label><input class="input" type="number" min="1" step="any" name="cantidad" value="${+v.cantidad}" ${editable ? '' : 'disabled'}></div>
       <div class="field"><label>Precio acordado (opcional)</label><input class="input" type="number" min="0" step="any" name="precio" value="${v.precio ?? ''}"></div>
-      <div class="field"><label>Proveedor</label><select class="input" name="proveedor_id" ${editable ? '' : 'disabled'}>${opcProv(v.proveedor_id)}</select></div></div>
+      <div class="field" id="f-prov" ${esReserva ? 'hidden' : ''}><label>Proveedor (si hay que pedirlo)</label><select class="input" name="proveedor_id" ${editable ? '' : 'disabled'}>${opcProv(v.proveedor_id)}</select></div></div>
+    ${nuevo ? `<div id="reservar-box" class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem" hidden>
+      <label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" id="reservar" checked> <b>Reservar del stock</b> <span id="disp" class="muted"></span></label>
+      <div class="small" id="reparto" style="margin:.4rem 0 .2rem"></div>
+      <div class="field" style="margin:.5rem 0 0;max-width:220px"><label>Reservado hasta (opcional)</label><input class="input" type="date" name="reservado_hasta"></div></div>` : ''}
+    ${esReserva ? `<div class="field" style="max-width:220px"><label>Reservado hasta (opcional)</label><input class="input" type="date" name="reservado_hasta" value="${v.reservado_hasta || ''}"></div>` : ''}
     <div class="field"><label>Notas internas</label><input class="input" name="notas" value="${esc(v.notas)}" placeholder="ej: lo necesita antes del lunes · dejó seña"></div>`,
-    `${!nuevo && !['entregado', 'cancelado'].includes(e.estado) ? '<button class="btn danger" id="cancelar" style="margin-right:auto">Cancelar encargo</button>' : ''}
-     <button class="btn" data-close>Cerrar</button><button class="btn primary" id="ok">${nuevo ? 'Guardar y agregar al pedido' : 'Guardar'}</button>`, { wide: true });
+    `${!nuevo && !['entregado', 'cancelado'].includes(e.estado) ? `<button class="btn danger" id="cancelar" style="margin-right:auto">${esReserva ? 'Liberar reserva' : 'Cancelar encargo'}</button>` : ''}
+     <button class="btn" data-close>Cerrar</button><button class="btn primary" id="ok">${nuevo ? 'Guardar' : 'Guardar cambios'}</button>`, { wide: true });
 
-  const selCli = $('[name=cliente_id]', m.el), inpDesc = $('[name=descripcion]', m.el), s = $('#s', m.el), selProv = $('[name=proveedor_id]', m.el);
+  const selCli = $('[name=cliente_id]', m.el), inpDesc = $('[name=descripcion]', m.el), s = $('#s', m.el), selProv = $('[name=proveedor_id]', m.el), inpCant = $('[name=cantidad]', m.el);
   const pintarContacto = () => $('#contacto', m.el).hidden = !!selCli.value;
   selCli.onchange = pintarContacto; pintarContacto();
+
+  // Reparto entre reserva (lo disponible) y encargo (lo que falta)
+  const reparto = () => {
+    const p = productos.find(x => x.id === productoId), cant = +inpCant.value || 1;
+    const quiereReservar = nuevo && p && disponible(p) > 0 && $('#reservar', m.el)?.checked;
+    const r = quiereReservar ? Math.min(cant, disponible(p)) : 0;
+    return { p, cant, reservar: r, encargar: cant - r };
+  };
+  const pintarReparto = () => {
+    if (!nuevo) return;
+    const { p, reservar, encargar } = reparto();
+    const box = $('#reservar-box', m.el), d = p ? disponible(p) : 0;
+    box.hidden = !(p && d > 0);
+    if (p) $('#disp', m.el).textContent = `· hay ${d} disponible(s)${reservados.get(p.id) ? ` (${p.stock} en stock, ${reservados.get(p.id)} ya reservado(s))` : ''}`;
+    $('#reparto', m.el).innerHTML = !reservar ? 'Se encarga todo al proveedor.'
+      : !encargar ? `Se <b>reservan ${reservar}</b> del stock. No pasa por Pedidos.`
+      : `Se <b>reservan ${reservar}</b> del stock y se <b>encargan ${encargar}</b> al proveedor (quedan vinculados).`;
+    $('#f-prov', m.el).hidden = !!reservar && !encargar;
+    $('#ok', m.el).textContent = !reservar ? 'Guardar y agregar al pedido' : !encargar ? 'Guardar reserva' : 'Guardar reserva y encargo';
+  };
   const pintarProd = () => {
     const p = productos.find(x => x.id === productoId);
-    $('#prodinfo', m.el).innerHTML = p ? `✓ Producto de la base: <b>${esc(p.nombre)}</b> · stock ${p.stock} · venta ${money(p.precio_venta)}${editable ? ' <a href="#" id="soltar">(no es este)</a>' : ''}`
-      : '<span class="muted">Producto nuevo (no está en la base): se pide con esta descripción.</span>';
+    $('#prodinfo', m.el).innerHTML = p ? `✓ Producto de la base: <b>${esc(p.nombre)}</b> · stock ${p.stock}${reservados.get(p.id) ? ` (${reservados.get(p.id)} reservado/s)` : ''} · venta ${money(p.precio_venta)}${editable ? ' <a href="#" id="soltar">(no es este)</a>' : ''}`
+      : '<span class="muted">Producto nuevo (no está en la base): se pide al proveedor con esta descripción.</span>';
     const sol = $('#soltar', m.el); if (sol) sol.onclick = ev => { ev.preventDefault(); productoId = null; pintarProd(); };
+    pintarReparto();
   };
   pintarProd();
+  if (nuevo) { inpCant.oninput = pintarReparto; $('#reservar', m.el).onchange = pintarReparto; }
   if (editable) {
     inpDesc.oninput = () => {
       productoId = null; pintarProd();
@@ -1988,25 +2042,41 @@ async function encargoModal(e) {
 
   const can = $('#cancelar', m.el);
   if (can) can.onclick = () => run(async () => {
-    if (!confirm(`¿Cancelar el encargo N° ${e.numero}?${e.estado === 'pedido' ? '\n\nSi el pedido todavía está pendiente, se lo quita de ese pedido.' : ''}`)) return;
-    await store.cancelarEncargo(e.id); m.close(); toast('Encargo cancelado'); render();
+    const msg = esReserva ? `¿Liberar la reserva N° ${e.numero}? Las unidades vuelven a estar disponibles.`
+      : `¿Cancelar el encargo N° ${e.numero}?${e.estado === 'pedido' ? '\n\nSi el pedido todavía está pendiente, se lo quita de ese pedido.' : ''}`;
+    if (!confirm(msg)) return;
+    await store.cancelarEncargo(e.id); m.close(); toast(esReserva ? 'Reserva liberada' : 'Encargo cancelado'); render();
   });
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el);
     const datos = { precio: f.precio === '' ? null : +f.precio, notas: f.notas };
+    if (esReserva) datos.reservado_hasta = f.reservado_hasta || null;
     if (editable) {
       if (!f.cliente_id && !f.contacto) return toast('Elegí el cliente o cargá el nombre de quién lo pide', true);
       if (!f.descripcion) return toast('Describí qué pide', true);
       Object.assign(datos, { cliente_id: f.cliente_id ? +f.cliente_id : null, contacto: f.cliente_id ? '' : f.contacto, telefono: f.cliente_id ? '' : f.telefono,
         producto_id: productoId, descripcion: f.descripcion, cantidad: +f.cantidad || 1, proveedor_id: f.proveedor_id ? +f.proveedor_id : null });
     }
-    if (!nuevo) { await store.actualizarEncargo(e.id, datos); m.close(); toast('Encargo actualizado'); return render(); }
-    const enc = await store.crearEncargo(datos);
-    const pedidoId = await store.encargar(enc.id, datos.proveedor_id);
+    if (!nuevo) { await store.actualizarEncargo(e.id, datos); m.close(); toast('Guardado'); return render(); }
+
+    const { reservar, encargar } = reparto();
+    const solicitud = reservar && encargar ? (crypto.randomUUID ? crypto.randomUUID() : null) : null;
+    let reserva = null, encargo = null, pedidoId = null;
+    if (reservar) reserva = await store.crearEncargo({ ...datos, tipo: 'reserva', estado: 'reservado', cantidad: reservar, proveedor_id: null,
+      reservado_hasta: f.reservado_hasta || null, solicitud });
+    if (encargar) {
+      encargo = await store.crearEncargo({ ...datos, tipo: 'encargo', cantidad: encargar, solicitud });
+      pedidoId = await store.encargar(encargo.id, datos.proveedor_id);
+    }
     m.close();
-    const ped = await store.pedido(pedidoId);
-    toast(`Encargo N° ${enc.numero} agregado al pedido N° ${ped.numero}`);
-    go(`#/pedidos/${pedidoId}`);
+    if (pedidoId) {
+      const ped = await store.pedido(pedidoId);
+      toast(`${reserva ? `Reserva N° ${reserva.numero} (${reservar}) y encargo` : 'Encargo'} N° ${encargo.numero} agregado al pedido N° ${ped.numero}`);
+      go(`#/pedidos/${pedidoId}`);
+    } else {
+      toast(`Reserva N° ${reserva.numero}: ${reservar} unidad(es) apartada(s)`);
+      go('#/encargos?tipo=reserva'); if (parseHash().name === 'encargos') render();
+    }
   });
 }
 
@@ -2024,11 +2094,17 @@ function agregarAPedidoModal(e, proveedores) {
   });
 }
 
-function avisarEncargo(e) {
+function avisarEncargo(e, hermanos = []) {
   const tel = telEncargo(e);
-  if (!tel) return toast('Este encargo no tiene teléfono cargado', true);
+  if (!tel) return toast('No tiene teléfono cargado', true);
   const nombre = (e.cliente?.nombre ? e.cliente.nombre.split(',').pop() : e.contacto).trim().split(' ')[0];
-  const texto = `Hola ${nombre}! Te escribimos de GScom: ya llegó lo que nos encargaste (${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}${e.descripcion}). Podés pasar a retirarlo cuando quieras.`;
+  const que = `${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}${e.descripcion}`;
+  const faltan = hermanos.filter(h => ['pendiente', 'pedido'].includes(h.estado)).reduce((s, h) => s + +h.cantidad, 0);
+  const total = +e.cantidad + faltan;
+  let texto = e.tipo === 'reserva'
+    ? `Hola ${nombre}! Te escribimos de GScom: te reservamos ${que}${e.reservado_hasta ? ` hasta el ${fdate(e.reservado_hasta)}` : ''}. Podés pasar a retirarlo cuando quieras.`
+    : `Hola ${nombre}! Te escribimos de GScom: ya llegó lo que nos encargaste (${que}). Podés pasar a retirarlo cuando quieras.`;
+  if (faltan) texto += ` Ya tenemos ${+e.cantidad} de las ${total}; las otras ${faltan} llegan cuando entre el pedido.`;
   window.open(waLink(tel, texto), '_blank', 'noopener');
   store.actualizarEncargo(e.id, { fecha_aviso: new Date().toISOString() }).then(() => render()).catch(() => {});
 }
@@ -2036,16 +2112,16 @@ function avisarEncargo(e) {
 // Entregar: si el producto está en la base, se abre Vender con todo cargado (al cobrar queda entregado);
 // si no, se marca entregado directamente.
 function entregarEncargo(e) {
-  const m = modal(`Entregar encargo N° ${e.numero}`, `
+  const m = modal(`Entregar ${e.tipo === 'reserva' ? 'reserva' : 'encargo'} N° ${e.numero}`, `
     <p>${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}<b>${esc(e.descripcion)}</b> · ${esc(quienEncarga(e))}${e.precio != null ? ` · acordado ${money(e.precio)}` : ''}</p>
-    <p class="small muted" style="margin-top:.6rem">${e.producto_id ? '<b>Vender</b> abre la pantalla de venta con el producto y el cliente cargados; al cobrar, el encargo queda entregado.'
+    <p class="small muted" style="margin-top:.6rem">${e.producto_id ? '<b>Vender</b> abre la pantalla de venta con el producto y el cliente cargados; al cobrar, queda entregado.'
       : 'Es un producto que no está en la base: podés venderlo como ítem manual, o solo marcarlo como entregado.'}</p>`,
     `<button class="btn" data-close>Cancelar</button><button class="btn" id="solo">Solo marcar entregado</button><button class="btn ok" id="vender">Vender</button>`);
-  $('#solo', m.el).onclick = () => run(async () => { await store.actualizarEncargo(e.id, { estado: 'entregado', fecha_entrega: new Date().toISOString() }); m.close(); toast('Encargo entregado'); render(); });
+  $('#solo', m.el).onclick = () => run(async () => { await store.actualizarEncargo(e.id, { estado: 'entregado', fecha_entrega: new Date().toISOString() }); m.close(); toast('Entregado'); render(); });
   $('#vender', m.el).onclick = () => run(async () => {
-    if (cart.items.length && !confirm('Tenés una venta en curso en "Vender". ¿Reemplazarla por este encargo?')) return;
+    if (cart.items.length && !confirm('Tenés una venta en curso en "Vender". ¿Reemplazarla por esto?')) return;
     const p = e.producto_id ? (await store.productos()).find(x => x.id === e.producto_id) : null;
-    cart = { ...carritoVacio(), cliente_id: e.cliente_id ? String(e.cliente_id) : '', notas: `Encargo N° ${e.numero}${!e.cliente_id && e.contacto ? ` · ${e.contacto}` : ''}`, encargoId: e.id,
+    cart = { ...carritoVacio(), cliente_id: e.cliente_id ? String(e.cliente_id) : '', notas: `${e.tipo === 'reserva' ? 'Reserva' : 'Encargo'} N° ${e.numero}${!e.cliente_id && e.contacto ? ` · ${e.contacto}` : ''}`, encargoId: e.id,
       items: [{ producto_id: p?.id || null, descripcion: p?.nombre || e.descripcion, cantidad: +e.cantidad, precio_unitario: e.precio ?? p?.precio_venta ?? 0, stock: p?.stock ?? 0, es_servicio: !p }] };
     m.close(); go('#/vender');
   });
