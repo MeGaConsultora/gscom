@@ -123,7 +123,7 @@ function waLink(telefono, texto) {
 // Router
 // =====================================================================
 const NAV = [
-  ['inicio', 'Inicio'], ['vender', 'Vender'], ['service', 'Service'], ['productos', 'Productos'], ['pedidos', 'Pedidos'],
+  ['inicio', 'Inicio'], ['vender', 'Vender'], ['service', 'Service'], ['productos', 'Productos'], ['pedidos', 'Pedidos'], ['encargos', 'Encargos'],
   ['clientes', 'Clientes'], ['fichero', 'Fichero'], ['caja', 'Caja'], ['compras', 'Compras'], ['proveedores', 'Proveedores'],
   ['reportes', 'Reportes'], ['ajustes', 'Ajustes'],
 ];
@@ -204,7 +204,8 @@ const go = h => { if (location.hash === h) render(); else location.hash = h; };
 // INICIO
 // =====================================================================
 ROUTES.inicio = async () => {
-  const [ventas, ordenes, productos, caja, clientes] = await Promise.all([store.ventas(), store.ordenes(), store.productos(), store.cajaMovimientos(), store.clientes()]);
+  const [ventas, ordenes, productos, caja, clientes, encargos] = await Promise.all([store.ventas(), store.ordenes(), store.productos(), store.cajaMovimientos(), store.clientes(), store.encargos().catch(() => [])]);
+  const llegaron = encargos.filter(e => e.estado === 'recibido');
   const cliNombre = id => clientes.find(c => c.id === id)?.nombre;
   const hoy = ventas.filter(v => !v.anulada && isToday(v.fecha));
   const totalHoy = hoy.reduce((s, v) => s + v.total, 0);
@@ -225,6 +226,11 @@ ROUTES.inicio = async () => {
         <span class="right">${money(o.presupuesto)} ${respuestaPresu(o)}</span></div>`).join('')}
       <div class="small muted" style="margin-top:.5rem">Desaparecen de acá cuando cambiás el estado de la orden (por ejemplo, a "En reparación").</div></div>` : '';
   })()}
+  ${llegaron.length ? `<div class="card card-pad" style="margin-bottom:1rem;border-left:4px solid var(--accent)">
+    <h2>Encargos que llegaron <span class="badge" style="background:var(--accent)">${llegaron.length}</span> <a class="small" href="#/encargos?estado=recibido">Ver →</a></h2>
+    ${llegaron.map(e => `<div class="row small" style="align-items:center;padding:.35rem 0;border-top:1px solid var(--line)">
+      <span><b>N° ${e.numero}</b> · ${esc(quienEncarga(e))} · ${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}${esc(e.descripcion)}</span>
+      <span class="right">${e.fecha_aviso ? '<span class="pill gray">avisado</span>' : '<span class="pill amber">sin avisar</span>'}</span></div>`).join('')}</div>` : ''}
   <div class="grid grid-4" style="margin-bottom:1rem">
     <div class="card kpi"><div class="label">Ventas de hoy</div><div class="value">${money(totalHoy)}</div><div class="sub">${hoy.length} venta${hoy.length === 1 ? '' : 's'}</div></div>
     <div class="card kpi"><div class="label">Efectivo en caja (hoy)</div><div class="value">${money(efectivo)}</div><div class="sub">ingresos − egresos en efectivo</div></div>
@@ -402,6 +408,8 @@ ROUTES.vender = async ({ q }) => {
       toast('Venta actualizada'); go('#/caja'); return;
     }
     const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago, notas: (cart.notas || '').trim() });
+    // Si la venta salió de un encargo, queda entregado
+    if (cart.encargoId) await store.actualizarEncargo(cart.encargoId, { estado: 'entregado', fecha_entrega: new Date().toISOString() }).catch(() => toast('La venta se registró, pero no se pudo marcar el encargo como entregado', true));
     cart = carritoVacio();
     const m = modal(`Venta #${v.numero} registrada`, `<div class="empty" style="padding:1rem"><div class="total-box">${money(v.total)}</div><div class="muted">${esc(v.forma_pago)}</div></div>`,
       `<button class="btn" id="imp">Imprimir comprobante</button><button class="btn primary" data-close>Nueva venta</button>`);
@@ -1805,11 +1813,12 @@ async function nuevoPedido() {
 }
 
 async function detallePedido(id) {
-  const [p, proveedores, productos] = await Promise.all([store.pedido(id), store.proveedores(), store.productos()]);
+  const [p, proveedores, productos, encargos] = await Promise.all([store.pedido(id), store.proveedores(), store.productos(), store.encargosDePedido(id).catch(() => [])]);
   if (!p) { view().innerHTML = '<div class="empty">Pedido no encontrado</div>'; return; }
   const provName = pid => proveedores.find(x => x.id === pid)?.nombre || 'Sin proveedor';
   const pendiente = p.estado === 'pendiente';
   const items = p.items.map(i => ({ ...i }));
+  const deEncargo = i => { const e = i.encargo_id && encargos.find(x => x.id === i.encargo_id); return e ? `<div class="small" style="color:var(--accent)">📌 Encargo N° ${e.numero} · ${esc(e.cliente?.nombre || e.contacto || 'sin nombre')}</div>` : ''; };
   view().innerHTML = `
   <div class="page-head"><div><a href="#/pedidos" class="small muted">← Pedidos</a><h1>Pedido N° ${p.numero} ${pillPedido(p.estado)}</h1></div>
     <div class="actions">
@@ -1828,7 +1837,7 @@ async function detallePedido(id) {
   </div>`;
   const stockDe = pid => productos.find(x => x.id === pid)?.stock ?? '—';
   const paint = () => {
-    $('#items').innerHTML = items.map((i, k) => `<tr><td class="mono small">${esc(i.codigo)}</td><td>${esc(i.descripcion)}</td><td class="num muted">${stockDe(i.producto_id)}</td>
+    $('#items').innerHTML = items.map((i, k) => `<tr><td class="mono small">${esc(i.codigo)}</td><td>${esc(i.descripcion)}${deEncargo(i)}</td><td class="num muted">${stockDe(i.producto_id)}</td>
       <td class="num">${pendiente ? `<input class="input" type="number" min="0" step="any" value="${+i.cantidad}" data-cant="${k}">` : `<b>${+i.cantidad}</b>`}</td>
       ${pendiente ? `<td><button class="x" data-del="${k}" title="Quitar">×</button></td>` : ''}</tr>`).join('') || '<tr><td colspan="5" class="empty">Sin productos.</td></tr>';
     const cambio = () => { const g = $('#guardar-items'); if (g) g.hidden = false; };
@@ -1859,7 +1868,7 @@ async function detallePedido(id) {
   if (pendiente) {
     $('#guardar-items').onclick = () => run(async () => {
       if (!items.some(i => +i.cantidad > 0)) return toast('El pedido tiene que tener al menos un producto', true);
-      await store.actualizarItemsPedido(id, items.map(({ producto_id, descripcion, codigo, cantidad }) => ({ producto_id, descripcion, codigo, cantidad: +cantidad })));
+      await store.actualizarItemsPedido(id, items.map(({ producto_id, descripcion, codigo, cantidad, encargo_id }) => ({ producto_id, descripcion, codigo, cantidad: +cantidad, encargo_id: encargo_id || null })));
       toast('Pedido actualizado'); render();
     });
     $('#recibido').onclick = () => { if (confirm(`¿Marcar el pedido N° ${p.numero} como recibido?\n\nRecordá que el stock se carga en Compras → Ingresar mercadería.`)) estado({ estado: 'recibido', fecha_recibido: new Date().toISOString() }, 'Pedido recibido'); };
@@ -1875,6 +1884,171 @@ async function detallePedido(id) {
   } else {
     $('#reabrir').onclick = () => estado({ estado: 'pendiente', fecha_recibido: null }, 'Pedido pendiente otra vez');
   }
+}
+
+// =====================================================================
+// ENCARGOS DE CLIENTES
+// Lo que un cliente nos pide conseguir. Se agrega a un pedido pendiente al
+// proveedor y su estado acompaña al del pedido.
+// =====================================================================
+const ESTADO_ENCARGO = {
+  pendiente: ['A pedir', 'amber'], pedido: ['Pedido', 'blue'], recibido: ['Llegó', 'green'],
+  entregado: ['Entregado', 'gray'], cancelado: ['Cancelado', 'red'],
+};
+const pillEncargo = e => `<span class="pill ${ESTADO_ENCARGO[e][1]}">${ESTADO_ENCARGO[e][0]}</span>`;
+const quienEncarga = e => e.cliente?.nombre || e.contacto || 'Sin nombre';
+const telEncargo = e => e.cliente?.telefono || e.telefono || '';
+
+ROUTES.encargos = async ({ q }) => {
+  const [encargos, proveedores] = await Promise.all([store.encargos(), store.proveedores()]);
+  const provName = id => proveedores.find(x => x.id === id)?.nombre || 'Sin proveedor';
+  let filtro = q.get('estado') || 'activos', texto = '';
+  const activo = e => !['entregado', 'cancelado'].includes(e.estado);
+  const opciones = [['activos', 'En curso', encargos.filter(activo).length], ...Object.entries(ESTADO_ENCARGO).map(([k, [l]]) => [k, l, encargos.filter(e => e.estado === k).length]), ['todos', 'Todos', encargos.length]];
+  view().innerHTML = `
+  <div class="page-head"><h1>Encargos de clientes</h1><div class="actions"><button class="btn primary" id="nuevo">+ Nuevo encargo</button></div></div>
+  <p class="small muted" style="margin:-.6rem 0 1rem">Lo que un cliente nos pide conseguir. Cada encargo se suma al pedido pendiente de su proveedor; cuando el pedido se marca recibido, el encargo pasa a <b>Llegó</b> para avisarle al cliente.</p>
+  <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por cliente, producto o N° de encargo"></div></div>
+  <div class="chips" id="chips"></div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Fecha</th><th>Quién</th><th>Qué</th><th>Proveedor / pedido</th><th>Estado</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  const paint = () => {
+    $('#chips').innerHTML = opciones.map(([k, l, n]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}<span class="count">${n}</span></button>`).join('');
+    $$('#chips .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
+    const l = encargos.filter(e => (filtro === 'todos' || (filtro === 'activos' ? activo(e) : e.estado === filtro))
+      && (String(e.numero) === texto.replace('#', '') || matches(texto, quienEncarga(e), e.descripcion, e.notas)));
+    $('#rows').innerHTML = l.map(e => `<tr class="click" data-enc="${e.id}"><td class="mono"><b>${e.numero}</b></td><td class="nowrap">${fdate(e.fecha)}</td>
+      <td>${esc(quienEncarga(e))}${telEncargo(e) ? `<div class="small muted">${esc(telEncargo(e))}</div>` : ''}${!e.cliente_id ? '<div class="small muted">no es cliente</div>' : ''}</td>
+      <td>${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}${esc(e.descripcion)}${e.precio != null ? `<div class="small muted">acordado ${money(e.precio)}</div>` : ''}</td>
+      <td class="small">${esc(provName(e.proveedor_id))}${e.pedido ? `<br><a href="#/pedidos/${e.pedido.id}">Pedido N° ${e.pedido.numero}</a>` : ''}</td>
+      <td>${pillEncargo(e.estado)}${e.estado === 'recibido' && e.fecha_aviso ? '<div class="small muted">avisado</div>' : ''}</td>
+      <td class="right nowrap">${e.estado === 'recibido' ? `<button class="btn sm wa" data-avisar="${e.id}">Avisar</button> <button class="btn sm ok" data-entregar="${e.id}">Entregar</button>` : ''}
+        ${e.estado === 'pendiente' ? `<button class="btn sm" data-encargar="${e.id}">Agregar a pedido</button>` : ''}</td></tr>`).join('')
+      || '<tr><td colspan="7" class="empty">No hay encargos acá.</td></tr>';
+    $$('tr[data-enc]').forEach(tr => tr.onclick = ev => { if (ev.target.closest('button, a')) return; encargoModal(encargos.find(x => x.id === +tr.dataset.enc)); });
+    $$('[data-avisar]').forEach(b => b.onclick = () => avisarEncargo(encargos.find(x => x.id === +b.dataset.avisar)));
+    $$('[data-entregar]').forEach(b => b.onclick = () => entregarEncargo(encargos.find(x => x.id === +b.dataset.entregar)));
+    $$('[data-encargar]').forEach(b => b.onclick = () => agregarAPedidoModal(encargos.find(x => x.id === +b.dataset.encargar), proveedores));
+  };
+  $('#buscar').oninput = e => { texto = e.target.value.trim(); paint(); };
+  $('#nuevo').onclick = () => run(() => encargoModal(null));
+  paint();
+};
+
+// Alta y edición de un encargo
+async function encargoModal(e) {
+  const [clientes, productos, proveedores, cats] = await Promise.all([store.clientes(), store.productos(), store.proveedores(), store.categorias()]);
+  const nuevo = !e, editable = nuevo || e.estado === 'pendiente';
+  const v = e || { cliente_id: null, contacto: '', telefono: '', producto_id: null, descripcion: '', cantidad: 1, precio: null, proveedor_id: null, notas: '' };
+  let productoId = v.producto_id;
+  const opcProv = sel => `<option value="">— Sin proveedor —</option>${proveedores.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}`;
+  const m = modal(nuevo ? 'Nuevo encargo' : `Encargo N° ${e.numero}`, `
+    ${!nuevo ? `<div style="margin-bottom:.8rem">${pillEncargo(e.estado)} <span class="small muted">· ${fdatetime(e.fecha)}${e.pedido ? ` · <a href="#/pedidos/${e.pedido.id}" data-close>Pedido N° ${e.pedido.numero}</a>` : ''}</span></div>` : ''}
+    <div class="field"><label>¿Quién lo pide?</label><select class="input" name="cliente_id" ${editable ? '' : 'disabled'}>
+      <option value="">— No es cliente (cargar nombre y teléfono) —</option>
+      ${clientes.map(c => `<option value="${c.id}" ${c.id === v.cliente_id ? 'selected' : ''}>${esc(c.nombre)}${c.telefono ? ' — ' + esc(c.telefono) : ''}</option>`).join('')}</select></div>
+    <div class="row" id="contacto"><div class="field"><label>Nombre / empresa</label><input class="input" name="contacto" value="${esc(v.contacto)}" ${editable ? '' : 'disabled'}></div>
+      <div class="field"><label>Teléfono (WhatsApp)</label><input class="input" name="telefono" value="${esc(v.telefono)}" ${editable ? '' : 'disabled'}></div></div>
+    <div class="field"><label>¿Qué pide? <span class="muted">(buscá un producto de la base, o escribí la descripción si es algo nuevo)</span></label>
+      <div class="search" style="position:relative"><input class="input" name="descripcion" value="${esc(v.descripcion)}" autocomplete="off" ${editable ? '' : 'disabled'}><div class="suggest" id="s" hidden></div></div>
+      <div class="small" id="prodinfo" style="margin-top:.3rem"></div></div>
+    <div class="row"><div class="field"><label>Cantidad</label><input class="input" type="number" min="1" step="any" name="cantidad" value="${+v.cantidad}" ${editable ? '' : 'disabled'}></div>
+      <div class="field"><label>Precio acordado (opcional)</label><input class="input" type="number" min="0" step="any" name="precio" value="${v.precio ?? ''}"></div>
+      <div class="field"><label>Proveedor</label><select class="input" name="proveedor_id" ${editable ? '' : 'disabled'}>${opcProv(v.proveedor_id)}</select></div></div>
+    <div class="field"><label>Notas internas</label><input class="input" name="notas" value="${esc(v.notas)}" placeholder="ej: lo necesita antes del lunes · dejó seña"></div>`,
+    `${!nuevo && !['entregado', 'cancelado'].includes(e.estado) ? '<button class="btn danger" id="cancelar" style="margin-right:auto">Cancelar encargo</button>' : ''}
+     <button class="btn" data-close>Cerrar</button><button class="btn primary" id="ok">${nuevo ? 'Guardar y agregar al pedido' : 'Guardar'}</button>`, { wide: true });
+
+  const selCli = $('[name=cliente_id]', m.el), inpDesc = $('[name=descripcion]', m.el), s = $('#s', m.el), selProv = $('[name=proveedor_id]', m.el);
+  const pintarContacto = () => $('#contacto', m.el).hidden = !!selCli.value;
+  selCli.onchange = pintarContacto; pintarContacto();
+  const pintarProd = () => {
+    const p = productos.find(x => x.id === productoId);
+    $('#prodinfo', m.el).innerHTML = p ? `✓ Producto de la base: <b>${esc(p.nombre)}</b> · stock ${p.stock} · venta ${money(p.precio_venta)}${editable ? ' <a href="#" id="soltar">(no es este)</a>' : ''}`
+      : '<span class="muted">Producto nuevo (no está en la base): se pide con esta descripción.</span>';
+    const sol = $('#soltar', m.el); if (sol) sol.onclick = ev => { ev.preventDefault(); productoId = null; pintarProd(); };
+  };
+  pintarProd();
+  if (editable) {
+    inpDesc.oninput = () => {
+      productoId = null; pintarProd();
+      const t = inpDesc.value.trim(); if (!t) { s.hidden = true; return; }
+      const r = buscarProductos(productos, cats, t, p => !p.es_servicio);
+      s.hidden = !r.length;
+      s.innerHTML = r.map(p => `<div data-id="${p.id}">${prodSugHTML(p, cats, { costo: true })}</div>`).join('') + masResultados(r);
+      $$('[data-id]', s).forEach(x => x.onmousedown = ev => {
+        ev.preventDefault(); const p = productos.find(y => y.id === +x.dataset.id);
+        productoId = p.id; inpDesc.value = p.nombre; s.hidden = true;
+        if (p.proveedor_id && !selProv.value) selProv.value = p.proveedor_id;   // proveedor habitual por defecto
+        if ($('[name=precio]', m.el).value === '') $('[name=precio]', m.el).value = p.precio_venta;
+        pintarProd();
+      });
+    };
+    inpDesc.onblur = () => setTimeout(() => s.hidden = true, 150);
+  }
+
+  const can = $('#cancelar', m.el);
+  if (can) can.onclick = () => run(async () => {
+    if (!confirm(`¿Cancelar el encargo N° ${e.numero}?${e.estado === 'pedido' ? '\n\nSi el pedido todavía está pendiente, se lo quita de ese pedido.' : ''}`)) return;
+    await store.cancelarEncargo(e.id); m.close(); toast('Encargo cancelado'); render();
+  });
+  $('#ok', m.el).onclick = () => run(async () => {
+    const f = formData(m.el);
+    const datos = { precio: f.precio === '' ? null : +f.precio, notas: f.notas };
+    if (editable) {
+      if (!f.cliente_id && !f.contacto) return toast('Elegí el cliente o cargá el nombre de quién lo pide', true);
+      if (!f.descripcion) return toast('Describí qué pide', true);
+      Object.assign(datos, { cliente_id: f.cliente_id ? +f.cliente_id : null, contacto: f.cliente_id ? '' : f.contacto, telefono: f.cliente_id ? '' : f.telefono,
+        producto_id: productoId, descripcion: f.descripcion, cantidad: +f.cantidad || 1, proveedor_id: f.proveedor_id ? +f.proveedor_id : null });
+    }
+    if (!nuevo) { await store.actualizarEncargo(e.id, datos); m.close(); toast('Encargo actualizado'); return render(); }
+    const enc = await store.crearEncargo(datos);
+    const pedidoId = await store.encargar(enc.id, datos.proveedor_id);
+    m.close();
+    const ped = await store.pedido(pedidoId);
+    toast(`Encargo N° ${enc.numero} agregado al pedido N° ${ped.numero}`);
+    go(`#/pedidos/${pedidoId}`);
+  });
+}
+
+// Encargo que quedó "A pedir" (por ejemplo, se canceló su pedido): volver a agregarlo a un pedido
+function agregarAPedidoModal(e, proveedores) {
+  const m = modal(`Agregar encargo N° ${e.numero} a un pedido`, `
+    <p class="small muted" style="margin-bottom:.8rem">${esc(e.descripcion)} · ${esc(quienEncarga(e))}. Se suma al pedido pendiente de ese proveedor (o se crea uno).</p>
+    <div class="field"><label>Proveedor</label><select class="input" id="prov"><option value="">— Sin proveedor —</option>
+      ${proveedores.map(p => `<option value="${p.id}" ${p.id === e.proveedor_id ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}</select></div>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Agregar al pedido</button>`);
+  $('#ok', m.el).onclick = () => run(async () => {
+    const prov = $('#prov', m.el).value;
+    const pedidoId = await store.encargar(e.id, prov ? +prov : null);
+    m.close(); toast('Encargo agregado al pedido'); go(`#/pedidos/${pedidoId}`);
+  });
+}
+
+function avisarEncargo(e) {
+  const tel = telEncargo(e);
+  if (!tel) return toast('Este encargo no tiene teléfono cargado', true);
+  const nombre = (e.cliente?.nombre ? e.cliente.nombre.split(',').pop() : e.contacto).trim().split(' ')[0];
+  const texto = `Hola ${nombre}! Te escribimos de GScom: ya llegó lo que nos encargaste (${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}${e.descripcion}). Podés pasar a retirarlo cuando quieras.`;
+  window.open(waLink(tel, texto), '_blank', 'noopener');
+  store.actualizarEncargo(e.id, { fecha_aviso: new Date().toISOString() }).then(() => render()).catch(() => {});
+}
+
+// Entregar: si el producto está en la base, se abre Vender con todo cargado (al cobrar queda entregado);
+// si no, se marca entregado directamente.
+function entregarEncargo(e) {
+  const m = modal(`Entregar encargo N° ${e.numero}`, `
+    <p>${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}<b>${esc(e.descripcion)}</b> · ${esc(quienEncarga(e))}${e.precio != null ? ` · acordado ${money(e.precio)}` : ''}</p>
+    <p class="small muted" style="margin-top:.6rem">${e.producto_id ? '<b>Vender</b> abre la pantalla de venta con el producto y el cliente cargados; al cobrar, el encargo queda entregado.'
+      : 'Es un producto que no está en la base: podés venderlo como ítem manual, o solo marcarlo como entregado.'}</p>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn" id="solo">Solo marcar entregado</button><button class="btn ok" id="vender">Vender</button>`);
+  $('#solo', m.el).onclick = () => run(async () => { await store.actualizarEncargo(e.id, { estado: 'entregado', fecha_entrega: new Date().toISOString() }); m.close(); toast('Encargo entregado'); render(); });
+  $('#vender', m.el).onclick = () => run(async () => {
+    if (cart.items.length && !confirm('Tenés una venta en curso en "Vender". ¿Reemplazarla por este encargo?')) return;
+    const p = e.producto_id ? (await store.productos()).find(x => x.id === e.producto_id) : null;
+    cart = { ...carritoVacio(), cliente_id: e.cliente_id ? String(e.cliente_id) : '', notas: `Encargo N° ${e.numero}${!e.cliente_id && e.contacto ? ` · ${e.contacto}` : ''}`, encargoId: e.id,
+      items: [{ producto_id: p?.id || null, descripcion: p?.nombre || e.descripcion, cantidad: +e.cantidad, precio_unitario: e.precio ?? p?.precio_venta ?? 0, stock: p?.stock ?? 0, es_servicio: !p }] };
+    m.close(); go('#/vender');
+  });
 }
 
 // =====================================================================

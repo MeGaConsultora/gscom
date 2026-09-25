@@ -284,10 +284,55 @@ export const store = {
     const p = byId('pedidos', id);
     if (p.estado !== 'pendiente') throw new Error('Solo se puede modificar un pedido pendiente');
     db.pedido_items = db.pedido_items.filter(i => i.pedido_id !== p.id);
-    items.filter(i => +i.cantidad > 0).forEach(i => insert('pedido_items', { pedido_id: p.id, producto_id: i.producto_id || null, descripcion: i.descripcion, codigo: i.codigo || '', cantidad: +i.cantidad }));
+    items.filter(i => +i.cantidad > 0).forEach(i => insert('pedido_items', { pedido_id: p.id, producto_id: i.producto_id || null, descripcion: i.descripcion, codigo: i.codigo || '', cantidad: +i.cantidad, encargo_id: i.encargo_id || null }));
+    const siguen = new Set(db.pedido_items.filter(i => i.pedido_id === p.id && i.encargo_id).map(i => i.encargo_id));
+    (db.encargos || []).filter(e => e.pedido_id === p.id && e.estado === 'pedido' && !siguen.has(e.id)).forEach(e => Object.assign(e, { estado: 'pendiente', pedido_id: null }));
     save();
   },
-  async actualizarPedido(id, cambios) { Object.assign(byId('pedidos', id), cambios); save(); },
+  async actualizarPedido(id, cambios) {
+    const p = byId('pedidos', id), antes = p.estado;
+    Object.assign(p, cambios);
+    // igual que el trigger sincronizar_encargos_pedido de la base
+    if (cambios.estado && cambios.estado !== antes) {
+      const es = (db.encargos || []).filter(e => e.pedido_id === p.id);
+      if (p.estado === 'recibido') es.filter(e => e.estado === 'pedido').forEach(e => e.estado = 'recibido');
+      if (p.estado === 'cancelado') { es.filter(e => e.estado === 'pedido').forEach(e => Object.assign(e, { estado: 'pendiente', pedido_id: null })); db.pedido_items.filter(i => i.pedido_id === p.id).forEach(i => i.encargo_id = null); }
+      if (p.estado === 'pendiente') es.filter(e => e.estado === 'recibido').forEach(e => e.estado = 'pedido');
+    }
+    save();
+  },
+
+  // Encargos de clientes
+  async encargos() {
+    db.encargos ||= [];
+    return clone(db.encargos.slice().reverse().map(e => ({ ...e, cliente: byId('clientes', e.cliente_id) || null,
+      pedido: e.pedido_id ? (({ id, numero, estado }) => ({ id, numero, estado }))(byId('pedidos', e.pedido_id)) : null })));
+  },
+  async encargosDePedido(pedidoId) { return clone((db.encargos || []).filter(e => e.pedido_id === +pedidoId).map(e => ({ ...e, cliente: byId('clientes', e.cliente_id) || null }))); },
+  async crearEncargo(e) {
+    db.encargos ||= [];
+    db.seq.encargo_numero = (db.seq.encargo_numero || 0) + 1;
+    const r = insert('encargos', { numero: db.seq.encargo_numero, fecha: now(), cliente_id: null, contacto: '', telefono: '', producto_id: null, cantidad: 1, precio: null,
+      proveedor_id: null, pedido_id: null, estado: 'pendiente', fecha_aviso: null, fecha_entrega: null, notas: '', ...e });
+    save(); return clone(r);
+  },
+  async encargar(id, proveedor_id) {
+    db.pedidos ||= []; db.pedido_items ||= [];
+    const e = byId('encargos', id);
+    if (e.estado !== 'pendiente') throw new Error('El encargo ya fue pedido');
+    let p = db.pedidos.filter(x => x.estado === 'pendiente' && (x.proveedor_id || null) === (proveedor_id || null)).pop();
+    if (!p) { db.seq.pedido_numero = (db.seq.pedido_numero || 0) + 1; p = insert('pedidos', { numero: db.seq.pedido_numero, proveedor_id: proveedor_id || null, fecha: now(), estado: 'pendiente', fecha_recibido: null, notas: '' }); }
+    insert('pedido_items', { pedido_id: p.id, producto_id: e.producto_id || null, descripcion: e.descripcion, codigo: byId('productos', e.producto_id)?.codigo_barras || '', cantidad: e.cantidad, encargo_id: e.id });
+    Object.assign(e, { estado: 'pedido', pedido_id: p.id, proveedor_id: proveedor_id || null });
+    save(); return p.id;
+  },
+  async actualizarEncargo(id, cambios) { Object.assign(byId('encargos', id), cambios); save(); },
+  async cancelarEncargo(id) {
+    const e = byId('encargos', id);
+    if (['entregado', 'cancelado'].includes(e.estado)) throw new Error(`El encargo ya está ${e.estado}`);
+    if (e.pedido_id && byId('pedidos', e.pedido_id)?.estado === 'pendiente') db.pedido_items = db.pedido_items.filter(i => i.encargo_id !== e.id);
+    e.estado = 'cancelado'; save();
+  },
 
   async compras() { return clone(db.compras.slice().reverse().map(c => ({ ...c, items: db.compra_items.filter(i => i.compra_id === c.id) }))); },
   async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {

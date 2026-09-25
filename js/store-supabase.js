@@ -142,6 +142,17 @@ export const store = {
   async actualizarItemsPedido(id, items) { await q(sb.rpc('actualizar_items_pedido', { p_pedido_id: id, p_items: items })); },
   async actualizarPedido(id, cambios) { await q(sb.from('pedidos').update(cambios).eq('id', id)); },
 
+  // Encargos de clientes (se agregan a un pedido pendiente del proveedor)
+  async encargos() {
+    return todas(() => sb.from('encargos').select('*, cliente:clientes(id, nombre, telefono), pedido:pedidos(id, numero, estado)')
+      .order('fecha', { ascending: false }).order('id', { ascending: false }), 3000);
+  },
+  async encargosDePedido(pedidoId) { return q(sb.from('encargos').select('*, cliente:clientes(id, nombre, telefono)').eq('pedido_id', pedidoId)); },
+  async crearEncargo(e) { return q(sb.from('encargos').insert(e).select().single()); },
+  async encargar(id, proveedor_id) { return q(sb.rpc('encargar', { p_encargo_id: id, p_proveedor_id: proveedor_id || null })); },  // devuelve el id del pedido
+  async actualizarEncargo(id, cambios) { await q(sb.from('encargos').update(cambios).eq('id', id)); },
+  async cancelarEncargo(id) { await q(sb.rpc('cancelar_encargo', { p_encargo_id: id })); },
+
   async compras() { return q(sb.from('compras').select('*, items:compra_items(*)').order('fecha', { ascending: false }).limit(500)); },
   async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {
     const id = await q(sb.rpc('registrar_compra', { p_proveedor_id: proveedor_id || null, p_nro_comprobante: nro_comprobante || '', p_items: items, p_notas: notas }));
