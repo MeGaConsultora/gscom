@@ -637,11 +637,12 @@ function preciosModal(productos, categorias, proveedores, redondeo) {
       <div class="field"><label>¿Cómo?</label><select class="input" id="ap-modo"><option value="pct">Porcentaje (%)</option><option value="monto">Monto fijo ($)</option></select></div>
       <div class="field"><label id="ap-val-l">Porcentaje</label><input class="input" id="ap-val" type="number" step="any"></div></div>
     <div class="row" id="ap-red-f" style="align-items:flex-end">
-      <div class="field" style="flex:0 0 240px"><label>Redondear el precio nuevo</label><select class="input" id="ap-red">${REDONDEOS.map(([v, l]) => `<option value="${v}" ${+v === +redondeo ? 'selected' : ''}>${v ? `Hacia arriba a ${l}` : l}</option>`).join('')}</select></div>
+      <div class="field" style="flex:0 0 auto;min-width:300px"><label>Redondear el precio nuevo</label><select class="input" id="ap-red">${REDONDEOS.map(([v, l]) => `<option value="${v}" ${+v === +redondeo ? 'selected' : ''}>${v ? `Hacia arriba a ${l}` : l}</option>`).join('')}</select></div>
       <div class="field small muted" id="ap-red-ej" style="margin-bottom:1.1rem"></div></div>
     <div id="ap-prev" class="small" style="min-height:3rem"></div>`,
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ap-ok" disabled>Aplicar</button>`, { wide: true });
   if (sel.length) $('#ap-ambito', m.el).value = 'sel';
+  const excluidos = new Set();   // productos que se destildaron en la lista: no se aumentan
 
   const ambito = () => {
     const v = $('#ap-ambito', m.el).value, t = $('#ap-q', m.el).value.trim();
@@ -658,7 +659,18 @@ function preciosModal(productos, categorias, proveedores, redondeo) {
       : { costo: Math.round(cambio(+p.precio_costo) * 100) / 100, venta: p.margen != null ? precioPorMargen(cambio(+p.precio_costo), p.margen, redondeo) : +p.precio_venta };
     const valido = modo === 'monto' ? !!val : !!val && val >= -90 && val <= 500;
     const texto = modo === 'monto' ? `${val > 0 ? '+' : '−'}${money(Math.abs(val))}` : `${val > 0 ? '+' : ''}${val}%`;
-    return { campo, modo, val, red, l, afectados, nuevo, valido, texto, cambio };
+    const incluidos = afectados.filter(p => !excluidos.has(p.id));
+    return { campo, modo, val, red, l, afectados, incluidos, nuevo, valido, texto, cambio };
+  };
+  // Resumen y botón: se actualizan sin redibujar la lista (así no salta al tildar/destildar)
+  const pintarConteo = () => {
+    const { l, afectados, incluidos, valido, texto } = plan();
+    const res = $('#ap-resumen', m.el);
+    if (res) res.innerHTML = `Se actualizan <b>${incluidos.length}</b> de ${l.length} producto(s)${afectados.length - incluidos.length ? ` <span class="muted">· ${afectados.length - incluidos.length} destildado(s) a mano</span>` : ''}.`;
+    const tAll = $('#ap-all', m.el); if (tAll) tAll.checked = incluidos.length === afectados.length;
+    const ok = $('#ap-ok', m.el);
+    ok.disabled = !valido || !incluidos.length;
+    ok.textContent = valido && incluidos.length ? `Aplicar ${texto} a ${incluidos.length} producto(s)` : 'Aplicar';
   };
   const pintar = () => {
     const { campo, modo, val, l, afectados, nuevo, valido, texto, cambio } = plan();
@@ -678,13 +690,16 @@ function preciosModal(productos, categorias, proveedores, redondeo) {
     $('#ap-prev', m.el).innerHTML = buscando && !$('#ap-q', m.el).value.trim() ? '<p class="muted">Escribí qué productos buscar (por ejemplo: router). Vas a ver la lista antes de aplicar.</p>'
       : !l.length ? '<p class="muted">No hay productos con ese criterio.</p>'
       : !val ? `<p class="muted">${l.length} producto(s). Poné ${modo === 'monto' ? 'el monto' : 'el porcentaje'} para ver cómo quedan.</p>` : `
-      <p style="margin-bottom:.4rem">Se actualizan <b>${afectados.length}</b> de ${l.length} producto(s).</p>${nota}
-      ${afectados.length ? `<div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:.5rem"><table class="tbl"><thead><tr><th>Producto</th>${campo === 'costo' ? '<th class="num">Costo</th>' : ''}<th class="num">Precio de venta</th></tr></thead><tbody>
-      ${afectados.map(p => { const n = nuevo(p); return `<tr><td>${esc(p.nombre)}<div class="small muted">${esc(catName(p.categoria_id))}</div></td>${campo === 'costo' ? `<td class="num nowrap">${money(p.precio_costo)} → <b>${money(n.costo)}</b></td>` : ''}
+      <p style="margin-bottom:.4rem" id="ap-resumen"></p>${nota}
+      ${afectados.length ? `<p class="muted" style="margin:.3rem 0 0">Destildá los que no quieras aumentar.</p>
+      <div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:.4rem"><table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" id="ap-all" title="Tildar / destildar todos"></th><th>Producto</th>${campo === 'costo' ? '<th class="num">Costo</th>' : ''}<th class="num">Precio de venta</th></tr></thead><tbody>
+      ${afectados.map(p => { const n = nuevo(p), fuera = excluidos.has(p.id); return `<tr data-ap="${p.id}" style="${fuera ? 'opacity:.45' : ''}"><td><input type="checkbox" data-inc="${p.id}" ${fuera ? '' : 'checked'}></td>
+        <td>${esc(p.nombre)}<div class="small muted">${esc(catName(p.categoria_id))}</div></td>${campo === 'costo' ? `<td class="num nowrap">${money(p.precio_costo)} → <b>${money(n.costo)}</b></td>` : ''}
         <td class="num nowrap">${n.venta !== +p.precio_venta ? `${money(p.precio_venta)} → <b>${money(n.venta)}</b>` : `<span class="muted">${money(p.precio_venta)} (igual)</span>`}</td></tr>`; }).join('')}</tbody></table></div>` : ''}`;
-    const ok = $('#ap-ok', m.el);
-    ok.disabled = !valido || !afectados.length;
-    ok.textContent = valido && afectados.length ? `Aplicar ${texto} a ${afectados.length} producto(s)` : 'Aplicar';
+    const marcar = (id, incluir) => { incluir ? excluidos.delete(id) : excluidos.add(id); const tr = $(`[data-ap="${id}"]`, m.el); tr.style.opacity = incluir ? '' : '.45'; $('[data-inc]', tr).checked = incluir; };
+    $$('[data-inc]', m.el).forEach(cb => cb.onchange = () => { marcar(+cb.dataset.inc, cb.checked); pintarConteo(); });
+    const tAll = $('#ap-all', m.el); if (tAll) tAll.onchange = () => { afectados.forEach(p => marcar(p.id, tAll.checked)); pintarConteo(); };
+    pintarConteo();
   };
   ['#ap-ambito', '#ap-campo', '#ap-modo', '#ap-red'].forEach(s => $(s, m.el).onchange = pintar);
   let t; $('#ap-q', m.el).oninput = () => { clearTimeout(t); t = setTimeout(pintar, 150); };
@@ -693,12 +708,13 @@ function preciosModal(productos, categorias, proveedores, redondeo) {
   pintar(); setTimeout(() => $(sel.length ? '#ap-val' : '#ap-q', m.el).focus(), 40);
 
   $('#ap-ok', m.el).onclick = () => run(async () => {
-    const { campo, modo, val, red, afectados, texto } = plan();
+    const { campo, modo, val, red, afectados, incluidos, texto } = plan();
     const opc = $('#ap-ambito', m.el);
-    const donde = opc.value === 'buscar' ? `"${$('#ap-q', m.el).value.trim()}"` : opc.selectedOptions[0].textContent.replace(/\s*\(\d+\)$/, '');
+    const donde = (opc.value === 'buscar' ? `"${$('#ap-q', m.el).value.trim()}"` : opc.selectedOptions[0].textContent.replace(/\s*\(\d+\)$/, ''))
+      + (incluidos.length < afectados.length ? ` (menos ${afectados.length - incluidos.length} destildado/s)` : '');
     const detalle = `${texto} al ${campo === 'venta' ? 'precio de venta' : 'costo'} · ${donde}`;
-    if (!confirm(`¿Aplicar ${detalle} (${afectados.length} productos)?\n\nDespués lo podés deshacer.`)) return;
-    const r = await store.ajustarPrecios(afectados.map(p => p.id), campo, modo === 'pct' ? val : 0, red, detalle, modo === 'monto' ? val : null);
+    if (!confirm(`¿Aplicar ${detalle} (${incluidos.length} productos)?\n\nDespués lo podés deshacer.`)) return;
+    const r = await store.ajustarPrecios(incluidos.map(p => p.id), campo, modo === 'pct' ? val : 0, red, detalle, modo === 'monto' ? val : null);
     prodSel.clear();
     history.replaceState(null, '', '#/productos'); await render();   // refrescar sin cerrar el cartel de abajo
     const res = modal('Precios actualizados', `<p><b>${r.cantidad}</b> producto(s) actualizados: ${esc(detalle)}.</p>
