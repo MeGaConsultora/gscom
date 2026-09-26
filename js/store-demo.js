@@ -49,6 +49,13 @@ function token() {
 
 export function resetDemo() { db = seed(); save(); }
 
+// Precio por margen (mismo criterio que 27_margen_y_precios.sql): redondeo hacia arriba al múltiplo del negocio
+const redondearPrecio = (v, m) => +m > 0 ? Math.ceil(Math.round(v * 100) / 100 / m) * m : Math.round(v * 100) / 100;
+function aplicarMargen(p) {
+  if (p.margen != null && p.margen !== '' && +p.precio_costo > 0) p.precio_venta = redondearPrecio(p.precio_costo * (1 + p.margen / 100), db.negocio.redondeo_precios ?? 1);
+  return p;
+}
+
 // Tienda: configuración, estado público y descripción pública (mismo criterio que la base)
 const TIENDA_CFG = { aviso: '', aviso_color: 'info', bienvenida: '', pagos: '', envios: '', instagram: '', facebook: '', tiktok: '', categorias_ocultas: [] };
 const tiendaCfg = () => ({ ...TIENDA_CFG, ...(db.tienda_config || {}) });
@@ -77,14 +84,14 @@ export const store = {
   async guardarProducto(p) {
     if (p.id) {
       if (p.codigo_barras && db.productos.some(x => x.id !== p.id && x.codigo_barras === p.codigo_barras)) throw new Error('Ya existe un producto con ese código de barras');
-      Object.assign(byId('productos', p.id), p); save(); return clone(byId('productos', p.id));
+      aplicarMargen(Object.assign(byId('productos', p.id), p)); save(); return clone(byId('productos', p.id));
     }
     const nuevo = { codigo_barras: '', codigo_interno: false, descripcion: '', marca: '', categoria_id: null,
       precio_costo: 0, precio_venta: 0, stock: 0, stock_minimo: 0, es_servicio: false, activo: true, created_at: now(), ...p };
     const stockInicial = +nuevo.stock || 0; nuevo.stock = 0;
     if (!nuevo.codigo_barras) { nuevo.codigo_barras = nuevoCodigoInterno(db); nuevo.codigo_interno = true; }
     if (db.productos.some(x => x.codigo_barras === nuevo.codigo_barras)) throw new Error('Ya existe un producto con ese código de barras');
-    const r = insert('productos', nuevo);
+    const r = insert('productos', aplicarMargen(nuevo));
     if (stockInicial) movStock(r.id, stockInicial, 'ajuste', { nota: 'Stock inicial' });
     save(); return clone(r);
   },
@@ -114,6 +121,35 @@ export const store = {
   },
   async guardarTiendaConfig(cfg) { db.tienda_config = { ...tiendaCfg(), ...cfg }; save(); },
   async publicarProductos(ids, publicado) { ids.forEach(id => { const p = byId('productos', id); if (p) p.publicado = publicado; }); save(); },
+  // Actualización masiva de precios (con registro para deshacer)
+  async ajustarPrecios(ids, campo, porcentaje, redondeo, detalle = '') {
+    if (!['venta', 'costo'].includes(campo)) throw new Error('Campo no válido');
+    if (!porcentaje || porcentaje < -90 || porcentaje > 500) throw new Error('Porcentaje fuera de rango');
+    const lote = token(), fecha = now(), k = 1 + porcentaje / 100;
+    const afectados = ids.map(id => byId('productos', id)).filter(p => p && p.activo && (campo === 'venta' ? p.margen == null && p.precio_venta > 0 : p.precio_costo > 0));
+    db.precios_historial ??= [];
+    afectados.forEach(p => {
+      const h = { lote, fecha, producto_id: p.id, costo_antes: p.precio_costo, venta_antes: p.precio_venta, detalle };
+      if (campo === 'venta') p.precio_venta = redondearPrecio(p.precio_venta * k, redondeo);
+      else { p.precio_costo = Math.round(p.precio_costo * k * 100) / 100; aplicarMargen(p); }
+      db.precios_historial.push({ ...h, costo_despues: p.precio_costo, venta_despues: p.precio_venta });
+    });
+    save(); return { lote, cantidad: afectados.length };
+  },
+  async deshacerAjustePrecios(lote) {
+    let n = 0;
+    (db.precios_historial || []).filter(h => h.lote === lote).forEach(h => {
+      const p = byId('productos', h.producto_id);
+      if (p && p.precio_costo === h.costo_despues && p.precio_venta === h.venta_despues) { p.precio_costo = h.costo_antes; p.precio_venta = h.venta_antes; n++; }
+    });
+    db.precios_historial = (db.precios_historial || []).filter(h => h.lote !== lote); save(); return n;
+  },
+  async ultimoAjustePrecios() {
+    const h = (db.precios_historial || []).at(-1); if (!h) return null;
+    const lote = db.precios_historial.filter(x => x.lote === h.lote);
+    return { lote: h.lote, fecha: h.fecha, cantidad: lote.length, detalle: h.detalle };
+  },
+
   // Solicitudes desde la tienda (misma lógica que 26_solicitudes_web.sql, sin límites)
   async crearSolicitudWeb({ nombre, telefono, comentario = '', items, trampa = '' }) {
     if (trampa) return { token: token(), numero: 0 };
@@ -429,7 +465,7 @@ export const store = {
     for (const i of items) {
       insert('compra_items', { compra_id: c.id, ...i });
       movStock(i.producto_id, i.cantidad, 'compra', { compra_id: c.id });
-      byId('productos', i.producto_id).precio_costo = i.costo_unitario;
+      { const p = byId('productos', i.producto_id); p.precio_costo = i.costo_unitario; aplicarMargen(p); }
     }
     save(); return clone(c);
   },
@@ -440,7 +476,7 @@ export const store = {
     for (const i of items) {
       insert('compra_items', { compra_id: c.id, ...i });
       movStock(i.producto_id, i.cantidad, 'compra', { compra_id: c.id, nota: `Compra #${c.id} (editada)` });
-      byId('productos', i.producto_id).precio_costo = i.costo_unitario;
+      { const p = byId('productos', i.producto_id); p.precio_costo = i.costo_unitario; aplicarMargen(p); }
     }
     Object.assign(c, { proveedor_id: proveedor_id || null, nro_comprobante, notas, total: items.reduce((s, i) => s + i.cantidad * i.costo_unitario, 0) });
     save();

@@ -91,6 +91,13 @@ export const store = {
     await this.tiendaActualizarProducto(productoId, { foto_url: '' });
     await this.borrarArchivoFoto(fotoAnterior);
   },
+  // Actualización masiva de precios (con registro para deshacer)
+  async ajustarPrecios(ids, campo, porcentaje, redondeo, detalle = '') {
+    return q(sb.rpc('ajustar_precios', { p_ids: ids, p_campo: campo, p_porcentaje: +porcentaje, p_redondeo: +redondeo, p_detalle: detalle }));
+  },
+  async deshacerAjustePrecios(lote) { return q(sb.rpc('deshacer_ajuste_precios', { p_lote: lote })); },
+  async ultimoAjustePrecios() { return q(sb.rpc('ultimo_ajuste_precios')); },
+
   // Solicitudes desde la tienda (el cliente crea/ve/cancela con su token; GScom las atiende)
   async crearSolicitudWeb({ nombre, telefono, comentario = '', items, trampa = '' }) {
     return q(sb.rpc('crear_solicitud_web', { p_nombre: nombre, p_telefono: telefono, p_comentario: comentario, p_items: items, p_trampa: trampa }));

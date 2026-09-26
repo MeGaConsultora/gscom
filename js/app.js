@@ -30,6 +30,11 @@ const mismoCodigo = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === S
 // Los de mínimo 0 no se reponen automáticamente (se ven con el filtro "Sin stock").
 const faltaStock = p => !p.es_servicio && +p.stock_minimo > 0 && +p.stock <= +p.stock_minimo;
 
+// Precios: redondeo hacia arriba al múltiplo elegido en Ajustes (mismo criterio que la base, 27_margen_y_precios.sql)
+const redondearPrecio = (v, m) => +m > 0 ? Math.ceil(Math.round(v * 100) / 100 / m) * m : Math.round(v * 100) / 100;
+const precioPorMargen = (costo, margen, redondeo = 1) => redondearPrecio(costo * (1 + margen / 100), redondeo);
+const margenDe = p => +p.precio_costo > 0 && +p.precio_venta > 0 ? (p.precio_venta / p.precio_costo - 1) * 100 : null;
+
 // Búsqueda de productos: por nombre, marca, categoría, descripción o código.
 // Orden: código exacto → nombre que empieza con lo buscado → nombre que lo contiene → resto;
 // con stockPrimero, dentro de cada grupo van primero los que tienen stock.
@@ -519,8 +524,12 @@ async function ventaModal(id) {
 // =====================================================================
 let prodSel = new Set();
 
+// Orden de la tabla de Productos (se recuerda al volver a la pantalla)
+let ordenProductos = { col: 'nombre', dir: 1 };
 ROUTES.productos = async ({ q }) => {
-  const [productos, categorias, proveedores, encargos] = await Promise.all([store.productos(), store.categorias(), store.proveedores(), store.encargos().catch(() => [])]);
+  const [productos, categorias, proveedores, encargos, ultimoAjuste, neg] = await Promise.all([store.productos(), store.categorias(), store.proveedores(),
+    store.encargos().catch(() => []), store.ultimoAjustePrecios().catch(() => null), store.negocio()]);
+  const puedeDeshacer = ultimoAjuste && Date.now() - new Date(ultimoAjuste.fecha) < 7 * 86400000;
   const reservados = reservasPorProducto(encargos);
   let filtro = q.get('bajo') ? 'bajo' : 'todos', texto = '', prov = q.get('prov') || '';
   const provName = id => proveedores.find(p => p.id === id)?.nombre || '';
@@ -530,15 +539,34 @@ ROUTES.productos = async ({ q }) => {
     <a class="btn" href="#/inventario">Carga rápida de stock</a><a class="btn" href="tienda.html" target="_blank" rel="noopener">Ver tienda ↗</a>
     <button class="btn" id="pub-sel" hidden>Publicar en tienda</button><button class="btn" id="ocu-sel" hidden>Ocultar de tienda</button>
     <button class="btn danger" id="del-sel" hidden>Eliminar seleccionados</button>
+    ${puedeDeshacer ? `<button class="btn" id="deshacer-precios" title="${esc(ultimoAjuste.detalle)} · ${fdatetime(ultimoAjuste.fecha)}">↶ Deshacer último aumento</button>` : ''}
+    <button class="btn" id="precios">Actualizar precios <span id="nsel3"></span></button>
     <button class="btn" id="pedido">Armar pedido <span id="nsel2"></span></button>
     <button class="btn" id="etiquetas">Imprimir etiquetas <span id="nsel"></span></button><button class="btn primary" id="nuevo">+ Nuevo producto</button></div></div>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="row" style="align-items:center">
     <div class="search" style="flex:3"><input class="input" id="buscar" placeholder="Buscar por nombre, marca, proveedor o código (también podés escanear)"></div>
     <select class="input" id="prov" style="flex:1"><option value="">Todos los proveedores</option>${proveedores.map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></div></div>
   <div class="chips" id="cats"></div>
-  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" id="all"></th><th>Código</th><th>Producto</th><th>Categoría</th><th class="num">Stock</th><th class="num">Costo</th><th class="num">Precio</th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr id="cabecera"></tr></thead><tbody id="rows"></tbody></table></div>`;
 
   const catName = id => categorias.find(c => c.id === id)?.nombre || '';
+  // Columnas ordenables: clic en el encabezado ordena; otro clic invierte el orden
+  const COLS = [['codigo', 'Código', ''], ['nombre', 'Producto', ''], ['categoria', 'Categoría', ''], ['stock', 'Stock', 'num'], ['costo', 'Costo', 'num'], ['margen', 'Margen', 'num'], ['precio', 'Precio', 'num']];
+  const VALOR = { codigo: p => p.codigo_barras || '', nombre: p => p.nombre, categoria: p => catName(p.categoria_id), stock: p => p.es_servicio ? -Infinity : +p.stock,
+    costo: p => +p.precio_costo, margen: p => margenDe(p) ?? -Infinity, precio: p => +p.precio_venta };
+  const ordenar = l => {
+    const f = VALOR[ordenProductos.col] || VALOR.nombre, d = ordenProductos.dir;
+    return l.sort((a, b) => { const x = f(a), y = f(b); return (typeof x === 'string' ? x.localeCompare(y, 'es', { numeric: true, sensitivity: 'base' }) : x - y) * d || a.nombre.localeCompare(b.nombre); });
+  };
+  const pintarCabecera = () => {
+    $('#cabecera').innerHTML = `<th style="width:32px"><input type="checkbox" id="all"></th>` + COLS.map(([k, l, cls]) =>
+      `<th class="${cls}" data-ord="${k}" style="cursor:pointer;user-select:none;white-space:nowrap" title="Ordenar por ${l.toLowerCase()}">${l}${ordenProductos.col === k ? (ordenProductos.dir > 0 ? ' ▲' : ' ▼') : ''}</th>`).join('');
+    $$('#cabecera [data-ord]').forEach(th => th.onclick = () => {
+      ordenProductos = { col: th.dataset.ord, dir: ordenProductos.col === th.dataset.ord ? -ordenProductos.dir : 1 };
+      paint();
+    });
+    $('#all').onchange = e => { lista().forEach(p => e.target.checked ? prodSel.add(p.id) : prodSel.delete(p.id)); paint(); };
+  };
   const nRevisar = productos.filter(aRevisar).length;
   const chips = [['todos', 'Todos'], ['bajo', 'Stock bajo'], ['sinstock', 'Sin stock'], ['ocultos', 'Ocultos en tienda'], ['sinfoto', 'Sin foto'], ...(nRevisar ? [['revisar', `⚠ A revisar (${nRevisar})`]] : []), ...categorias.map(c => [String(c.id), c.nombre])];
   const lista = () => productos.filter(p => (filtro === 'todos' || (filtro === 'bajo' ? faltaStock(p) : filtro === 'sinstock' ? (!p.es_servicio && p.stock <= 0) : filtro === 'ocultos' ? p.publicado === false : filtro === 'sinfoto' ? (!p.es_servicio && !p.foto_url) : filtro === 'revisar' ? aRevisar(p) : p.categoria_id === +filtro))
@@ -547,19 +575,22 @@ ROUTES.productos = async ({ q }) => {
   function paint() {
     $('#cats').innerHTML = chips.map(([k, l]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}</button>`).join('');
     $$('#cats .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
-    const l = lista();
+    pintarCabecera();
+    const l = ordenar(lista());
     $('#rows').innerHTML = l.map(p => `<tr class="click" data-id="${p.id}">
       <td><input type="checkbox" data-sel="${p.id}" ${prodSel.has(p.id) ? 'checked' : ''}></td>
       <td class="mono small">${esc(p.codigo_barras)}${p.codigo_interno ? ' <span class="pill blue" title="Código generado por GScom">int</span>' : ''}</td>
       <td>${esc(p.nombre)}${p.foto_url ? ' <span title="Tiene foto">📷</span>' : ''}${p.publicado === false ? ' <span class="pill gray" title="No se muestra en la tienda online">oculto</span>' : ''}${p.marca || p.descripcion || p.proveedor_id ? `<div class="small muted">${[p.marca, p.descripcion, provName(p.proveedor_id) && `Prov.: ${provName(p.proveedor_id)}`].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
       <td class="num">${p.es_servicio ? '<span class="muted">—</span>' : `<span class="pill ${p.stock <= 0 ? 'red' : faltaStock(p) ? 'amber' : 'green'}">${p.stock}</span>${reservados.get(p.id) ? `<div class="small" style="color:#6b3fc4" title="Reservado para clientes">${reservados.get(p.id)} reserv.</div>` : ''}`}</td>
-      <td class="num muted">${money(p.precio_costo)}</td><td class="num"><b>${money(p.precio_venta)}</b></td></tr>`).join('')
-      || '<tr><td colspan="7" class="empty">No hay productos que coincidan.</td></tr>';
+      <td class="num muted">${money(p.precio_costo)}</td>
+      <td class="num nowrap">${margenDe(p) == null ? '<span class="muted">—</span>' : `${Math.round(margenDe(p))}%`}${p.margen != null ? ' <span class="pill blue" title="El precio de venta se calcula con el margen">auto</span>' : ''}</td>
+      <td class="num"><b>${money(p.precio_venta)}</b></td></tr>`).join('')
+      || '<tr><td colspan="8" class="empty">No hay productos que coincidan.</td></tr>';
     $$('#rows tr[data-id]').forEach(tr => tr.onclick = e => { if (e.target.matches('input')) return; productoModal(+tr.dataset.id); });
     $$('[data-sel]').forEach(cb => cb.onchange = () => { cb.checked ? prodSel.add(+cb.dataset.sel) : prodSel.delete(+cb.dataset.sel); paintSel(); });
     paintSel();
   }
-  const paintSel = () => { $('#nsel').textContent = $('#nsel2').textContent = prodSel.size ? `(${prodSel.size})` : ''; ['#del-sel', '#pub-sel', '#ocu-sel'].forEach(b => $(b).hidden = !prodSel.size); };
+  const paintSel = () => { $('#nsel').textContent = $('#nsel2').textContent = $('#nsel3').textContent = prodSel.size ? `(${prodSel.size})` : ''; ['#del-sel', '#pub-sel', '#ocu-sel'].forEach(b => $(b).hidden = !prodSel.size); };
   const publicarSel = publicado => run(async () => {
     const ids = [...prodSel].filter(id => productos.some(p => p.id === id));
     await store.publicarProductos(ids, publicado); prodSel.clear();
@@ -577,13 +608,87 @@ ROUTES.productos = async ({ q }) => {
   $('#buscar').oninput = e => { texto = e.target.value.trim(); paint(); };
   $('#prov').value = prov;
   $('#prov').onchange = e => { prov = e.target.value; paint(); };
-  $('#all').onchange = e => { lista().forEach(p => e.target.checked ? prodSel.add(p.id) : prodSel.delete(p.id)); paint(); };
   $('#nuevo').onclick = () => productoModal(null);
+  $('#precios').onclick = () => preciosModal(productos, categorias, proveedores, neg.redondeo_precios ?? 1);
+  if ($('#deshacer-precios')) $('#deshacer-precios').onclick = () => deshacerAjuste(ultimoAjuste);
   $('#etiquetas').onclick = () => etiquetasModal([...prodSel]);
   $('#pedido').onclick = () => armarPedido(prodSel.size ? [...prodSel] : lista().filter(faltaStock).map(p => p.id), productos);
   paint();
   $('#buscar').focus();
 };
+
+// Actualizar precios en bloque: a todos, a una categoría, a un proveedor o a los seleccionados.
+// "Precio de venta" cambia los de precio fijo; "Costo" cambia el costo y los que van por margen recalculan su precio solos.
+const REDONDEOS = [[1, '$1 (sin centavos)'], [10, '$10'], [50, '$50'], [100, '$100'], [500, '$500'], [0, 'Sin redondeo']];
+function preciosModal(productos, categorias, proveedores, redondeo) {
+  const sel = [...prodSel].filter(id => productos.some(p => p.id === id));
+  const m = modal('Actualizar precios', `
+    <div class="field"><label>¿A qué productos?</label><select class="input" id="ap-ambito">
+      <option value="todos">Todos los productos (${productos.length})</option>
+      ${sel.length ? `<option value="sel" selected>Los seleccionados (${sel.length})</option>` : ''}
+      <optgroup label="Una categoría">${categorias.map(c => `<option value="cat:${c.id}">${esc(c.nombre)} (${productos.filter(p => p.categoria_id === c.id).length})</option>`).join('')}</optgroup>
+      <optgroup label="Un proveedor">${proveedores.map(p => `<option value="prov:${p.id}">${esc(p.nombre)} (${productos.filter(x => x.proveedor_id === p.id).length})</option>`).join('')}</optgroup></select></div>
+    <div class="row">
+      <div class="field"><label>¿Qué se aumenta?</label><select class="input" id="ap-campo"><option value="venta">Precio de venta</option><option value="costo">Costo (lista nueva del proveedor)</option></select></div>
+      <div class="field"><label>Porcentaje</label><input class="input" id="ap-pct" type="number" step="any" placeholder="ej: 10  (o -5 para bajar)"></div>
+      <div class="field" id="ap-red-f"><label>Redondear hacia arriba a</label><select class="input" id="ap-red">${REDONDEOS.map(([v, l]) => `<option value="${v}" ${+v === +redondeo ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
+    <div id="ap-prev" class="small" style="min-height:3rem"></div>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ap-ok" disabled>Aplicar</button>`, { wide: true });
+
+  const ambito = () => {
+    const v = $('#ap-ambito', m.el).value;
+    return v === 'sel' ? productos.filter(p => sel.includes(p.id)) : v.startsWith('cat:') ? productos.filter(p => p.categoria_id === +v.slice(4))
+      : v.startsWith('prov:') ? productos.filter(p => p.proveedor_id === +v.slice(5)) : productos;
+  };
+  const plan = () => {
+    const campo = $('#ap-campo', m.el).value, pct = +$('#ap-pct', m.el).value, red = +$('#ap-red', m.el).value, k = 1 + pct / 100, l = ambito();
+    const afectados = l.filter(p => campo === 'venta' ? p.margen == null && +p.precio_venta > 0 : +p.precio_costo > 0);
+    const nuevo = p => campo === 'venta' ? { costo: +p.precio_costo, venta: redondearPrecio(p.precio_venta * k, red) }
+      : { costo: Math.round(p.precio_costo * k * 100) / 100, venta: p.margen != null ? precioPorMargen(p.precio_costo * k, p.margen, redondeo) : +p.precio_venta };
+    return { campo, pct, red, l, afectados, nuevo };
+  };
+  const pintar = () => {
+    const { campo, pct, l, afectados, nuevo } = plan();
+    $('#ap-red-f', m.el).style.visibility = campo === 'venta' ? '' : 'hidden';
+    const conMargen = l.filter(p => p.margen != null).length, fijos = afectados.filter(p => p.margen == null).length;
+    const nota = campo === 'venta'
+      ? (conMargen ? `<p class="muted">${conMargen} producto(s) tienen precio por margen: no cambian acá (su precio sigue al costo). Si el proveedor aumentó, elegí <b>Costo</b>.</p>` : '')
+      : `<p class="muted">Los que van por margen (${afectados.length - fijos}) recalculan su precio de venta. Los de precio fijo (${fijos}) mantienen su precio: solo cambia el costo, y su margen ${pct > 0 ? 'baja' : 'sube'}.</p>`;
+    const sinDato = l.length - afectados.length - (campo === 'venta' ? conMargen : 0);
+    $('#ap-prev', m.el).innerHTML = !pct ? '<p class="muted">Poné el porcentaje para ver cómo quedan.</p>' : `
+      <p style="margin-bottom:.4rem">Se actualizan <b>${afectados.length}</b> producto(s)${sinDato > 0 ? ` <span class="muted">(${sinDato} sin ${campo === 'venta' ? 'precio' : 'costo'} cargado quedan igual)</span>` : ''}.</p>${nota}
+      ${afectados.length ? `<table class="tbl" style="margin-top:.5rem"><thead><tr><th>Ejemplos</th>${campo === 'costo' ? '<th class="num">Costo</th>' : ''}<th class="num">Precio de venta</th></tr></thead><tbody>
+      ${afectados.slice(0, 6).map(p => { const n = nuevo(p); return `<tr><td>${esc(p.nombre)}</td>${campo === 'costo' ? `<td class="num nowrap">${money(p.precio_costo)} → <b>${money(n.costo)}</b></td>` : ''}
+        <td class="num nowrap">${n.venta !== +p.precio_venta ? `${money(p.precio_venta)} → <b>${money(n.venta)}</b>` : `<span class="muted">${money(p.precio_venta)} (igual)</span>`}</td></tr>`; }).join('')}</tbody></table>` : ''}`;
+    const ok = $('#ap-ok', m.el);
+    ok.disabled = !pct || !afectados.length || pct < -90 || pct > 500;
+    ok.textContent = afectados.length && pct ? `Aplicar ${pct > 0 ? '+' : ''}${pct}% a ${afectados.length} producto(s)` : 'Aplicar';
+  };
+  ['#ap-ambito', '#ap-campo', '#ap-red'].forEach(s => $(s, m.el).onchange = pintar);
+  $('#ap-pct', m.el).oninput = pintar;
+  pintar(); setTimeout(() => $('#ap-pct', m.el).focus(), 40);
+
+  $('#ap-ok', m.el).onclick = () => run(async () => {
+    const { campo, pct, red, afectados } = plan();
+    const donde = $('#ap-ambito', m.el).selectedOptions[0].textContent.replace(/\s*\(\d+\)$/, '');
+    const detalle = `${pct > 0 ? '+' : ''}${pct}% al ${campo === 'venta' ? 'precio de venta' : 'costo'} · ${donde}`;
+    if (!confirm(`¿Aplicar ${detalle} (${afectados.length} productos)?\n\nDespués lo podés deshacer.`)) return;
+    const r = await store.ajustarPrecios(afectados.map(p => p.id), campo, pct, red, detalle);
+    prodSel.clear();
+    history.replaceState(null, '', '#/productos'); await render();   // refrescar sin cerrar el cartel de abajo
+    const res = modal('Precios actualizados', `<p><b>${r.cantidad}</b> producto(s) actualizados: ${esc(detalle)}.</p>
+      <p class="small muted" style="margin-top:.5rem">La tienda y la pantalla de Vender ya usan los precios nuevos. Si te equivocaste, podés deshacerlo (también desde el botón "Deshacer último aumento" en Productos, durante 7 días).</p>`,
+      `<button class="btn" id="undo">↶ Deshacer</button><button class="btn primary" data-close>Listo</button>`);
+    $('#undo', res.el).onclick = () => { res.close(); deshacerAjuste({ lote: r.lote, detalle, cantidad: r.cantidad }, true); };
+  });
+}
+function deshacerAjuste(aj, sinPreguntar = false) {
+  run(async () => {
+    if (!sinPreguntar && !confirm(`¿Deshacer el último aumento?\n\n${aj.detalle} (${aj.cantidad} productos)\n\nLos productos cuyo precio se cambió después a mano quedan como están.`)) return;
+    const n = await store.deshacerAjustePrecios(aj.lote);
+    toast(`${n} precio(s) restaurado(s)`); render();
+  });
+}
 
 // Foto del producto para la tienda: se sube al momento (no espera a Guardar). Lo usan Productos y Tienda.
 const FOTO_HTML = `<div style="display:flex;gap:1rem;align-items:center"><div id="foto-prev"></div>
@@ -607,8 +712,9 @@ function controlFoto(el, id, foto = '', alCambiar = () => {}) {
 
 // opts.prefill: datos iniciales · opts.onSaved(producto): en vez de refrescar la pantalla · opts.sinStock: ocultar "Stock inicial"
 async function productoModal(id, opts = {}) {
-  const [p, categorias, proveedores] = await Promise.all([id ? store.producto(id) : null, store.categorias(), store.proveedores()]);
+  const [p, categorias, proveedores, neg] = await Promise.all([id ? store.producto(id) : null, store.categorias(), store.proveedores(), store.negocio()]);
   const movs = id ? await store.movimientosStock(id) : [];
+  const redondeo = neg.redondeo_precios ?? 1;
   const v = p || { nombre: '', codigo_barras: '', marca: '', descripcion: '', categoria_id: '', precio_costo: '', precio_venta: '', stock: '', stock_minimo: 1, es_servicio: false, ...opts.prefill };
   const m = modal(id ? 'Editar producto' : 'Nuevo producto', `
     <div class="field"><label>Nombre *</label><input class="input" name="nombre" value="${esc(v.nombre)}"></div>
@@ -620,7 +726,9 @@ async function productoModal(id, opts = {}) {
       ${id ? `<div style="margin-top:.5rem">${barcodeSVG(v.codigo_barras, { height: 40 })}</div>` : ''}</div>
     <div class="row"><div class="field"><label>Precio de costo</label><input class="input" name="precio_costo" type="number" step="any" min="0" value="${v.precio_costo}"></div>
       <div class="field"><label>Precio de venta *</label><input class="input" name="precio_venta" type="number" step="any" min="0" value="${v.precio_venta}"></div>
-      <div class="field"><label>Margen</label><input class="input" id="margen" readonly tabindex="-1"></div></div>
+      <div class="field"><label>Margen %</label><input class="input" name="margen" type="number" step="any" value="${v.margen ?? ''}"></div></div>
+    <label class="small" style="display:flex;gap:.4rem;align-items:flex-start;margin:-.3rem 0 .9rem"><input type="checkbox" name="por_margen" ${v.margen != null ? 'checked' : ''} style="margin-top:.15rem">
+      <span>Calcular el precio de venta con el margen <span class="muted">— se actualiza solo cuando cambia el costo (por ejemplo, al ingresar una compra)${redondeo > 1 ? `; se redondea hacia arriba a múltiplos de ${money(redondeo)}` : ''}</span></span></label>
     <div class="row">${id || opts.sinStock ? '' : `<div class="field"><label>Stock inicial</label><input class="input" name="stock" type="number" step="any" value="${v.stock}"></div>`}
       <div class="field"><label>Stock mínimo (alerta)</label><input class="input" name="stock_minimo" type="number" step="any" min="0" value="${v.stock_minimo}"></div></div>
     <label class="small" style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem"><input type="checkbox" name="es_servicio" ${v.es_servicio ? 'checked' : ''}> Es un servicio / mano de obra (no maneja stock)</label>
@@ -646,8 +754,18 @@ async function productoModal(id, opts = {}) {
     const r = await store.eliminarProducto(id);
     prodSel.delete(id); m.close(); toast(r === 'baja' ? 'Producto dado de baja (tenía historial)' : 'Producto eliminado'); render();
   });
-  const margen = () => { const c = +$('[name=precio_costo]', m.el).value, pv = +$('[name=precio_venta]', m.el).value; $('#margen', m.el).value = c > 0 && pv > 0 ? Math.round((pv / c - 1) * 100) + '%' : '—'; };
-  $$('[name=precio_costo],[name=precio_venta]', m.el).forEach(i => i.oninput = margen); margen();
+  // Precio fijo: se escribe el precio y el margen se muestra. Por margen: se escribe el margen y el precio se calcula.
+  const inCosto = $('[name=precio_costo]', m.el), inVenta = $('[name=precio_venta]', m.el), inMargen = $('[name=margen]', m.el), chkMargen = $('[name=por_margen]', m.el);
+  const pintarPrecio = () => {
+    const auto = chkMargen.checked, c = +inCosto.value;
+    inVenta.readOnly = auto; inMargen.readOnly = !auto;
+    inVenta.style.background = auto ? '#f4f5f7' : ''; inMargen.style.background = auto ? '' : '#f4f5f7';
+    if (auto) { if (c > 0 && inMargen.value !== '') inVenta.value = precioPorMargen(c, +inMargen.value, redondeo); }
+    else inMargen.value = c > 0 && +inVenta.value > 0 ? Math.round((+inVenta.value / c - 1) * 1000) / 10 : '';
+  };
+  [inCosto, inVenta, inMargen].forEach(i => i.oninput = pintarPrecio);
+  chkMargen.onchange = () => { pintarPrecio(); if (chkMargen.checked) inMargen.select(); };
+  pintarPrecio();
   $('[name=categoria_id]', m.el).onchange = async e => {
     if (e.target.value !== '__nueva') return;
     const nombre = prompt('Nombre de la nueva categoría'); if (!nombre) { e.target.value = ''; return; }
@@ -656,9 +774,10 @@ async function productoModal(id, opts = {}) {
   };
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el);
+    if (f.por_margen && (!(+f.precio_costo > 0) || f.margen === '')) return toast('Para calcular el precio por margen cargá el costo y el margen', true);
     if (!f.nombre || f.precio_venta === '') return toast('Completá nombre y precio de venta', true);
     const data = { ...(id ? { id } : {}), publicado: f.publicado, destacado: f.destacado, descripcion_web: f.descripcion_web, nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, proveedor_id: f.proveedor_id ? +f.proveedor_id : null, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
-      precio_costo: +f.precio_costo || 0, precio_venta: +f.precio_venta || 0, stock_minimo: +f.stock_minimo || 0, es_servicio: f.es_servicio };
+      precio_costo: +f.precio_costo || 0, precio_venta: +f.precio_venta || 0, margen: f.por_margen ? +f.margen : null, stock_minimo: +f.stock_minimo || 0, es_servicio: f.es_servicio };
     data.codigo_barras = f.codigo_barras;
     if (!id) data.stock = +f.stock || 0;
     const r = await store.guardarProducto(data);
@@ -1724,7 +1843,7 @@ function compraModal(c, productos, provName) {
       editId: c.id, proveedor_id: c.proveedor_id ? String(c.proveedor_id) : '', nro_comprobante: c.nro_comprobante || '', notas: c.notas || '',
       items: c.items.map(i => { const p = prod(i.producto_id) || {};
         return { producto_id: i.producto_id, nombre: p.nombre || '(producto eliminado)', codigo_barras: p.codigo_barras || '', stock: p.stock ?? 0,
-          cantidad: +i.cantidad, costo_unitario: +i.costo_unitario, precio_venta: +p.precio_venta || 0, precio_venta_orig: +p.precio_venta || 0 }; }),
+          cantidad: +i.cantidad, costo_unitario: +i.costo_unitario, precio_venta: +p.precio_venta || 0, precio_venta_orig: +p.precio_venta || 0, margen: p.margen ?? null }; }),
     };
     m.close(); go('#/compras/nueva');
   };
@@ -1750,7 +1869,8 @@ function proveedorModal(onSaved, p = null) {
 }
 
 async function nuevaCompra() {
-  const [proveedores, productos, cats] = await Promise.all([store.proveedores(), store.productos(), store.categorias()]);
+  const [proveedores, productos, cats, neg] = await Promise.all([store.proveedores(), store.productos(), store.categorias(), store.negocio()]);
+  const redondeo = neg.redondeo_precios ?? 1;
   compraDraft ??= nuevoDraft();
   const d = compraDraft;
 
@@ -1788,7 +1908,9 @@ async function nuevaCompra() {
   $('#nro').oninput = e => d.nro_comprobante = e.target.value;
   $('#notas').oninput = e => d.notas = e.target.value;
 
-  const margen = i => i.costo_unitario > 0 && i.precio_venta > 0 ? Math.round((i.precio_venta / i.costo_unitario - 1) * 100) + '%' : '—';
+  // los productos con precio por margen calculan su precio de venta solos a partir del costo nuevo
+  const venta = i => i.margen != null && i.costo_unitario > 0 ? precioPorMargen(i.costo_unitario, i.margen, redondeo) : i.precio_venta;
+  const margen = i => i.costo_unitario > 0 && venta(i) > 0 ? Math.round((venta(i) / i.costo_unitario - 1) * 100) + '%' : '—';
   function paint() {
     const total = d.items.reduce((s, i) => s + i.cantidad * i.costo_unitario, 0);
     $('#its').innerHTML = d.items.length ? `<table class="tbl"><thead><tr><th>Producto</th><th style="width:90px">Cantidad</th><th style="width:130px">Costo unit.</th>
@@ -1796,7 +1918,7 @@ async function nuevaCompra() {
       ${d.items.map((i, k) => `<tr><td>${esc(i.nombre)}${i.nuevo ? ' <span class="pill blue">nuevo</span>' : ''}<div class="small muted mono">${esc(i.codigo_barras)} · stock actual ${i.stock}</div></td>
         <td><input class="input" data-k="${k}" data-f="cantidad" value="${i.cantidad}" inputmode="decimal"></td>
         <td><input class="input" data-k="${k}" data-f="costo_unitario" value="${i.costo_unitario}" inputmode="decimal"></td>
-        <td><input class="input" data-k="${k}" data-f="precio_venta" value="${i.precio_venta}" inputmode="decimal"></td>
+        <td>${i.margen != null ? `<b>${money(venta(i))}</b><div class="small muted">por margen ${+i.margen}%</div>` : `<input class="input" data-k="${k}" data-f="precio_venta" value="${i.precio_venta}" inputmode="decimal">`}</td>
         <td class="num muted">${margen(i)}</td><td class="num">${money(i.cantidad * i.costo_unitario)}</td>
         <td><button class="x" data-d="${k}" title="Quitar">×</button></td></tr>`).join('')}</tbody></table>`
       : '<div class="empty">Escaneá o buscá los productos que llegaron. Si alguno no existe, lo podés crear desde el buscador.</div>';
@@ -1814,7 +1936,7 @@ async function nuevaCompra() {
     const ex = d.items.find(i => i.producto_id === p.id);
     if (ex) ex.cantidad++;
     else d.items.push({ producto_id: p.id, nombre: p.nombre, codigo_barras: p.codigo_barras, stock: p.stock, cantidad: 1,
-      costo_unitario: +p.precio_costo || 0, precio_venta: +p.precio_venta || 0, precio_venta_orig: +p.precio_venta || 0, ...extra });
+      costo_unitario: +p.precio_costo || 0, precio_venta: +p.precio_venta || 0, precio_venta_orig: +p.precio_venta || 0, margen: p.margen ?? null, ...extra });
     b.value = ''; s.hidden = true; paint(); b.focus();
   }
   function crearProducto(texto) {
@@ -1870,7 +1992,7 @@ async function nuevaCompra() {
         items: d.items.map(({ producto_id, cantidad, costo_unitario }) => ({ producto_id, cantidad, costo_unitario })) };
       if (d.editId) await store.editarCompra(d.editId, datos);
       else await store.registrarCompra(datos);
-      for (const i of d.items.filter(i => i.precio_venta !== i.precio_venta_orig)) await store.guardarProducto({ id: i.producto_id, precio_venta: i.precio_venta });
+      for (const i of d.items.filter(i => i.margen == null && i.precio_venta !== i.precio_venta_orig)) await store.guardarProducto({ id: i.producto_id, precio_venta: i.precio_venta });
     } finally { btn.disabled = false; }
     const n = d.items.length; compraDraft = null;
     toast(d.editId ? 'Compra actualizada · stock corregido' : `Compra registrada · ${n} producto(s) con stock actualizado`);
@@ -2719,7 +2841,9 @@ ROUTES.ajustes = async () => {
       <div class="row"><div class="field"><label>WhatsApp (con código de país, ej: 5493425550000)</label><input class="input" name="whatsapp" value="${esc(n.whatsapp)}"></div>
         <div class="field"><label>Email</label><input class="input" name="email" value="${esc(n.email)}"></div></div>
       <div class="field"><label>Horario de atención</label><input class="input" name="horario" value="${esc(n.horario)}"></div>
-      <div class="row"><div class="field"><label>Garantía de service (días)</label><input class="input" type="number" name="garantia_dias" value="${n.garantia_dias}"></div><div></div></div>
+      <div class="row"><div class="field"><label>Garantía de service (días)</label><input class="input" type="number" name="garantia_dias" value="${n.garantia_dias}"></div>
+        <div class="field"><label>Redondeo de precios calculados</label><select class="input" name="redondeo_precios" title="Para los productos con precio por margen y la actualización de precios">
+          ${REDONDEOS.map(([v, l]) => `<option value="${v}" ${+v === +(n.redondeo_precios ?? 1) ? 'selected' : ''}>${v ? `Hacia arriba a ${l}` : l}</option>`).join('')}</select></div></div>
       <div class="field"><label>Texto al pie del comprobante de service</label><textarea class="input" name="pie_comprobante">${esc(n.pie_comprobante)}</textarea></div>
       <button class="btn primary" id="guardar">Guardar</button></div>
     ${store.modo === 'demo' ? `<div class="card card-pad"><h2>Modo demostración</h2>
@@ -2732,7 +2856,7 @@ ROUTES.ajustes = async () => {
     <div id="usuarios" class="small muted">Cargando…</div></div>` : ''}
   </div>`;
   if ($('#usuarios')) pintarUsuarios();
-  $('#guardar').onclick = () => run(async () => { const f = formData(view()); f.garantia_dias = +f.garantia_dias || 0; await store.guardarNegocio(f); toast('Datos guardados'); });
+  $('#guardar').onclick = () => run(async () => { const f = formData(view()); f.garantia_dias = +f.garantia_dias || 0; f.redondeo_precios = +f.redondeo_precios || 0; await store.guardarNegocio(f); toast('Datos guardados'); });
   if ($('#reset')) $('#reset').onclick = () => { if (confirm('¿Borrar todo lo cargado y volver a los datos de ejemplo?')) { resetDemo(); cart = carritoVacio(); prodSel.clear(); toast('Datos restablecidos'); go('#/inicio'); } };
 };
 
