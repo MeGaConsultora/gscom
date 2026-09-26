@@ -751,7 +751,7 @@ ROUTES.inventario = async () => {
   view().innerHTML = `
   <div class="page-head"><div><a href="#/productos" class="small muted">← Productos</a><h1>Carga rápida de stock</h1></div></div>
   <div class="card card-pad" style="margin-bottom:1rem">
-    <div class="row small" style="align-items:center;margin-bottom:.4rem"><span id="progreso-txt"></span><span class="right muted">Los que todavía no contaste siguen como "Por encargo" en la tienda</span></div>
+    <div class="row small" style="align-items:center;margin-bottom:.4rem"><span id="progreso-txt"></span><span class="right muted">La tienda muestra la disponibilidad según el stock cargado (sin stock = "Por encargo")</span></div>
     <div style="height:10px;background:#eef0f3;border-radius:5px;overflow:hidden"><div id="progreso" style="height:100%;background:var(--ok);width:0;transition:width .3s"></div></div>
   </div>
   <div class="card card-pad" style="margin-bottom:1rem">
