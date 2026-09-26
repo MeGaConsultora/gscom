@@ -70,8 +70,12 @@ export const store = {
 
   // Tienda online
   async catalogoTienda() { return q(sb.rpc('catalogo_tienda')); },
+  // (estas funciones las pueden usar admin y usuarios "Tienda": no exponen costos ni proveedores)
+  async tiendaAdmin() { return q(sb.rpc('tienda_admin_datos')); },
+  async tiendaActualizarProducto(id, datos) { await q(sb.rpc('tienda_actualizar_producto', { p_id: id, p_datos: datos })); },
+  async guardarTiendaConfig(cfg) { await q(sb.rpc('tienda_guardar_config', { p: cfg })); },
   async publicarProductos(ids, publicado) {
-    for (let i = 0; i < ids.length; i += 200) await q(sb.from('productos').update({ publicado }).in('id', ids.slice(i, i + 200)));
+    for (let i = 0; i < ids.length; i += 200) await q(sb.rpc('tienda_publicar', { p_ids: ids.slice(i, i + 200), p_publicado: publicado }));
   },
   // Sube la foto (ya achicada a JPEG) y la deja asociada al producto; borra la anterior
   async subirFotoProducto(productoId, blob, fotoAnterior = '') {
@@ -79,14 +83,17 @@ export const store = {
     const { error } = await sb.storage.from('productos').upload(ruta, blob, { contentType: 'image/jpeg', upsert: true });
     if (error) throw new Error(`No se pudo subir la foto: ${error.message}`);
     const url = sb.storage.from('productos').getPublicUrl(ruta).data.publicUrl;
-    await q(sb.from('productos').update({ foto_url: url }).eq('id', productoId));
+    await this.tiendaActualizarProducto(productoId, { foto_url: url });
     await this.borrarArchivoFoto(fotoAnterior);
     return url;
   },
   async quitarFotoProducto(productoId, fotoAnterior = '') {
-    await q(sb.from('productos').update({ foto_url: '' }).eq('id', productoId));
+    await this.tiendaActualizarProducto(productoId, { foto_url: '' });
     await this.borrarArchivoFoto(fotoAnterior);
   },
+  // Usuarios (solo admin)
+  async usuarios() { return q(sb.rpc('usuarios_listar')); },
+  async actualizarUsuario(id, { activo, rol }) { await q(sb.rpc('usuario_actualizar', { p_id: id, p_activo: !!activo, p_rol: rol })); },
   async borrarArchivoFoto(url) {
     const ruta = (url || '').split('/storage/v1/object/public/productos/')[1];
     if (ruta) await sb.storage.from('productos').remove([decodeURIComponent(ruta)]).catch(() => {});

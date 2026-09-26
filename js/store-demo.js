@@ -49,10 +49,22 @@ function token() {
 
 export function resetDemo() { db = seed(); save(); }
 
+// Tienda: configuración, estado público y descripción pública (mismo criterio que la base)
+const TIENDA_CFG = { aviso: '', aviso_color: 'info', bienvenida: '', pagos: '', envios: '', instagram: '', facebook: '', tiktok: '', categorias_ocultas: [] };
+const tiendaCfg = () => ({ ...TIENDA_CFG, ...(db.tienda_config || {}) });
+const descPublica = (web, interna) => web ? web : /^⚠|\[dado de baja/.test(interna || '') ? '' : (interna || '');
+function estadoTienda(p) {
+  const reservado = (db.encargos || []).filter(e => e.estado === 'reservado' && e.producto_id === p.id).reduce((s, e) => s + +e.cantidad, 0);
+  const disp = Math.max(p.stock - reservado, 0);
+  return disp <= 0 ? 'encargo' : disp <= Math.max(p.stock_minimo, 1) ? 'ultimas' : 'disponible';
+}
+
 // ---------- API ----------
 export const store = {
   modo: 'demo',
 
+  // Para probar el rol "Tienda" en el demo: localStorage.gscom_demo_rol = 'tienda'
+  async perfil() { let rol = 'admin'; try { rol = localStorage.getItem('gscom_demo_rol') || 'admin'; } catch {} return { activo: true, rol, nombre: 'Demo' }; },
   async negocio() { return clone(db.negocio); },
   async guardarNegocio(n) { Object.assign(db.negocio, n); save(); },
 
@@ -78,17 +90,33 @@ export const store = {
   },
   // Tienda online (misma lógica que catalogo_tienda de la base)
   async catalogoTienda() {
-    const reservado = pid => (db.encargos || []).filter(e => e.estado === 'reservado' && e.producto_id === pid).reduce((s, e) => s + +e.cantidad, 0);
-    const productos = db.productos.filter(p => p.activo && p.publicado !== false && !p.es_servicio && p.precio_venta > 0).map(p => {
-      const disp = Math.max(p.stock - reservado(p.id), 0);
-      return { id: p.id, nombre: p.nombre, marca: p.marca, descripcion: /^⚠|\[dado de baja/.test(p.descripcion || '') ? '' : p.descripcion,
+    const cfg = tiendaCfg();
+    const productos = db.productos.filter(p => p.activo && p.publicado !== false && !p.es_servicio && p.precio_venta > 0
+      && !cfg.categorias_ocultas.includes(p.categoria_id)).map(p => ({
+        id: p.id, nombre: p.nombre, marca: p.marca, descripcion: descPublica(p.descripcion_web, p.descripcion),
         categoria: byId('categorias', p.categoria_id)?.nombre || null, precio: p.precio_venta, foto: p.foto_url || '',
-        estado: disp <= 0 ? 'encargo' : disp <= Math.max(p.stock_minimo, 1) ? 'ultimas' : 'disponible' };
-    }).sort((a, b) => a.nombre.localeCompare(b.nombre));
-    const n = db.negocio;
-    return clone({ negocio: { nombre: n.nombre, direccion: n.direccion, telefono: n.telefono, whatsapp: n.whatsapp, email: n.email, horario: n.horario }, productos });
+        destacado: !!p.destacado, estado: estadoTienda(p) }))
+      .sort((a, b) => a.nombre.localeCompare(b.nombre));
+    const n = db.negocio, { categorias_ocultas, ...tienda } = cfg;
+    return clone({ negocio: { nombre: n.nombre, direccion: n.direccion, telefono: n.telefono, whatsapp: n.whatsapp, email: n.email, horario: n.horario }, tienda, productos });
   },
+  // Pantalla "Tienda" (misma forma que tienda_admin_datos de la base)
+  async tiendaAdmin() {
+    return clone({ config: tiendaCfg(), categorias: db.categorias.slice().sort((a, b) => a.nombre.localeCompare(b.nombre)),
+      productos: db.productos.filter(p => p.activo && !p.es_servicio).map(p => ({
+        id: p.id, codigo_barras: p.codigo_barras, nombre: p.nombre, marca: p.marca, categoria_id: p.categoria_id, precio_venta: p.precio_venta,
+        publicado: p.publicado !== false, destacado: !!p.destacado, foto_url: p.foto_url || '', descripcion_web: p.descripcion_web || '',
+        descripcion_publica: descPublica('', p.descripcion), estado: estadoTienda(p) })).sort((a, b) => a.nombre.localeCompare(b.nombre)) });
+  },
+  async tiendaActualizarProducto(id, datos) {
+    const p = byId('productos', id); if (!p) throw new Error('Producto no encontrado');
+    ['publicado', 'destacado', 'descripcion_web', 'foto_url'].forEach(k => { if (k in datos) p[k] = datos[k]; }); save();
+  },
+  async guardarTiendaConfig(cfg) { db.tienda_config = { ...tiendaCfg(), ...cfg }; save(); },
   async publicarProductos(ids, publicado) { ids.forEach(id => { const p = byId('productos', id); if (p) p.publicado = publicado; }); save(); },
+  // Usuarios: en el modo demo no hay usuarios reales
+  async usuarios() { return []; },
+  async actualizarUsuario() {},
   async subirFotoProducto(productoId, blob) {
     const url = await new Promise((ok, mal) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = mal; r.readAsDataURL(blob); });
     byId('productos', productoId).foto_url = url; save(); return url;

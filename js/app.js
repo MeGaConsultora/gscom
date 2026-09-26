@@ -141,8 +141,11 @@ function waLink(telefono, texto) {
 const NAV = [
   ['inicio', 'Inicio'], ['vender', 'Vender'], ['service', 'Service'], ['productos', 'Productos'], ['compras', 'Compras'], ['pedidos', 'Pedidos'],
   ['encargos', 'Encargos'], ['clientes', 'Clientes'], ['proveedores', 'Proveedores'], ['fichero', 'Fichero'], ['caja', 'Caja'],
-  ['reportes', 'Reportes'], ['ajustes', 'Ajustes'],
+  ['reportes', 'Reportes'], ['tienda', 'Tienda'], ['ajustes', 'Ajustes'],
 ];
+// Rol del usuario: 'admin' (todo) o 'tienda' (solo la pestaña Tienda; la base no le deja ver nada más)
+let ROL = 'admin';
+const soloTienda = () => ROL === 'tienda';
 const ROUTES = {};
 const view = () => $('#view');
 
@@ -154,6 +157,7 @@ function parseHash() {
 async function render() {
   $$('.modal-bg').forEach(m => m.remove()); // cerrar modales al cambiar de pantalla
   const r = parseHash();
+  if (soloTienda() && r.name !== 'tienda') { history.replaceState(null, '', '#/tienda'); r.name = 'tienda'; r.id = undefined; r.q = new URLSearchParams(); }
   // Si se sale de Vender a mitad de la edición de una venta, la edición se cancela:
   // así, al volver a Vender, nunca se guarda una venta nueva encima de una vieja.
   if (r.name !== 'vender' && cart.editId) {
@@ -165,7 +169,7 @@ async function render() {
   view().innerHTML = '<div class="empty">Cargando…</div>';
   await run(() => fn(r));
   window.scrollTo(0, 0);
-  actualizarContador();
+  if (!soloTienda()) actualizarContador();
 }
 
 // =====================================================================
@@ -553,6 +557,26 @@ ROUTES.productos = async ({ q }) => {
   $('#buscar').focus();
 };
 
+// Foto del producto para la tienda: se sube al momento (no espera a Guardar). Lo usan Productos y Tienda.
+const FOTO_HTML = `<div style="display:flex;gap:1rem;align-items:center"><div id="foto-prev"></div>
+  <div><input type="file" accept="image/*" id="foto-file" hidden><button class="btn sm" id="foto-subir">Subir / cambiar foto</button> <button class="btn sm danger" id="foto-quitar">Quitar foto</button>
+  <div class="small muted" style="margin-top:.3rem">Desde el celular podés sacarla con la cámara. Se achica sola antes de subirse.</div></div></div>`;
+function controlFoto(el, id, foto = '', alCambiar = () => {}) {
+  const pintarFoto = () => {
+    $('#foto-prev', el).innerHTML = foto ? `<img src="${esc(foto)}" alt="" style="width:96px;height:96px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px">`
+      : '<div style="width:96px;height:96px;border:1px dashed var(--line);border-radius:8px;display:grid;place-items:center" class="small muted">Sin foto</div>';
+    $('#foto-quitar', el).hidden = !foto;
+  };
+  pintarFoto();
+  $('#foto-subir', el).onclick = () => $('#foto-file', el).click();
+  $('#foto-file', el).onchange = ev => run(async () => {
+    const archivo = ev.target.files[0]; if (!archivo) return;
+    $('#foto-prev', el).innerHTML = '<div class="small muted" style="width:96px">Subiendo…</div>';
+    try { foto = await store.subirFotoProducto(id, await achicarImagen(archivo), foto); alCambiar(foto); toast('Foto cargada'); } finally { pintarFoto(); ev.target.value = ''; }
+  });
+  $('#foto-quitar', el).onclick = () => run(async () => { if (!confirm('¿Quitar la foto?')) return; await store.quitarFotoProducto(id, foto); foto = ''; alCambiar(''); pintarFoto(); });
+}
+
 // opts.prefill: datos iniciales · opts.onSaved(producto): en vez de refrescar la pantalla · opts.sinStock: ocultar "Stock inicial"
 async function productoModal(id, opts = {}) {
   const [p, categorias, proveedores] = await Promise.all([id ? store.producto(id) : null, store.categorias(), store.proveedores()]);
@@ -573,10 +597,10 @@ async function productoModal(id, opts = {}) {
       <div class="field"><label>Stock mínimo (alerta)</label><input class="input" name="stock_minimo" type="number" step="any" min="0" value="${v.stock_minimo}"></div></div>
     <label class="small" style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem"><input type="checkbox" name="es_servicio" ${v.es_servicio ? 'checked' : ''}> Es un servicio / mano de obra (no maneja stock)</label>
     <div class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem"><h2 style="margin-bottom:.4rem">Tienda online</h2>
-      <label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="publicado" ${v.publicado !== false ? 'checked' : ''}> Mostrar en la tienda</label>
-      ${id ? `<div style="display:flex;gap:1rem;align-items:center;margin-top:.7rem"><div id="foto-prev"></div>
-        <div><input type="file" accept="image/*" id="foto-file" hidden><button class="btn sm" id="foto-subir">Subir / cambiar foto</button> <button class="btn sm danger" id="foto-quitar">Quitar foto</button>
-        <div class="small muted" style="margin-top:.3rem">Desde el celular podés sacarla con la cámara. Se achica sola antes de subirse.</div></div></div>` : '<p class="small muted" style="margin-top:.4rem">Guardá el producto para poder cargarle una foto.</p>'}</div>
+      <div style="display:flex;gap:1.2rem;flex-wrap:wrap"><label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="publicado" ${v.publicado !== false ? 'checked' : ''}> Mostrar en la tienda</label>
+        <label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="destacado" ${v.destacado ? 'checked' : ''}> ★ Destacado (aparece primero)</label></div>
+      <div class="field" style="margin:.7rem 0 0"><label>Descripción para la web (la ven los clientes)</label><textarea class="input" name="descripcion_web" rows="2" placeholder="Si la dejás vacía, se muestra la descripción de arriba">${esc(v.descripcion_web || '')}</textarea></div>
+      ${id ? `<div style="margin-top:.7rem">${FOTO_HTML}</div>` : '<p class="small muted" style="margin-top:.4rem">Guardá el producto para poder cargarle una foto.</p>'}</div>
     ${id && !v.es_servicio ? `<div class="card card-pad" style="background:#fafbfc"><h2 style="margin-bottom:.5rem">Stock</h2>
       <div class="field" style="max-width:160px"><label>Cantidad actual</label><input class="input" id="stock-actual" type="number" step="any" value="${v.stock}"></div>
       <p class="small muted" style="margin:.2rem 0 1rem">Corregila acá directamente (ej: después de un conteo físico) — se guarda al tocar "Guardar" y queda como un ajuste en el historial.</p>
@@ -587,24 +611,7 @@ async function productoModal(id, opts = {}) {
       <table class="tbl small" style="margin-top:.5rem"><tbody>${movs.slice(0, 30).map(mv => `<tr><td>${fdatetime(mv.created_at)}</td><td>${esc(mv.tipo)}</td><td class="muted">${esc(mv.nota || '')}</td><td class="num"><b style="color:${mv.cantidad < 0 ? 'var(--bad)' : 'var(--ok)'}">${mv.cantidad > 0 ? '+' : ''}${mv.cantidad}</b></td></tr>`).join('')}</tbody></table></details></div>` : ''}`,
     `${id ? '<button class="btn danger" id="del" style="margin-right:auto">Eliminar</button><button class="btn" id="etq">Imprimir etiqueta</button>' : ''}<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
 
-  // Foto para la tienda: se sube al momento (no espera a Guardar)
-  let foto = v.foto_url || '';
-  const pintarFoto = () => {
-    const prev = $('#foto-prev', m.el); if (!prev) return;
-    prev.innerHTML = foto ? `<img src="${esc(foto)}" alt="" style="width:96px;height:96px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px">`
-      : '<div style="width:96px;height:96px;border:1px dashed var(--line);border-radius:8px;display:grid;place-items:center" class="small muted">Sin foto</div>';
-    $('#foto-quitar', m.el).hidden = !foto;
-  };
-  pintarFoto();
-  if ($('#foto-subir', m.el)) {
-    $('#foto-subir', m.el).onclick = () => $('#foto-file', m.el).click();
-    $('#foto-file', m.el).onchange = ev => run(async () => {
-      const archivo = ev.target.files[0]; if (!archivo) return;
-      $('#foto-prev', m.el).innerHTML = '<div class="small muted" style="width:96px">Subiendo…</div>';
-      try { foto = await store.subirFotoProducto(id, await achicarImagen(archivo), foto); toast('Foto cargada'); } finally { pintarFoto(); ev.target.value = ''; }
-    });
-    $('#foto-quitar', m.el).onclick = () => run(async () => { if (!confirm('¿Quitar la foto?')) return; await store.quitarFotoProducto(id, foto); foto = ''; pintarFoto(); });
-  }
+  if (id) controlFoto(m.el, id, v.foto_url);
   const del = $('#del', m.el);
   if (del) del.onclick = () => run(async () => {
     if (!confirm(`¿Eliminar "${v.nombre}"?\n\nSi ya se vendió, compró o usó en un service, se da de baja (deja de aparecer, pero el historial se conserva) y su código de barras queda libre.`)) return;
@@ -622,7 +629,7 @@ async function productoModal(id, opts = {}) {
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el);
     if (!f.nombre || f.precio_venta === '') return toast('Completá nombre y precio de venta', true);
-    const data = { ...(id ? { id } : {}), publicado: f.publicado, nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, proveedor_id: f.proveedor_id ? +f.proveedor_id : null, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
+    const data = { ...(id ? { id } : {}), publicado: f.publicado, destacado: f.destacado, descripcion_web: f.descripcion_web, nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, proveedor_id: f.proveedor_id ? +f.proveedor_id : null, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
       precio_costo: +f.precio_costo || 0, precio_venta: +f.precio_venta || 0, stock_minimo: +f.stock_minimo || 0, es_servicio: f.es_servicio };
     data.codigo_barras = f.codigo_barras;
     if (!id) data.stock = +f.stock || 0;
@@ -2321,6 +2328,161 @@ ROUTES.reportes = async ({ q }) => {
 // =====================================================================
 // AJUSTES
 // =====================================================================
+// =====================================================================
+// TIENDA ONLINE (administradores y usuarios "Tienda")
+// Usa solo las funciones tienda_* de la base: nunca costos, proveedores,
+// stock exacto ni datos de clientes.
+// =====================================================================
+const ESTADO_TIENDA = { disponible: ['Disponible', 'green'], ultimas: ['Últimas unidades', 'amber'], encargo: ['Por encargo', 'violet'] };
+const COLOR_AVISO = { info: ['Azul', '#e8f0fe', '#1a4fa0'], ok: ['Verde', '#e6f6ec', '#17693a'], warn: ['Naranja', '#fff3e0', '#9a5200'] };
+const tiendaURL = () => new URL('tienda.html', location.href).href;
+const tiendaSel = new Set();
+
+ROUTES.tienda = async ({ q }) => {
+  const vista = q.get('v') === 'config' ? 'config' : 'productos';
+  const datos = await store.tiendaAdmin();
+  view().innerHTML = `
+  <div class="page-head"><div><h1>Tienda online</h1><div class="small muted">Lo que ven los clientes en la tienda</div></div>
+    <div class="actions"><button class="btn" id="compartir">Compartir link / QR</button><a class="btn" href="tienda.html" target="_blank" rel="noopener">Ver tienda ↗</a></div></div>
+  <div class="chips"><button class="chip ${vista === 'productos' ? 'active' : ''}" data-v="">Productos</button><button class="chip ${vista === 'config' ? 'active' : ''}" data-v="config">Aviso, textos y categorías</button></div>
+  <div id="tienda-cuerpo"></div>`;
+  $$('[data-v]').forEach(b => b.onclick = () => go(b.dataset.v ? '#/tienda?v=config' : '#/tienda'));
+  $('#compartir').onclick = compartirTienda;
+  (vista === 'config' ? tiendaConfig : tiendaProductos)(datos);
+};
+
+function tiendaProductos({ productos, categorias, config }) {
+  const ocultas = new Set(config.categorias_ocultas || []);
+  const catName = id => categorias.find(c => c.id === id)?.nombre || '';
+  const seVe = p => p.publicado && +p.precio_venta > 0 && !ocultas.has(p.categoria_id);
+  const FILTROS = { todos: ['Todos', () => true], publicados: ['En la tienda', seVe], ocultos: ['Ocultos', p => !p.publicado], destacados: ['★ Destacados', p => p.destacado],
+    sinfoto: ['Sin foto', p => !p.foto_url], sindesc: ['Sin descripción web', p => !p.descripcion_web] };
+  let filtro = 'todos', texto = '', cat = '', mostrar = 150;
+  $('#tienda-cuerpo').innerHTML = `
+  <p class="small" id="resumen" style="margin:.2rem 0 .8rem"></p>
+  <div class="card card-pad" style="margin-bottom:1rem"><div class="row" style="align-items:center">
+    <div class="search" style="flex:3"><input class="input" id="buscar" placeholder="Buscar por nombre, marca o código"></div>
+    <select class="input" id="cat" style="flex:1"><option value="">Todas las categorías</option>${categorias.map(c => `<option value="${c.id}">${esc(c.nombre)}${ocultas.has(c.id) ? ' (oculta)' : ''}</option>`).join('')}</select></div></div>
+  <div class="chips" id="filtros"></div>
+  <div class="actions" id="acciones-sel" hidden style="margin-bottom:.8rem"><span class="small" id="nsel"></span>
+    <button class="btn sm" data-lote="publicado:1">Mostrar en la tienda</button><button class="btn sm" data-lote="publicado:0">Ocultar</button>
+    <button class="btn sm" data-lote="destacado:1">★ Destacar</button><button class="btn sm" data-lote="destacado:0">Quitar destacado</button></div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" id="all"></th><th style="width:56px"></th><th>Producto</th><th>Categoría</th><th class="num">Precio</th><th>Disponibilidad</th><th style="text-align:center">En tienda</th><th style="text-align:center">Destacado</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div style="text-align:center;margin:1rem 0"><button class="btn" id="mas" hidden>Mostrar más</button></div>`;
+
+  const lista = () => productos.filter(p => FILTROS[filtro][1](p) && (!cat || p.categoria_id === +cat)
+    && (mismoCodigo(p.codigo_barras, texto) || matches(texto, p.nombre, p.marca, p.codigo_barras)));
+  const avisos = p => [+p.precio_venta > 0 ? '' : '<span class="pill red" title="Los productos sin precio no se muestran">sin precio</span>',
+    ocultas.has(p.categoria_id) ? '<span class="pill gray" title="Su categoría está oculta en la tienda">categoría oculta</span>' : ''].join(' ');
+  function pintar() {
+    const vis = productos.filter(seVe);
+    $('#resumen').innerHTML = `Se ven <b>${vis.length}</b> productos en la tienda · <b>${vis.filter(p => p.destacado).length}</b> destacados · <b>${vis.filter(p => !p.foto_url).length}</b> sin foto`;
+    $('#filtros').innerHTML = Object.entries(FILTROS).map(([k, [l, f]]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-f="${k}">${l}<span class="count">${productos.filter(f).length}</span></button>`).join('');
+    $$('#filtros .chip').forEach(b => b.onclick = () => { filtro = b.dataset.f; mostrar = 150; pintar(); });
+    const l = lista();
+    $('#rows').innerHTML = l.slice(0, mostrar).map(p => `<tr class="click" data-id="${p.id}">
+      <td><input type="checkbox" data-sel="${p.id}" ${tiendaSel.has(p.id) ? 'checked' : ''}></td>
+      <td>${p.foto_url ? `<img src="${esc(p.foto_url)}" alt="" loading="lazy" style="width:44px;height:44px;object-fit:contain;border:1px solid var(--line);border-radius:6px;background:#fff">` : '<div class="small muted" style="width:44px;height:44px;border:1px dashed var(--line);border-radius:6px;display:grid;place-items:center">—</div>'}</td>
+      <td>${esc(p.nombre)} ${avisos(p)}<div class="small muted">${esc([p.marca, p.descripcion_web ? '✓ descripción web' : ''].filter(Boolean).join(' · '))}</div></td>
+      <td class="muted">${esc(catName(p.categoria_id))}</td><td class="num">${money(p.precio_venta)}</td>
+      <td><span class="pill ${ESTADO_TIENDA[p.estado][1]}">${ESTADO_TIENDA[p.estado][0]}</span></td>
+      <td style="text-align:center"><input type="checkbox" data-pub="${p.id}" ${p.publicado ? 'checked' : ''} title="Mostrar en la tienda"></td>
+      <td style="text-align:center"><button class="btn sm" data-dest="${p.id}" title="${p.destacado ? 'Quitar destacado' : 'Destacar'}" style="color:${p.destacado ? '#f5a623' : 'var(--muted)'};font-size:1.1rem;padding:.1rem .5rem">${p.destacado ? '★' : '☆'}</button></td></tr>`).join('')
+      || '<tr><td colspan="8" class="empty">No hay productos con ese filtro.</td></tr>';
+    $('#mas').hidden = l.length <= mostrar;
+    $$('#rows tr[data-id]').forEach(tr => tr.onclick = e => { if (e.target.closest('input,button')) return; tiendaProductoModal(productos.find(p => p.id === +tr.dataset.id), catName, pintar); });
+    $$('[data-sel]').forEach(cb => cb.onchange = () => { cb.checked ? tiendaSel.add(+cb.dataset.sel) : tiendaSel.delete(+cb.dataset.sel); pintarSel(); });
+    $$('[data-pub]').forEach(cb => cb.onchange = () => cambiar([+cb.dataset.pub], 'publicado', cb.checked));
+    $$('[data-dest]').forEach(b => b.onclick = () => { const p = productos.find(x => x.id === +b.dataset.dest); cambiar([p.id], 'destacado', !p.destacado); });
+    pintarSel();
+  }
+  const pintarSel = () => { $('#acciones-sel').hidden = !tiendaSel.size; $('#nsel').textContent = `${tiendaSel.size} seleccionado(s):`; };
+  // Cambia publicado/destacado de uno o varios productos y actualiza la lista sin recargar
+  const cambiar = (ids, campo, valor) => run(async () => {
+    if (campo === 'publicado') await store.publicarProductos(ids, valor);
+    else for (const id of ids) await store.tiendaActualizarProducto(id, { [campo]: valor });
+    ids.forEach(id => { const p = productos.find(x => x.id === id); if (p) p[campo] = valor; });
+    if (ids.length > 1) { tiendaSel.clear(); toast(`${ids.length} productos actualizados`); }
+    pintar();
+  });
+  $$('[data-lote]').forEach(b => b.onclick = () => { const [campo, v] = b.dataset.lote.split(':'); cambiar([...tiendaSel].filter(id => productos.some(p => p.id === id)), campo, v === '1'); });
+  $('#all').onchange = e => { lista().slice(0, mostrar).forEach(p => e.target.checked ? tiendaSel.add(p.id) : tiendaSel.delete(p.id)); pintar(); };
+  let t;
+  $('#buscar').oninput = e => { clearTimeout(t); t = setTimeout(() => { texto = e.target.value.trim(); mostrar = 150; pintar(); }, 150); };
+  $('#cat').onchange = e => { cat = e.target.value; mostrar = 150; pintar(); };
+  $('#mas').onclick = () => { mostrar += 150; pintar(); };
+  pintar();
+  $('#buscar').focus();
+}
+
+function tiendaProductoModal(p, catName, alGuardar) {
+  const m = modal(p.nombre, `
+    <div class="small muted" style="margin-bottom:1rem">${esc([p.marca, catName(p.categoria_id), p.codigo_barras].filter(Boolean).join(' · '))} · <b style="color:var(--ink)">${money(p.precio_venta)}</b>
+      · <span class="pill ${ESTADO_TIENDA[p.estado][1]}">${ESTADO_TIENDA[p.estado][0]}</span></div>
+    <div style="margin-bottom:1rem">${FOTO_HTML}</div>
+    <div class="field"><label>Descripción para la web</label><textarea class="input" name="descripcion_web" rows="4" maxlength="2000"
+      placeholder="${esc(p.descripcion_publica ? `Si la dejás vacía se muestra: ${p.descripcion_publica}` : 'Características, medidas, compatibilidad, qué incluye…')}">${esc(p.descripcion_web)}</textarea></div>
+    <div style="display:flex;gap:1.2rem;flex-wrap:wrap"><label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="publicado" ${p.publicado ? 'checked' : ''}> Mostrar en la tienda</label>
+      <label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="destacado" ${p.destacado ? 'checked' : ''}> ★ Destacado (aparece primero)</label></div>
+    <p class="small muted" style="margin-top:.9rem">El nombre, el precio y la categoría se cambian desde Productos (lo hace un administrador).</p>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
+  controlFoto(m.el, p.id, p.foto_url, url => { p.foto_url = url; alGuardar(); });
+  $('#ok', m.el).onclick = () => run(async () => {
+    const f = formData(m.el), cambios = { descripcion_web: f.descripcion_web, publicado: f.publicado, destacado: f.destacado };
+    await store.tiendaActualizarProducto(p.id, cambios);
+    Object.assign(p, cambios); m.close(); toast('Guardado'); alGuardar();
+  });
+}
+
+function tiendaConfig({ config: c, categorias, productos }) {
+  const ocultas = new Set(c.categorias_ocultas || []);
+  const cuenta = id => productos.filter(p => p.categoria_id === id && p.publicado).length;
+  const area = (name, label, ph, filas = 3, max = 1000) => `<div class="field"><label>${label}</label><textarea class="input" name="${name}" rows="${filas}" maxlength="${max}" placeholder="${esc(ph)}">${esc(c[name])}</textarea></div>`;
+  const campo = (name, label, ph) => `<div class="field"><label>${label}</label><input class="input" name="${name}" maxlength="200" value="${esc(c[name])}" placeholder="${esc(ph)}"></div>`;
+  $('#tienda-cuerpo').innerHTML = `<div style="max-width:820px">
+    <div class="card card-pad" style="margin-bottom:1rem"><h2>Aviso</h2><p class="small muted" style="margin-bottom:.8rem">Una franja arriba de todo en la tienda. Dejalo vacío para no mostrar nada.</p>
+      <div class="field"><input class="input" name="aviso" maxlength="300" value="${esc(c.aviso)}" placeholder="ej: El lunes 12 cerramos por feriado · Envíos sin cargo en la ciudad"></div>
+      <div class="row" style="align-items:center"><div class="field" style="flex:0 0 180px"><label>Color</label><select class="input" name="aviso_color">${Object.entries(COLOR_AVISO).map(([k, [l]]) => `<option value="${k}" ${c.aviso_color === k ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+        <div id="aviso-prev" style="flex:1;padding:.6rem 1rem;border-radius:8px;text-align:center;font-weight:500"></div></div></div>
+    <div class="card card-pad" style="margin-bottom:1rem"><h2>Textos</h2>
+      ${area('bienvenida', 'Bienvenida (arriba de los productos)', 'ej: Insumos, accesorios y service de informática. Consultá por lo que no veas publicado: lo conseguimos.', 2, 500)}
+      ${area('pagos', 'Formas de pago', 'ej: Efectivo, transferencia, débito y crédito (consultá cuotas)')}
+      ${area('envios', 'Envíos y retiro', 'ej: Retiro en el local. Envíos en la ciudad a cargo del cliente.')}</div>
+    <div class="card card-pad" style="margin-bottom:1rem"><h2>Redes</h2><p class="small muted" style="margin-bottom:.8rem">Poné el usuario (ej: <b>@gscom</b>) o el link completo. Aparecen al pie de la tienda.</p>
+      <div class="row">${campo('instagram', 'Instagram', '@usuario')}${campo('facebook', 'Facebook', 'usuario o link')}${campo('tiktok', 'TikTok', '@usuario')}</div></div>
+    <div class="card card-pad" style="margin-bottom:1rem"><h2>Categorías</h2><p class="small muted" style="margin-bottom:.8rem">Las que desmarques no aparecen en la tienda (sus productos tampoco).</p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:.4rem .8rem">${categorias.map(k => `<label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" data-cat="${k.id}" ${ocultas.has(k.id) ? '' : 'checked'}> ${esc(k.nombre)} <span class="muted">(${cuenta(k.id)})</span></label>`).join('')}</div></div>
+    <p class="small muted" style="margin-bottom:1rem">El nombre del negocio, la dirección, el teléfono, el WhatsApp y el horario se cambian en Ajustes${soloTienda() ? ' (lo hace un administrador)' : ''}.</p>
+    <button class="btn primary lg" id="guardar">Guardar</button></div>`;
+  const previa = () => {
+    const [, fondo, color] = COLOR_AVISO[$('[name=aviso_color]').value], txt = $('[name=aviso]').value.trim();
+    Object.assign($('#aviso-prev').style, { background: txt ? fondo : 'transparent', color: txt ? color : 'var(--muted)' });
+    $('#aviso-prev').textContent = txt || '(sin aviso)';
+  };
+  $('[name=aviso]').oninput = $('[name=aviso_color]').onchange = previa; previa();
+  $('#guardar').onclick = () => run(async () => {
+    const f = formData($('#tienda-cuerpo'));
+    f.categorias_ocultas = $$('[data-cat]').filter(cb => !cb.checked).map(cb => +cb.dataset.cat);
+    await store.guardarTiendaConfig(f); toast('Tienda actualizada'); render();
+  });
+}
+
+function compartirTienda() {
+  const url = tiendaURL();
+  const m = modal('Compartir la tienda', `
+    <div style="text-align:center"><div style="width:190px;margin:0 auto 1rem">${qrSVG(url)}</div>
+      <div class="mono small" style="word-break:break-all;margin-bottom:1rem">${esc(url)}</div></div>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;justify-content:center">
+      <button class="btn" id="copiar">Copiar link</button>
+      <a class="btn wa" href="https://wa.me/?text=${encodeURIComponent(`Mirá nuestra tienda online 👉 ${url}`)}" target="_blank" rel="noopener">Compartir por WhatsApp</a>
+      <button class="btn" id="imp-qr">Imprimir QR para el mostrador</button></div>`);
+  $('#copiar', m.el).onclick = () => navigator.clipboard.writeText(url).then(() => toast('Link copiado'), () => prompt('Copiá el link:', url));
+  $('#imp-qr', m.el).onclick = () => printHTML(`<div style="text-align:center;font-family:'DM Sans',sans-serif;padding-top:25mm">
+    <img src="img/logo.png" alt="" style="width:30mm;height:30mm"><h1 style="font-size:30pt;margin:6mm 0 3mm">Nuestra tienda online</h1>
+    <p style="font-size:15pt;margin:0">Escaneá con la cámara del celular, elegí y hacé tu pedido por WhatsApp</p>
+    <div style="width:105mm;margin:12mm auto">${qrSVG(url)}</div><p style="font-size:11pt;color:#555">${esc(url)}</p></div>`, 'size: A4 portrait; margin: 10mm');
+}
+
 ROUTES.ajustes = async () => {
   const n = await store.negocio();
   const angosto = store.modo !== 'demo';
@@ -2342,10 +2504,34 @@ ROUTES.ajustes = async () => {
       <p class="small" style="margin-bottom:.8rem">La app está funcionando con <b>datos de ejemplo guardados solo en este navegador</b>. Podés cargar, vender y probar todo libremente: nada se envía a ningún lado.</p>
       <p class="small muted" style="margin-bottom:1rem">Cuando conectemos Supabase, los datos pasan a guardarse en la base real y quedan disponibles desde cualquier computadora o celular.</p>
       <button class="btn danger" id="reset">Restablecer datos de ejemplo</button></div>` : ''}
-  </div></div>`;
+  </div>
+  ${store.modo !== 'demo' ? `<div class="card card-pad" style="margin-top:1rem"><h2>Usuarios</h2>
+    <p class="small muted" style="margin-bottom:.8rem"><b>Administrador</b>: todo el sistema. <b>Tienda</b>: solo la pestaña Tienda (fotos, descripciones, destacados, aviso y textos); no ve costos, caja, clientes ni cuentas.</p>
+    <div id="usuarios" class="small muted">Cargando…</div></div>` : ''}
+  </div>`;
+  if ($('#usuarios')) pintarUsuarios();
   $('#guardar').onclick = () => run(async () => { const f = formData(view()); f.garantia_dias = +f.garantia_dias || 0; await store.guardarNegocio(f); toast('Datos guardados'); });
   if ($('#reset')) $('#reset').onclick = () => { if (confirm('¿Borrar todo lo cargado y volver a los datos de ejemplo?')) { resetDemo(); cart = carritoVacio(); prodSel.clear(); toast('Datos restablecidos'); go('#/inicio'); } };
 };
+
+// Usuarios: cada uno con su acceso (el propio no se puede cambiar, para no quedarse afuera)
+async function pintarUsuarios() {
+  const usuarios = await run(() => store.usuarios());
+  if (!usuarios) { $('#usuarios').textContent = 'No se pudieron cargar los usuarios.'; return; }
+  const acceso = u => !u.activo ? 'no' : u.rol;
+  const OPC = [['admin', 'Administrador'], ['tienda', 'Tienda'], ['no', 'Sin acceso']];
+  $('#usuarios').className = '';
+  $('#usuarios').innerHTML = `<table class="tbl"><tbody>${usuarios.map(u => `<tr><td>${esc(u.nombre)}<div class="small muted">${esc(u.email)}</div></td>
+    <td style="width:190px">${u.yo ? '<span class="small muted">Vos (administrador)</span>'
+      : `<select class="input" data-u="${u.id}">${OPC.map(([k, l]) => `<option value="${k}" ${acceso(u) === k ? 'selected' : ''}>${l}</option>`).join('')}</select>`}</td></tr>`).join('')}</tbody></table>
+    <p class="small muted" style="margin-top:.6rem">Para sumar a alguien: en Supabase → Authentication → Add user (email y contraseña). Después aparece acá y le elegís el acceso.</p>`;
+  $$('[data-u]').forEach(s => s.onchange = () => run(async () => {
+    const u = usuarios.find(x => x.id === s.dataset.u), v = s.value;
+    await store.actualizarUsuario(u.id, { activo: v !== 'no', rol: v === 'no' ? u.rol : v });
+    Object.assign(u, { activo: v !== 'no', rol: v === 'no' ? u.rol : v });
+    toast(`${u.nombre || u.email}: ${OPC.find(([k]) => k === v)[1]}`);
+  }).then(() => { s.value = acceso(usuarios.find(x => x.id === s.dataset.u)); }));
+}
 
 // =====================================================================
 // Login (solo con Supabase)
@@ -2374,12 +2560,13 @@ function pantallaLogin(mensaje = '') {
 // =====================================================================
 // Arranque
 // =====================================================================
-$('nav.tabs').innerHTML = NAV.map(([r, l]) => `<a href="#/${r}" data-r="${r}">${l}</a>`).join('');
+const pintarNav = () => { $('nav.tabs').innerHTML = NAV.filter(([r]) => !soloTienda() || r === 'tienda').map(([r, l]) => `<a href="#/${r}" data-r="${r}">${l}</a>`).join(''); };
 let iniciada = false;
 
 async function iniciar() {
   if (store.modo === 'demo') {
     $('#demo-badge').hidden = false;
+    ROL = (await store.perfil()).rol;
   } else {
     const perfil = await store.perfil().catch(() => null);
     if (!perfil) return pantallaLogin();
@@ -2390,9 +2577,11 @@ async function iniciar() {
     const u = $('#usuario');
     u.hidden = false; u.textContent = `${(perfil.nombre || perfil.email).split(' ')[0]} · Salir`;
     u.onclick = async () => { if (confirm('¿Cerrar sesión?')) { await store.logout(); location.reload(); } };
+    ROL = perfil.rol || 'admin';
   }
+  pintarNav();
   $('nav.tabs').hidden = false;
-  if (!iniciada) { window.addEventListener('hashchange', render); store.escucharRespuestas(avisarRespuesta); iniciada = true; }
+  if (!iniciada) { window.addEventListener('hashchange', render); if (!soloTienda()) store.escucharRespuestas(avisarRespuesta); iniciada = true; }
   render();
 }
 iniciar();

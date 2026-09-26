@@ -23,8 +23,8 @@ const ICONO = { 'Cables y adaptadores': '🔌', Cables: '🔌', Redes: '📶', A
   Papel: '📄', Tóner: '🖨️', 'Cartuchos y tintas': '🖨️', Impresión: '🖨️', Periféricos: '🖱️', Componentes: '🧩', Accesorios: '🎒' };
 const icono = p => ICONO[p.categoria] || '🖥️';
 
-let catalogo = { negocio: {}, productos: [] };
-let filtro = { q: '', cat: '', soloDisp: false, orden: 'nombre' }, mostrados = POR_PAGINA;
+let catalogo = { negocio: {}, tienda: {}, productos: [] };
+let filtro = { q: '', cat: '', soloDisp: false, orden: 'destacados' }, mostrados = POR_PAGINA;
 let carrito = leerCarrito();   // { [id]: cantidad }
 
 function leerCarrito() { try { return JSON.parse(localStorage.getItem(CARRITO_KEY)) || {}; } catch { return {}; } }
@@ -47,18 +47,24 @@ function modal(titulo, cuerpo, pie = '') {
   return { el: bg, cerrar };
 }
 const imagen = p => p.foto ? `<img src="${esc(p.foto)}" alt="${esc(p.nombre)}" loading="lazy">` : `<div class="t-ph">${icono(p)}</div>`;
-const badge = p => `<span class="pill ${ESTADO[p.estado][1]} t-badge">${ESTADO[p.estado][0]}</span>`;
+const badge = p => `<span class="pill ${ESTADO[p.estado][1]} t-badge">${ESTADO[p.estado][0]}</span>${p.destacado ? '<span class="t-dest" title="Destacado">★</span>' : ''}`;
+// Redes: acepta el usuario (@gscom) o el link completo
+const RED = { instagram: ['Instagram', u => `https://instagram.com/${u}`], facebook: ['Facebook', u => `https://facebook.com/${u}`], tiktok: ['TikTok', u => `https://tiktok.com/@${u}`] };
+const linkRed = (red, v) => /^https?:\/\//i.test(v) ? v : RED[red][1](encodeURIComponent(String(v).trim().replace(/^@/, '')));
 
 // ---------- Listado ----------
 function lista() {
   const l = catalogo.productos.filter(p => (!filtro.cat || p.categoria === filtro.cat) && (!filtro.soloDisp || p.estado !== 'encargo')
     && matches(filtro.q, p.nombre, p.marca, p.descripcion, p.categoria));
-  const cmp = { nombre: (a, b) => a.nombre.localeCompare(b.nombre), menor: (a, b) => a.precio - b.precio, mayor: (a, b) => b.precio - a.precio }[filtro.orden];
-  // con stock primero, después por el orden elegido
-  return l.sort((a, b) => (a.estado === 'encargo') - (b.estado === 'encargo') || cmp(a, b));
+  const porNombre = (a, b) => a.nombre.localeCompare(b.nombre);
+  const cmp = { destacados: (a, b) => b.destacado - a.destacado || porNombre(a, b), nombre: porNombre, menor: (a, b) => a.precio - b.precio, mayor: (a, b) => b.precio - a.precio }[filtro.orden];
+  // con stock primero, después por el orden elegido (en "Destacados", los destacados van arriba de todo)
+  const primero = filtro.orden === 'destacados' ? (a, b) => b.destacado - a.destacado : () => 0;
+  return l.sort((a, b) => primero(a, b) || (a.estado === 'encargo') - (b.estado === 'encargo') || cmp(a, b));
 }
 function pintar() {
   const l = lista();
+  $('#bienvenida').hidden = !catalogo.tienda?.bienvenida || !!filtro.q || !!filtro.cat;
   $('#cuenta').textContent = `${l.length} producto${l.length === 1 ? '' : 's'}${filtro.cat ? ` en ${filtro.cat}` : ''}`;
   $('#grid').innerHTML = l.slice(0, mostrados).map(p => `
     <div class="t-card" data-id="${p.id}">
@@ -140,7 +146,7 @@ function verCarrito() {
       ${hayEncargo ? '<p class="small muted" style="margin-bottom:.8rem">Los productos <b>por encargo</b> se consiguen a pedido: te confirmamos precio y demora.</p>' : ''}
       <div class="row"><div class="field"><label>Tu nombre</label><input class="input" id="nombre" autocomplete="name"></div>
         <div class="field"><label>Comentario (opcional)</label><input class="input" id="coment" placeholder="ej: lo retiro el sábado"></div></div>
-      <p class="small muted" style="margin:-.2rem 0 1rem">Retiro en el local${neg.direccion ? `: ${esc(neg.direccion)}` : ''}. Precios en pesos, sujetos a cambio sin previo aviso.</p>
+      <p class="small muted" style="margin:-.2rem 0 1rem">Retiro en el local${neg.direccion ? `: ${esc(neg.direccion)}` : ''}.${catalogo.tienda?.envios ? ' Consultá por envíos.' : ''} Precios en pesos, sujetos a cambio sin previo aviso.</p>
       <button class="btn wa lg block" id="enviar" ${neg.whatsapp ? '' : 'disabled'}>Enviar pedido por WhatsApp</button>
       ${neg.whatsapp ? '' : '<p class="small muted" style="margin-top:.4rem">El local todavía no cargó su WhatsApp.</p>'}
       <button class="btn block" id="vaciar" style="margin-top:.5rem">Vaciar pedido</button>`;
@@ -162,11 +168,20 @@ function verCarrito() {
 }
 
 // ---------- Arranque ----------
+function pintarAviso() {
+  const t = catalogo.tienda || {};
+  const a = $('#aviso'); a.hidden = !t.aviso; a.textContent = t.aviso || ''; a.className = `t-aviso ${t.aviso_color || 'info'}`;
+  const b = $('#bienvenida'); b.textContent = t.bienvenida || '';
+}
 function pintarPie() {
-  const n = catalogo.negocio;
+  const n = catalogo.negocio, t = catalogo.tienda || {};
+  const redes = Object.keys(RED).filter(r => t[r]).map(r => `<a href="${esc(linkRed(r, t[r]))}" target="_blank" rel="noopener">${RED[r][0]}</a>`);
+  const info = [['💳 Formas de pago', t.pagos], ['🚚 Envíos y retiro', t.envios]].filter(([, v]) => v)
+    .map(([l, v]) => `<div class="t-info"><b>${l}</b><div>${esc(v).replace(/\n/g, '<br>')}</div></div>`).join('');
   const wa = n.whatsapp ? linkWhatsApp(n.whatsapp, 'Hola! Tengo una consulta desde la tienda online.') : '';
-  $('#pie').innerHTML = `<b>${esc(n.nombre || 'GScom')}</b><br>${[n.direccion, n.telefono && `Tel. ${n.telefono}`].filter(Boolean).map(esc).join(' · ')}
+  $('#pie').innerHTML = `${info ? `<div class="t-infos">${info}</div>` : ''}<b>${esc(n.nombre || 'GScom')}</b><br>${[n.direccion, n.telefono && `Tel. ${n.telefono}`].filter(Boolean).map(esc).join(' · ')}
     ${n.horario ? `<br>${esc(n.horario)}` : ''}${wa ? `<br><a href="${wa}" target="_blank" rel="noopener">Escribinos por WhatsApp</a>` : ''}
+    ${redes.length ? `<br>${redes.join(' · ')}` : ''}
     <br><span class="small">Precios en pesos argentinos, sujetos a cambio sin previo aviso. Imágenes ilustrativas.</span>`;
 }
 
@@ -176,7 +191,7 @@ async function iniciar() {
   document.title = `${catalogo.negocio.nombre || 'GScom'} — Tienda de informática`;
   Object.keys(carrito).forEach(id => { if (!prod(id)) delete carrito[id]; });   // productos que ya no están publicados
   guardarCarrito();
-  pintarCategorias(); pintarPie(); pintar(); pintarBoton();
+  pintarCategorias(); pintarAviso(); pintarPie(); pintar(); pintarBoton();
   let t;
   $('#q').oninput = e => { clearTimeout(t); t = setTimeout(() => { filtro.q = e.target.value; mostrados = POR_PAGINA; pintar(); }, 150); };
   $('#solo-disp').onchange = e => { filtro.soloDisp = e.target.checked; mostrados = POR_PAGINA; pintar(); };
