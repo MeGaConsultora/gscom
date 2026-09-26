@@ -749,8 +749,7 @@ ROUTES.inventario = async () => {
   const contado = p => !!p.ultimo_conteo;
 
   view().innerHTML = `
-  <div class="page-head"><div><a href="#/productos" class="small muted">← Productos</a><h1>Carga rápida de stock</h1></div>
-    <div class="actions"><button class="btn" id="reiniciar" title="Para empezar un inventario nuevo más adelante">Reiniciar marcas de conteo</button></div></div>
+  <div class="page-head"><div><a href="#/productos" class="small muted">← Productos</a><h1>Carga rápida de stock</h1></div></div>
   <div class="card card-pad" style="margin-bottom:1rem">
     <div class="row small" style="align-items:center;margin-bottom:.4rem"><span id="progreso-txt"></span><span class="right muted">Los que todavía no contaste siguen como "Por encargo" en la tienda</span></div>
     <div style="height:10px;background:#eef0f3;border-radius:5px;overflow:hidden"><div id="progreso" style="height:100%;background:var(--ok);width:0;transition:width .3s"></div></div>
@@ -835,10 +834,6 @@ ROUTES.inventario = async () => {
   $('#cat').onchange = e => { cat = e.target.value; mostrar = 150; pintar(); };
   $('#prov').onchange = e => { prov = e.target.value; mostrar = 150; pintar(); };
   $('#mas').onclick = () => { mostrar += 150; pintar(); };
-  $('#reiniciar').onclick = () => run(async () => {
-    if (!confirm('¿Reiniciar las marcas de "contado" de todos los productos?\n\nEl stock NO cambia: solo se usa para empezar un inventario nuevo.')) return;
-    await store.reiniciarConteo(); toast('Marcas reiniciadas'); render();
-  });
   pintar();
   scan.focus();
 };

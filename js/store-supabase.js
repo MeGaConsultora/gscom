@@ -116,7 +116,6 @@ export const store = {
   },
   // Inventario: fija el stock contado y marca el producto como contado
   async contarStock(productoId, cantidad) { return q(sb.rpc('contar_stock', { p_producto_id: productoId, p_cantidad: +cantidad })); },
-  async reiniciarConteo() { await q(sb.rpc('reiniciar_conteo')); },
   async ajustarStock(productoId, cantidad, nota) {
     await q(sb.from('stock_movimientos').insert({ producto_id: productoId, cantidad, tipo: 'ajuste', nota: nota || '' }));
   },
