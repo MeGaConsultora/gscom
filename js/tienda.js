@@ -53,9 +53,25 @@ const RED = { instagram: ['Instagram', u => `https://instagram.com/${u}`], faceb
 const linkRed = (red, v) => /^https?:\/\//i.test(v) ? v : RED[red][1](encodeURIComponent(String(v).trim().replace(/^@/, '')));
 
 // ---------- Listado ----------
+// Relevancia de un producto para lo buscado: 0 el nombre empieza con eso · 1 está en el nombre ·
+// 2 en la marca o la descripción · 3 solo en la categoría · null no coincide
+function relevancia(p, q) {
+  const t = norm(q).trim(); if (!t) return 0;
+  if (norm(p.nombre).startsWith(t)) return 0;
+  if (matches(q, p.nombre)) return 1;
+  if (matches(q, p.nombre, p.marca, p.descripcion)) return 2;
+  if (matches(q, p.nombre, p.marca, p.descripcion, p.categoria)) return 3;
+  return null;
+}
 function lista() {
-  const l = catalogo.productos.filter(p => (!filtro.cat || p.categoria === filtro.cat) && (!filtro.soloDisp || p.estado !== 'encargo')
-    && matches(filtro.q, p.nombre, p.marca, p.descripcion, p.categoria));
+  let l = catalogo.productos.filter(p => (!filtro.cat || p.categoria === filtro.cat) && (!filtro.soloDisp || p.estado !== 'encargo'));
+  const rel = new Map();
+  if (filtro.q.trim()) {
+    l.forEach(p => rel.set(p, relevancia(p, filtro.q)));
+    l = l.filter(p => rel.get(p) != null);
+    // la categoría es solo el último recurso: si algo coincide por nombre, marca o descripción, se muestran esos
+    if (l.some(p => rel.get(p) < 3)) l = l.filter(p => rel.get(p) < 3);
+  }
   const porNombre = (a, b) => a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base', numeric: true });
   const conStock = (a, b) => (a.estado === 'encargo') - (b.estado === 'encargo');
   // "Destacados" (el de entrada): destacados arriba de todo, después los que tienen stock, después por nombre.
@@ -66,7 +82,9 @@ function lista() {
     menor: (a, b) => a.precio - b.precio || porNombre(a, b),
     mayor: (a, b) => b.precio - a.precio || porNombre(a, b),
   }[filtro.orden];
-  return l.sort(cmp);
+  // buscando con el orden de entrada, primero lo más parecido a lo que se escribió
+  const primero = filtro.q.trim() && filtro.orden === 'destacados' ? (a, b) => rel.get(a) - rel.get(b) : () => 0;
+  return l.sort((a, b) => primero(a, b) || cmp(a, b));
 }
 function pintar() {
   const l = lista();
