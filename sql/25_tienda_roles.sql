@@ -87,7 +87,7 @@ language sql stable security definer set search_path = public as $$
       left join categorias c on c.id = p.categoria_id
       left join reservas r on r.producto_id = p.id
      where p.activo and p.publicado and not p.es_servicio and p.precio_venta > 0
-       and (p.categoria_id is null or not p.categoria_id = any ((select categorias_ocultas from cfg)))
+       and (p.categoria_id is null or not exists (select 1 from cfg where p.categoria_id = any (cfg.categorias_ocultas)))
   )
   select jsonb_build_object(
     'negocio', (select jsonb_build_object('nombre', n.nombre, 'direccion', n.direccion, 'telefono', n.telefono,
