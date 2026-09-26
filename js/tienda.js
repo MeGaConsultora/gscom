@@ -171,7 +171,10 @@ function verCarrito() {
 function pintarAviso() {
   const t = catalogo.tienda || {};
   const a = $('#aviso'); a.hidden = !t.aviso; a.textContent = t.aviso || ''; a.className = `t-aviso ${t.aviso_color || 'info'}`;
-  const b = $('#bienvenida'); b.textContent = t.bienvenida || '';
+  $('#bienvenida-txt').textContent = t.bienvenida || '';
+  const wa = $('#bienvenida-wa'), n = catalogo.negocio;
+  wa.hidden = !n.whatsapp;
+  if (n.whatsapp) wa.href = linkWhatsApp(n.whatsapp, 'Hola! Estoy buscando un producto que no encontré en la tienda online:');
 }
 function pintarPie() {
   const n = catalogo.negocio, t = catalogo.tienda || {};
