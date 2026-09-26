@@ -70,7 +70,7 @@ function lista() {
 }
 function pintar() {
   const l = lista();
-  $('#bienvenida').hidden = !catalogo.tienda?.bienvenida || !!filtro.q || !!filtro.cat;
+  $('#bienvenida').hidden = !catalogo.tienda?.bienvenida || !!filtro.q;   // se oculta solo mientras se busca
   $('#cuenta').textContent = `${l.length} producto${l.length === 1 ? '' : 's'}${filtro.cat ? ` en ${filtro.cat}` : ''}`;
   $('#grid').innerHTML = l.slice(0, mostrados).map(p => `
     <div class="t-card" data-id="${p.id}">
