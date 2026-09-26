@@ -181,6 +181,34 @@ async function actualizarContador() {
   const a = $('nav.tabs a[data-r=service]');
   if (a) a.innerHTML = `Service${respondidos ? ` <span class="badge" title="Presupuestos respondidos por clientes">${respondidos}</span>` : ''}`;
   document.title = (respondidos && document.hidden ? `(${respondidos}) ` : '') + 'GScom — Gestión';
+  // Solicitudes de la tienda pendientes de revisar
+  const n = await store.solicitudesWeb().then(l => l.length).catch(() => 0);
+  const e = $('nav.tabs a[data-r=encargos]');
+  if (e) e.innerHTML = `Encargos${n ? ` <span class="badge" title="Solicitudes de la tienda para revisar">${n}</span>` : ''}`;
+}
+
+// Entró una solicitud desde la tienda: aviso con sonido. Si el cliente la cancela, el aviso desaparece.
+async function avisarSolicitud(id) {
+  const s = (await store.solicitudesWeb().catch(() => [])).find(x => x.id === id);
+  if (!s) return;
+  let pila = $('#avisos');
+  if (!pila) { pila = document.createElement('div'); pila.id = 'avisos'; document.body.appendChild(pila); }
+  const el = document.createElement('div');
+  el.className = 'aviso ok'; el.dataset.solicitud = id;
+  el.innerHTML = `<button class="x" title="Cerrar">×</button>
+    <div class="small muted">Nueva solicitud desde la tienda</div>
+    <div style="margin:.2rem 0 .6rem"><b>🛒 ${esc(s.nombre)}</b> pidió ${s.items.length} producto(s) · ${money(s.total)}</div>
+    <a class="btn sm ok" href="#/encargos">Revisar</a>`;
+  $('.x', el).onclick = () => el.remove();
+  $('a', el).onclick = () => el.remove();
+  pila.prepend(el);
+  sonido(); actualizarContador();
+  if (parseHash().name === 'encargos') render();
+}
+function quitarAvisoSolicitud(id) {
+  $(`[data-solicitud="${id}"]`)?.remove();
+  actualizarContador();
+  if (parseHash().name === 'encargos' && !$('.modal-bg')) render();
 }
 document.addEventListener('visibilitychange', () => { if (!document.hidden) document.title = 'GScom — Gestión'; });
 
@@ -2074,13 +2102,20 @@ const reservasPorProducto = encargos => encargos.filter(e => e.estado === 'reser
   .reduce((m, e) => m.set(e.producto_id, (m.get(e.producto_id) || 0) + +e.cantidad), new Map());
 
 ROUTES.encargos = async ({ q }) => {
-  const [encargos, proveedores] = await Promise.all([store.encargos(), store.proveedores()]);
+  const [encargos, proveedores, solicitudes] = await Promise.all([store.encargos(), store.proveedores(), store.solicitudesWeb().catch(() => [])]);
   const provName = id => proveedores.find(x => x.id === id)?.nombre || 'Sin proveedor';
   let filtro = q.get('estado') || 'activos', tipo = q.get('tipo') || 'todos', texto = '';
   const activo = e => !['entregado', 'cancelado'].includes(e.estado);
   const hermanos = e => e.solicitud ? encargos.filter(x => x.solicitud === e.solicitud && x.id !== e.id) : [];
   view().innerHTML = `
   <div class="page-head"><h1>Encargos y reservas</h1><div class="actions"><button class="btn primary" id="nuevo">+ Nuevo encargo / reserva</button></div></div>
+  ${solicitudes.length ? `<div class="card card-pad" id="solicitudes" style="margin-bottom:1rem;border-color:#f5a623;background:#fffaf0">
+    <h2 style="margin-bottom:.3rem">🛒 Solicitudes de la tienda <span class="badge">${solicitudes.length}</span></h2>
+    <p class="small muted" style="margin-bottom:.7rem">Todavía <b>no reservan nada ni van a Pedidos</b>. Escribile al cliente por WhatsApp y confirmala (se convierte en reserva/encargo) o descartala. Mientras esté pendiente, el cliente la puede cancelar.</p>
+    <table class="tbl"><tbody>${solicitudes.map(s => `<tr class="click" data-sol="${s.id}"><td class="mono"><b>${s.id}</b></td><td class="nowrap small">${fdatetime(s.fecha)}</td>
+      <td>${esc(s.nombre)}<div class="small muted">${esc(s.telefono)}</div></td>
+      <td class="small">${s.items.map(i => `${i.cantidad} × ${esc(i.nombre)}`).join('<br>')}${s.comentario ? `<div class="muted">“${esc(s.comentario)}”</div>` : ''}</td>
+      <td class="num nowrap"><b>${money(s.total)}</b></td><td class="right"><button class="btn sm primary" data-sol-ver="${s.id}">Revisar</button></td></tr>`).join('')}</tbody></table></div>` : ''}
   <p class="small muted" style="margin:-.6rem 0 1rem"><b>Encargo:</b> algo que hay que pedirle al proveedor (se suma al pedido pendiente). <b>Reserva:</b> algo que tenemos en stock y apartamos para el cliente.
     Cuando llega o queda reservado, se le avisa y se entrega con <b>Vender</b>.</p>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por cliente, producto o N°"></div></div>
@@ -2115,8 +2150,67 @@ ROUTES.encargos = async ({ q }) => {
   };
   $('#buscar').oninput = e => { texto = e.target.value.trim(); paint(); };
   $('#nuevo').onclick = () => run(() => encargoModal(null));
+  $$('[data-sol]').forEach(tr => tr.onclick = () => run(() => solicitudModal(solicitudes.find(s => s.id === +tr.dataset.sol))));
   paint();
 };
+
+// Revisar una solicitud de la tienda: confirmarla (reserva lo que hay, encarga lo que falta) o descartarla
+async function solicitudModal(s) {
+  const [clientes, productos, proveedores, encargos] = await Promise.all([store.clientes(), store.productos(), store.proveedores(), store.encargos()]);
+  const reservados = reservasPorProducto(encargos);
+  const ult10 = t => String(t || '').replace(/\D/g, '').slice(-10);
+  const conocido = clientes.find(c => ult10(c.telefono).length >= 8 && ult10(c.telefono) === ult10(s.telefono));
+  const primer = s.nombre.split(' ')[0];
+  const lineas = s.items.map(i => {
+    const p = productos.find(x => x.id === i.producto_id);
+    const disp = p ? Math.max(+p.stock - (reservados.get(p.id) || 0), 0) : 0;
+    return { ...i, p, disp, reservar: Math.min(i.cantidad, disp), encargar: i.cantidad - Math.min(i.cantidad, disp), incluir: !!p, proveedor_id: p?.proveedor_id || null };
+  });
+  const m = modal(`Solicitud de la tienda N° ${s.id}`, `
+    <div class="row" style="align-items:center;margin-bottom:.8rem"><div><b>${esc(s.nombre)}</b> · ${esc(s.telefono)} <span class="small muted">· ${fdatetime(s.fecha)}</span>
+      ${conocido ? `<div class="small" style="color:var(--ok)">✓ Es cliente: <a href="#/clientes/${conocido.id}" data-close>${esc(conocido.nombre)}</a></div>` : '<div class="small muted">No coincide con ningún cliente cargado</div>'}</div>
+      <a class="btn wa sm right" target="_blank" rel="noopener" href="${esc(waLink(s.telefono, `Hola ${primer}! Te escribimos de GScom por tu solicitud N° ${s.id} de la tienda online.`))}">Escribirle</a></div>
+    ${s.comentario ? `<p class="small" style="margin-bottom:.8rem">Comentario: “${esc(s.comentario)}”</p>` : ''}
+    <div class="field"><label>Queda a nombre de</label><select class="input" id="sol-cli">
+      <option value="">${esc(s.nombre)} · ${esc(s.telefono)} (no es cliente)</option>
+      ${clientes.map(c => `<option value="${c.id}" ${c.id === conocido?.id ? 'selected' : ''}>${esc(c.nombre)}${c.telefono ? ' — ' + esc(c.telefono) : ''}</option>`).join('')}</select></div>
+    <table class="tbl" style="margin-bottom:.8rem"><thead><tr><th style="width:28px"></th><th>Producto</th><th>Qué se hace</th><th>Proveedor (lo que falte)</th></tr></thead><tbody>
+      ${lineas.map((l, i) => `<tr><td><input type="checkbox" data-inc="${i}" ${l.incluir ? 'checked' : 'disabled'}></td>
+        <td>${l.cantidad} × ${esc(l.nombre)}<div class="small muted">${money(l.precio)} c/u${l.p ? ` · stock ${l.p.stock}${reservados.get(l.p.id) ? `, ${reservados.get(l.p.id)} reservado(s)` : ''}` : ' · ya no está en la base'}</div></td>
+        <td class="small">${!l.p ? '—' : !l.encargar ? `Se <b>reservan ${l.reservar}</b>` : !l.reservar ? `Se <b>encargan ${l.encargar}</b>` : `Se <b>reservan ${l.reservar}</b> y se <b>encargan ${l.encargar}</b>`}</td>
+        <td>${l.encargar && l.p ? `<select class="input" data-prov="${i}"><option value="">— Sin proveedor —</option>${proveedores.map(p => `<option value="${p.id}" ${p.id === l.proveedor_id ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}</select>` : '<span class="muted small">—</span>'}</td></tr>`).join('')}
+    </tbody></table>
+    <div class="field" style="max-width:220px"><label>Reservado hasta (opcional)</label><input class="input" type="date" id="sol-hasta"></div>
+    <p class="small muted">Al confirmar: lo reservado se aparta del stock disponible y lo encargado se suma al pedido pendiente de cada proveedor. Todo queda en Encargos con el precio de la tienda.</p>`,
+    `<button class="btn danger" id="descartar" style="margin-right:auto">Descartar</button><button class="btn" data-close>Cerrar</button><button class="btn primary" id="confirmar">Confirmar solicitud</button>`, { wide: true });
+
+  const mensaje = texto => { if (confirm('¿Le avisás al cliente por WhatsApp?')) window.open(waLink(s.telefono, texto), '_blank', 'noopener'); };
+  $('#descartar', m.el).onclick = () => run(async () => {
+    if (!confirm(`¿Descartar la solicitud N° ${s.id}? No se reserva ni se encarga nada.`)) return;
+    await store.atenderSolicitudWeb(s.id, 'descartada');
+    m.close(); toast('Solicitud descartada'); render(); actualizarContador();
+    mensaje(`Hola ${primer}! Te escribimos de GScom por tu solicitud N° ${s.id}: lamentablemente no podemos confirmarla. Si querés, lo charlamos por acá.`);
+  });
+  $('#confirmar', m.el).onclick = () => run(async () => {
+    const elegidas = lineas.filter((l, i) => l.p && $(`[data-inc="${i}"]`, m.el).checked);
+    if (!elegidas.length) return toast('No quedó ningún producto marcado: si no se hace nada, descartala', true);
+    const cli = $('#sol-cli', m.el).value, hasta = $('#sol-hasta', m.el).value || null;
+    lineas.forEach((l, i) => { const sel = $(`[data-prov="${i}"]`, m.el); if (sel) l.proveedor_id = sel.value ? +sel.value : null; });
+    await store.atenderSolicitudWeb(s.id, 'confirmada');   // falla si el cliente la canceló recién
+    const quien = cli ? { cliente_id: +cli, contacto: '', telefono: '' } : { cliente_id: null, contacto: s.nombre, telefono: s.telefono };
+    const notas = `Solicitud web N° ${s.id}${s.comentario ? ` · ${s.comentario}` : ''}`;
+    let nRes = 0, nEnc = 0;
+    for (const l of elegidas) {
+      const base = { ...quien, producto_id: l.p.id, descripcion: l.nombre, precio: l.precio, notas };
+      const vinculo = l.reservar && l.encargar && crypto.randomUUID ? crypto.randomUUID() : null;
+      if (l.reservar) { await store.crearEncargo({ ...base, tipo: 'reserva', estado: 'reservado', cantidad: l.reservar, proveedor_id: null, reservado_hasta: hasta, solicitud: vinculo }); nRes++; }
+      if (l.encargar) { const e = await store.crearEncargo({ ...base, tipo: 'encargo', cantidad: l.encargar, proveedor_id: l.proveedor_id, solicitud: vinculo }); await store.encargar(e.id, l.proveedor_id); nEnc++; }
+    }
+    m.close(); toast(`Solicitud N° ${s.id} confirmada: ${nRes} reserva(s), ${nEnc} encargo(s)`); render(); actualizarContador();
+    const detalle = elegidas.map(l => `• ${l.cantidad} × ${l.nombre}${l.encargar ? (l.reservar ? ` (${l.reservar} ya separados, ${l.encargar} por encargo)` : ' (por encargo)') : ''}`).join('\n');
+    mensaje(`Hola ${primer}! Te escribimos de GScom: confirmamos tu solicitud N° ${s.id}.\n\n${detalle}\n\n${elegidas.some(l => l.encargar) ? 'Lo que está por encargo te avisamos cuando llegue. ' : ''}Podés ver tu solicitud acá: ${new URL(`tienda.html?solicitud=${s.token}`, location.href).href}`);
+  });
+}
 
 // Alta y edición. Al dar de alta un producto con stock disponible se puede reservar;
 // si piden más de lo disponible, se reserva lo que hay y se encarga el resto.
@@ -2581,7 +2675,7 @@ async function iniciar() {
   }
   pintarNav();
   $('nav.tabs').hidden = false;
-  if (!iniciada) { window.addEventListener('hashchange', render); if (!soloTienda()) store.escucharRespuestas(avisarRespuesta); iniciada = true; }
+  if (!iniciada) { window.addEventListener('hashchange', render); if (!soloTienda()) { store.escucharRespuestas(avisarRespuesta); store.escucharSolicitudes(avisarSolicitud, quitarAvisoSolicitud); } iniciada = true; }
   render();
 }
 iniciar();

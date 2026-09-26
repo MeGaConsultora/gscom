@@ -91,6 +91,22 @@ export const store = {
     await this.tiendaActualizarProducto(productoId, { foto_url: '' });
     await this.borrarArchivoFoto(fotoAnterior);
   },
+  // Solicitudes desde la tienda (el cliente crea/ve/cancela con su token; GScom las atiende)
+  async crearSolicitudWeb({ nombre, telefono, comentario = '', items, trampa = '' }) {
+    return q(sb.rpc('crear_solicitud_web', { p_nombre: nombre, p_telefono: telefono, p_comentario: comentario, p_items: items, p_trampa: trampa }));
+  },
+  async verSolicitudWeb(token) { return /^[0-9a-f-]{36}$/i.test(token || '') ? q(sb.rpc('ver_solicitud_web', { p_token: token })) : null; },
+  async cancelarSolicitudWeb(token) { return q(sb.rpc('cancelar_solicitud_web', { p_token: token })); },
+  async solicitudesWeb() { return q(sb.from('solicitudes_web').select('*').eq('estado', 'pendiente').order('fecha')); },
+  async atenderSolicitudWeb(id, estado) { return q(sb.rpc('atender_solicitud_web', { p_id: id, p_estado: estado })); },
+  // Llama a alta(id) cuando entra una solicitud y a baja(id) cuando el cliente la cancela
+  escucharSolicitudes(alta, baja) {
+    sb.channel('solicitudes-web')
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'solicitudes_web' }, ({ new: s }) => alta(s.id))
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'solicitudes_web' }, ({ old: s }) => baja(s.id))
+      .subscribe();
+  },
+
   // Usuarios (solo admin)
   async usuarios() { return q(sb.rpc('usuarios_listar')); },
   async actualizarUsuario(id, { activo, rol }) { await q(sb.rpc('usuario_actualizar', { p_id: id, p_activo: !!activo, p_rol: rol })); },

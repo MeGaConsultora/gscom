@@ -114,6 +114,41 @@ export const store = {
   },
   async guardarTiendaConfig(cfg) { db.tienda_config = { ...tiendaCfg(), ...cfg }; save(); },
   async publicarProductos(ids, publicado) { ids.forEach(id => { const p = byId('productos', id); if (p) p.publicado = publicado; }); save(); },
+  // Solicitudes desde la tienda (misma lógica que 26_solicitudes_web.sql, sin límites)
+  async crearSolicitudWeb({ nombre, telefono, comentario = '', items, trampa = '' }) {
+    if (trampa) return { token: token(), numero: 0 };
+    const tel = String(telefono || '').replace(/\D/g, '');
+    if ((nombre || '').trim().length < 2) throw new Error('Poné tu nombre');
+    if (tel.length < 8 || tel.length > 15) throw new Error('Revisá el número de WhatsApp');
+    const lineas = items.map(x => ({ p: byId('productos', x.producto_id), cant: Math.min(Math.max(Math.round(+x.cantidad || 0), 0), 20) }))
+      .filter(({ p, cant }) => p && p.activo && p.publicado !== false && !p.es_servicio && p.precio_venta > 0 && cant > 0)
+      .map(({ p, cant }) => ({ producto_id: p.id, nombre: p.nombre, precio: p.precio_venta, cantidad: cant, estado: estadoTienda(p) }));
+    if (!lineas.length) throw new Error('Los productos elegidos ya no están disponibles en la tienda');
+    db.solicitudes_web ??= [];
+    const s = insert('solicitudes_web', { token: token(), fecha: now(), nombre: nombre.trim().slice(0, 80), telefono: tel, comentario: (comentario || '').trim().slice(0, 300),
+      items: lineas, total: lineas.reduce((t, l) => t + l.precio * l.cantidad, 0), estado: 'pendiente', atendida_at: null });
+    save(); return { token: s.token, numero: s.id };
+  },
+  async verSolicitudWeb(tk) {
+    db = load();   // la tienda y GScom pueden estar en pestañas distintas
+    const s = (db.solicitudes_web || []).find(x => x.token === tk); if (!s) return null;
+    return clone({ numero: s.id, fecha: s.fecha, nombre: s.nombre.split(' ')[0], items: s.items, total: s.total, estado: s.estado, comentario: s.comentario });
+  },
+  async cancelarSolicitudWeb(tk) {
+    db = load();
+    const s = (db.solicitudes_web || []).find(x => x.token === tk); if (!s) return 'no_existe';
+    if (s.estado !== 'pendiente') return s.estado;
+    db.solicitudes_web = db.solicitudes_web.filter(x => x !== s); save(); return 'cancelada';
+  },
+  async solicitudesWeb() { db = load(); return clone((db.solicitudes_web || []).filter(s => s.estado === 'pendiente')); },
+  async atenderSolicitudWeb(id, estado) {
+    db = load();
+    const s = (db.solicitudes_web || []).find(x => x.id === +id && x.estado === 'pendiente');
+    if (!s) throw new Error('La solicitud ya no está pendiente (quizás el cliente la canceló)');
+    Object.assign(s, { estado, atendida_at: now() }); save(); return clone(s);
+  },
+  escucharSolicitudes() {},
+
   // Usuarios: en el modo demo no hay usuarios reales
   async usuarios() { return []; },
   async actualizarUsuario() {},
