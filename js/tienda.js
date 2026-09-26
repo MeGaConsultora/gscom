@@ -56,11 +56,17 @@ const linkRed = (red, v) => /^https?:\/\//i.test(v) ? v : RED[red][1](encodeURIC
 function lista() {
   const l = catalogo.productos.filter(p => (!filtro.cat || p.categoria === filtro.cat) && (!filtro.soloDisp || p.estado !== 'encargo')
     && matches(filtro.q, p.nombre, p.marca, p.descripcion, p.categoria));
-  const porNombre = (a, b) => a.nombre.localeCompare(b.nombre);
-  const cmp = { destacados: (a, b) => b.destacado - a.destacado || porNombre(a, b), nombre: porNombre, menor: (a, b) => a.precio - b.precio, mayor: (a, b) => b.precio - a.precio }[filtro.orden];
-  // con stock primero, después por el orden elegido (en "Destacados", los destacados van arriba de todo)
-  const primero = filtro.orden === 'destacados' ? (a, b) => b.destacado - a.destacado : () => 0;
-  return l.sort((a, b) => primero(a, b) || (a.estado === 'encargo') - (b.estado === 'encargo') || cmp(a, b));
+  const porNombre = (a, b) => a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base', numeric: true });
+  const conStock = (a, b) => (a.estado === 'encargo') - (b.estado === 'encargo');
+  // "Destacados" (el de entrada): destacados arriba de todo, después los que tienen stock, después por nombre.
+  // Los demás ordenan estrictamente por lo elegido (a igual precio, por nombre).
+  const cmp = {
+    destacados: (a, b) => b.destacado - a.destacado || conStock(a, b) || porNombre(a, b),
+    nombre: porNombre,
+    menor: (a, b) => a.precio - b.precio || porNombre(a, b),
+    mayor: (a, b) => b.precio - a.precio || porNombre(a, b),
+  }[filtro.orden];
+  return l.sort(cmp);
 }
 function pintar() {
   const l = lista();
