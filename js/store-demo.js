@@ -122,16 +122,17 @@ export const store = {
   async guardarTiendaConfig(cfg) { db.tienda_config = { ...tiendaCfg(), ...cfg }; save(); },
   async publicarProductos(ids, publicado) { ids.forEach(id => { const p = byId('productos', id); if (p) p.publicado = publicado; }); save(); },
   // Actualización masiva de precios (con registro para deshacer)
-  async ajustarPrecios(ids, campo, porcentaje, redondeo, detalle = '') {
+  async ajustarPrecios(ids, campo, porcentaje, redondeo, detalle = '', monto = null) {
     if (!['venta', 'costo'].includes(campo)) throw new Error('Campo no válido');
-    if (!porcentaje || porcentaje < -90 || porcentaje > 500) throw new Error('Porcentaje fuera de rango');
-    const lote = token(), fecha = now(), k = 1 + porcentaje / 100;
-    const afectados = ids.map(id => byId('productos', id)).filter(p => p && p.activo && (campo === 'venta' ? p.margen == null && p.precio_venta > 0 : p.precio_costo > 0));
+    if (monto != null ? !+monto : (!porcentaje || porcentaje < -90 || porcentaje > 500)) throw new Error(monto != null ? 'Monto fuera de rango' : 'Porcentaje fuera de rango');
+    const lote = token(), fecha = now(), nuevo = v => monto != null ? v + +monto : v * (1 + porcentaje / 100);
+    const afectados = ids.map(id => byId('productos', id)).filter(p => p && p.activo
+      && (campo === 'venta' ? p.margen == null && p.precio_venta > 0 && nuevo(p.precio_venta) > 0 : p.precio_costo > 0 && nuevo(p.precio_costo) > 0));
     db.precios_historial ??= [];
     afectados.forEach(p => {
       const h = { lote, fecha, producto_id: p.id, costo_antes: p.precio_costo, venta_antes: p.precio_venta, detalle };
-      if (campo === 'venta') p.precio_venta = redondearPrecio(p.precio_venta * k, redondeo);
-      else { p.precio_costo = Math.round(p.precio_costo * k * 100) / 100; aplicarMargen(p); }
+      if (campo === 'venta') p.precio_venta = redondearPrecio(nuevo(p.precio_venta), redondeo);
+      else { p.precio_costo = Math.round(nuevo(p.precio_costo) * 100) / 100; aplicarMargen(p); }
       db.precios_historial.push({ ...h, costo_despues: p.precio_costo, venta_despues: p.precio_venta });
     });
     save(); return { lote, cantidad: afectados.length };

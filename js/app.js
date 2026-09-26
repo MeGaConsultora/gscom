@@ -622,58 +622,83 @@ ROUTES.productos = async ({ q }) => {
 const REDONDEOS = [[1, '$1 (sin centavos)'], [10, '$10'], [50, '$50'], [100, '$100'], [500, '$500'], [0, 'Sin redondeo']];
 function preciosModal(productos, categorias, proveedores, redondeo) {
   const sel = [...prodSel].filter(id => productos.some(p => p.id === id));
+  const catName = id => categorias.find(c => c.id === id)?.nombre || '';
   const m = modal('Actualizar precios', `
-    <div class="field"><label>¿A qué productos?</label><select class="input" id="ap-ambito">
-      <option value="todos">Todos los productos (${productos.length})</option>
-      ${sel.length ? `<option value="sel" selected>Los seleccionados (${sel.length})</option>` : ''}
-      <optgroup label="Una categoría">${categorias.map(c => `<option value="cat:${c.id}">${esc(c.nombre)} (${productos.filter(p => p.categoria_id === c.id).length})</option>`).join('')}</optgroup>
-      <optgroup label="Un proveedor">${proveedores.map(p => `<option value="prov:${p.id}">${esc(p.nombre)} (${productos.filter(x => x.proveedor_id === p.id).length})</option>`).join('')}</optgroup></select></div>
+    <div class="row" style="align-items:flex-end">
+      <div class="field"><label>¿A qué productos?</label><select class="input" id="ap-ambito">
+        <option value="buscar">Los que coinciden con una búsqueda (ej: router)</option>
+        <option value="todos">Todos los productos (${productos.length})</option>
+        ${sel.length ? `<option value="sel">Los seleccionados (${sel.length})</option>` : ''}
+        <optgroup label="Una categoría">${categorias.map(c => `<option value="cat:${c.id}">${esc(c.nombre)} (${productos.filter(p => p.categoria_id === c.id).length})</option>`).join('')}</optgroup>
+        <optgroup label="Un proveedor">${proveedores.map(p => `<option value="prov:${p.id}">${esc(p.nombre)} (${productos.filter(x => x.proveedor_id === p.id).length})</option>`).join('')}</optgroup></select></div>
+      <div class="field" id="ap-q-f"><label>Que contengan</label><input class="input" id="ap-q" placeholder="ej: router · tóner hp · cable hdmi"></div></div>
     <div class="row">
       <div class="field"><label>¿Qué se aumenta?</label><select class="input" id="ap-campo"><option value="venta">Precio de venta</option><option value="costo">Costo (lista nueva del proveedor)</option></select></div>
-      <div class="field"><label>Porcentaje</label><input class="input" id="ap-pct" type="number" step="any" placeholder="ej: 10  (o -5 para bajar)"></div>
-      <div class="field" id="ap-red-f"><label>Redondear hacia arriba a</label><select class="input" id="ap-red">${REDONDEOS.map(([v, l]) => `<option value="${v}" ${+v === +redondeo ? 'selected' : ''}>${l}</option>`).join('')}</select></div></div>
+      <div class="field"><label>¿Cómo?</label><select class="input" id="ap-modo"><option value="pct">Porcentaje (%)</option><option value="monto">Monto fijo ($)</option></select></div>
+      <div class="field"><label id="ap-val-l">Porcentaje</label><input class="input" id="ap-val" type="number" step="any"></div></div>
+    <div class="row" id="ap-red-f" style="align-items:flex-end">
+      <div class="field" style="flex:0 0 240px"><label>Redondear el precio nuevo</label><select class="input" id="ap-red">${REDONDEOS.map(([v, l]) => `<option value="${v}" ${+v === +redondeo ? 'selected' : ''}>${v ? `Hacia arriba a ${l}` : l}</option>`).join('')}</select></div>
+      <div class="field small muted" id="ap-red-ej" style="margin-bottom:1.1rem"></div></div>
     <div id="ap-prev" class="small" style="min-height:3rem"></div>`,
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ap-ok" disabled>Aplicar</button>`, { wide: true });
+  if (sel.length) $('#ap-ambito', m.el).value = 'sel';
 
   const ambito = () => {
-    const v = $('#ap-ambito', m.el).value;
-    return v === 'sel' ? productos.filter(p => sel.includes(p.id)) : v.startsWith('cat:') ? productos.filter(p => p.categoria_id === +v.slice(4))
+    const v = $('#ap-ambito', m.el).value, t = $('#ap-q', m.el).value.trim();
+    return v === 'buscar' ? (t ? productos.filter(p => matches(t, p.nombre, p.marca, p.descripcion, p.codigo_barras, catName(p.categoria_id))) : [])
+      : v === 'sel' ? productos.filter(p => sel.includes(p.id)) : v.startsWith('cat:') ? productos.filter(p => p.categoria_id === +v.slice(4))
       : v.startsWith('prov:') ? productos.filter(p => p.proveedor_id === +v.slice(5)) : productos;
   };
   const plan = () => {
-    const campo = $('#ap-campo', m.el).value, pct = +$('#ap-pct', m.el).value, red = +$('#ap-red', m.el).value, k = 1 + pct / 100, l = ambito();
-    const afectados = l.filter(p => campo === 'venta' ? p.margen == null && +p.precio_venta > 0 : +p.precio_costo > 0);
-    const nuevo = p => campo === 'venta' ? { costo: +p.precio_costo, venta: redondearPrecio(p.precio_venta * k, red) }
-      : { costo: Math.round(p.precio_costo * k * 100) / 100, venta: p.margen != null ? precioPorMargen(p.precio_costo * k, p.margen, redondeo) : +p.precio_venta };
-    return { campo, pct, red, l, afectados, nuevo };
+    const campo = $('#ap-campo', m.el).value, modo = $('#ap-modo', m.el).value, val = +$('#ap-val', m.el).value, red = +$('#ap-red', m.el).value;
+    const cambio = x => modo === 'monto' ? x + val : x * (1 + val / 100);
+    const l = ambito();
+    const afectados = l.filter(p => campo === 'venta' ? p.margen == null && +p.precio_venta > 0 && cambio(+p.precio_venta) > 0 : +p.precio_costo > 0 && cambio(+p.precio_costo) > 0);
+    const nuevo = p => campo === 'venta' ? { costo: +p.precio_costo, venta: redondearPrecio(cambio(+p.precio_venta), red) }
+      : { costo: Math.round(cambio(+p.precio_costo) * 100) / 100, venta: p.margen != null ? precioPorMargen(cambio(+p.precio_costo), p.margen, redondeo) : +p.precio_venta };
+    const valido = modo === 'monto' ? !!val : !!val && val >= -90 && val <= 500;
+    const texto = modo === 'monto' ? `${val > 0 ? '+' : '−'}${money(Math.abs(val))}` : `${val > 0 ? '+' : ''}${val}%`;
+    return { campo, modo, val, red, l, afectados, nuevo, valido, texto, cambio };
   };
   const pintar = () => {
-    const { campo, pct, l, afectados, nuevo } = plan();
-    $('#ap-red-f', m.el).style.visibility = campo === 'venta' ? '' : 'hidden';
+    const { campo, modo, val, l, afectados, nuevo, valido, texto, cambio } = plan();
+    $('#ap-q-f', m.el).style.visibility = $('#ap-ambito', m.el).value === 'buscar' ? '' : 'hidden';
+    $('#ap-val-l', m.el).textContent = modo === 'monto' ? 'Monto a sumar ($)' : 'Porcentaje';
+    $('#ap-val', m.el).placeholder = modo === 'monto' ? 'ej: 500  (o -200 para bajar)' : 'ej: 10  (o -5 para bajar)';
+    $('#ap-red-f', m.el).style.display = campo === 'venta' ? '' : 'none';
+    // ejemplo concreto de qué hace el redondeo, con un producto real
+    const ej = afectados[0], crudo = ej && val ? cambio(+ej.precio_venta) : null, red = +$('#ap-red', m.el).value;
+    $('#ap-red-ej', m.el).innerHTML = crudo == null ? 'Evita precios "sucios" como $13.579,50 después de un aumento.'
+      : `Ej.: ${esc(ej.nombre)} quedaría en ${money(crudo)}${redondearPrecio(crudo, red) !== Math.round(crudo * 100) / 100 ? ` → <b>${money(redondearPrecio(crudo, red))}</b>` : ''}`;
     const conMargen = l.filter(p => p.margen != null).length, fijos = afectados.filter(p => p.margen == null).length;
     const nota = campo === 'venta'
       ? (conMargen ? `<p class="muted">${conMargen} producto(s) tienen precio por margen: no cambian acá (su precio sigue al costo). Si el proveedor aumentó, elegí <b>Costo</b>.</p>` : '')
-      : `<p class="muted">Los que van por margen (${afectados.length - fijos}) recalculan su precio de venta. Los de precio fijo (${fijos}) mantienen su precio: solo cambia el costo, y su margen ${pct > 0 ? 'baja' : 'sube'}.</p>`;
-    const sinDato = l.length - afectados.length - (campo === 'venta' ? conMargen : 0);
-    $('#ap-prev', m.el).innerHTML = !pct ? '<p class="muted">Poné el porcentaje para ver cómo quedan.</p>' : `
-      <p style="margin-bottom:.4rem">Se actualizan <b>${afectados.length}</b> producto(s)${sinDato > 0 ? ` <span class="muted">(${sinDato} sin ${campo === 'venta' ? 'precio' : 'costo'} cargado quedan igual)</span>` : ''}.</p>${nota}
-      ${afectados.length ? `<table class="tbl" style="margin-top:.5rem"><thead><tr><th>Ejemplos</th>${campo === 'costo' ? '<th class="num">Costo</th>' : ''}<th class="num">Precio de venta</th></tr></thead><tbody>
-      ${afectados.slice(0, 6).map(p => { const n = nuevo(p); return `<tr><td>${esc(p.nombre)}</td>${campo === 'costo' ? `<td class="num nowrap">${money(p.precio_costo)} → <b>${money(n.costo)}</b></td>` : ''}
-        <td class="num nowrap">${n.venta !== +p.precio_venta ? `${money(p.precio_venta)} → <b>${money(n.venta)}</b>` : `<span class="muted">${money(p.precio_venta)} (igual)</span>`}</td></tr>`; }).join('')}</tbody></table>` : ''}`;
+      : `<p class="muted">Los que van por margen (${afectados.length - fijos}) recalculan su precio de venta. Los de precio fijo (${fijos}) mantienen su precio: solo cambia el costo, y su margen ${val > 0 ? 'baja' : 'sube'}.</p>`;
+    const buscando = $('#ap-ambito', m.el).value === 'buscar';
+    $('#ap-prev', m.el).innerHTML = buscando && !$('#ap-q', m.el).value.trim() ? '<p class="muted">Escribí qué productos buscar (por ejemplo: router). Vas a ver la lista antes de aplicar.</p>'
+      : !l.length ? '<p class="muted">No hay productos con ese criterio.</p>'
+      : !val ? `<p class="muted">${l.length} producto(s). Poné ${modo === 'monto' ? 'el monto' : 'el porcentaje'} para ver cómo quedan.</p>` : `
+      <p style="margin-bottom:.4rem">Se actualizan <b>${afectados.length}</b> de ${l.length} producto(s).</p>${nota}
+      ${afectados.length ? `<div style="max-height:260px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin-top:.5rem"><table class="tbl"><thead><tr><th>Producto</th>${campo === 'costo' ? '<th class="num">Costo</th>' : ''}<th class="num">Precio de venta</th></tr></thead><tbody>
+      ${afectados.map(p => { const n = nuevo(p); return `<tr><td>${esc(p.nombre)}<div class="small muted">${esc(catName(p.categoria_id))}</div></td>${campo === 'costo' ? `<td class="num nowrap">${money(p.precio_costo)} → <b>${money(n.costo)}</b></td>` : ''}
+        <td class="num nowrap">${n.venta !== +p.precio_venta ? `${money(p.precio_venta)} → <b>${money(n.venta)}</b>` : `<span class="muted">${money(p.precio_venta)} (igual)</span>`}</td></tr>`; }).join('')}</tbody></table></div>` : ''}`;
     const ok = $('#ap-ok', m.el);
-    ok.disabled = !pct || !afectados.length || pct < -90 || pct > 500;
-    ok.textContent = afectados.length && pct ? `Aplicar ${pct > 0 ? '+' : ''}${pct}% a ${afectados.length} producto(s)` : 'Aplicar';
+    ok.disabled = !valido || !afectados.length;
+    ok.textContent = valido && afectados.length ? `Aplicar ${texto} a ${afectados.length} producto(s)` : 'Aplicar';
   };
-  ['#ap-ambito', '#ap-campo', '#ap-red'].forEach(s => $(s, m.el).onchange = pintar);
-  $('#ap-pct', m.el).oninput = pintar;
-  pintar(); setTimeout(() => $('#ap-pct', m.el).focus(), 40);
+  ['#ap-ambito', '#ap-campo', '#ap-modo', '#ap-red'].forEach(s => $(s, m.el).onchange = pintar);
+  let t; $('#ap-q', m.el).oninput = () => { clearTimeout(t); t = setTimeout(pintar, 150); };
+  $('#ap-val', m.el).oninput = pintar;
+  $('#ap-ambito', m.el).addEventListener('change', () => { if ($('#ap-ambito', m.el).value === 'buscar') $('#ap-q', m.el).focus(); });
+  pintar(); setTimeout(() => $(sel.length ? '#ap-val' : '#ap-q', m.el).focus(), 40);
 
   $('#ap-ok', m.el).onclick = () => run(async () => {
-    const { campo, pct, red, afectados } = plan();
-    const donde = $('#ap-ambito', m.el).selectedOptions[0].textContent.replace(/\s*\(\d+\)$/, '');
-    const detalle = `${pct > 0 ? '+' : ''}${pct}% al ${campo === 'venta' ? 'precio de venta' : 'costo'} · ${donde}`;
+    const { campo, modo, val, red, afectados, texto } = plan();
+    const opc = $('#ap-ambito', m.el);
+    const donde = opc.value === 'buscar' ? `"${$('#ap-q', m.el).value.trim()}"` : opc.selectedOptions[0].textContent.replace(/\s*\(\d+\)$/, '');
+    const detalle = `${texto} al ${campo === 'venta' ? 'precio de venta' : 'costo'} · ${donde}`;
     if (!confirm(`¿Aplicar ${detalle} (${afectados.length} productos)?\n\nDespués lo podés deshacer.`)) return;
-    const r = await store.ajustarPrecios(afectados.map(p => p.id), campo, pct, red, detalle);
+    const r = await store.ajustarPrecios(afectados.map(p => p.id), campo, modo === 'pct' ? val : 0, red, detalle, modo === 'monto' ? val : null);
     prodSel.clear();
     history.replaceState(null, '', '#/productos'); await render();   // refrescar sin cerrar el cartel de abajo
     const res = modal('Precios actualizados', `<p><b>${r.cantidad}</b> producto(s) actualizados: ${esc(detalle)}.</p>

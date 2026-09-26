@@ -92,8 +92,9 @@ export const store = {
     await this.borrarArchivoFoto(fotoAnterior);
   },
   // Actualización masiva de precios (con registro para deshacer)
-  async ajustarPrecios(ids, campo, porcentaje, redondeo, detalle = '') {
-    return q(sb.rpc('ajustar_precios', { p_ids: ids, p_campo: campo, p_porcentaje: +porcentaje, p_redondeo: +redondeo, p_detalle: detalle }));
+  // porcentaje (ej: 10) o monto fijo (ej: 500): se usa el monto si viene
+  async ajustarPrecios(ids, campo, porcentaje, redondeo, detalle = '', monto = null) {
+    return q(sb.rpc('ajustar_precios', { p_ids: ids, p_campo: campo, p_porcentaje: +porcentaje || 0, p_redondeo: +redondeo, p_detalle: detalle, p_monto: monto == null ? null : +monto }));
   },
   async deshacerAjustePrecios(lote) { return q(sb.rpc('deshacer_ajuste_precios', { p_lote: lote })); },
   async ultimoAjustePrecios() { return q(sb.rpc('ultimo_ajuste_precios')); },
