@@ -1901,7 +1901,7 @@ ROUTES.pedidos = async ({ id, q }) => {
   const cuenta = e => pedidos.filter(p => e === 'todos' || p.estado === e).length;
   view().innerHTML = `
   <div class="page-head"><h1>Pedidos a proveedores</h1><div class="actions">
-    ${pedidoDraft?.items.length ? `<a class="btn primary" href="#/pedidos/nuevo">Continuar armado (${pedidoDraft.items.length})</a>` : '<a class="btn primary" href="#/productos?bajo=1">Armar pedido desde Productos</a>'}</div></div>
+    <a class="btn primary" href="#/pedidos/nuevo">${pedidoDraft?.items.length ? `Continuar armado (${pedidoDraft.items.length})` : '+ Nuevo pedido'}</a></div></div>
   <p class="small muted" style="margin:-.6rem 0 1rem">Los pedidos no mueven stock: cuando llega la mercadería se ingresa en Compras → Ingresar mercadería (desde el pedido podés precargarla).</p>
   <div class="chips" id="chips"></div>
   <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Fecha</th><th>Proveedor</th><th>Productos</th><th>Estado</th></tr></thead><tbody id="rows"></tbody></table></div>`;
@@ -1919,9 +1919,8 @@ ROUTES.pedidos = async ({ id, q }) => {
 };
 
 async function nuevoPedido() {
-  if (!pedidoDraft?.items.length) { go('#/pedidos'); return toast('Marcá productos en Productos y tocá "Armar pedido"', true); }
   const [proveedores, productos, cats] = await Promise.all([store.proveedores(), store.productos(), store.categorias()]);
-  const d = pedidoDraft;
+  const d = pedidoDraft ??= { notas: '', items: [] };   // se puede empezar vacío y agregar desde el buscador
   const provName = id => proveedores.find(x => x.id === +id)?.nombre || 'Sin proveedor asignado';
   const opciones = sel => `<option value="">— Sin proveedor —</option>${proveedores.map(p => `<option value="${p.id}" ${String(p.id) === sel ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}`;
 
@@ -1930,7 +1929,8 @@ async function nuevoPedido() {
     <div class="actions"><button class="btn danger" id="descartar">Descartar</button></div></div>
   <p class="small muted" style="margin:-.6rem 0 1rem">Cantidad sugerida: lo que falta para llegar al stock mínimo. El proveedor viene del habitual de cada producto, pero lo podés cambiar: se arma un pedido por proveedor.</p>
   <div class="card card-pad" style="margin-bottom:1rem">
-    <div class="search" style="position:relative"><input class="input" id="b" placeholder="Agregar otro producto al pedido (buscar o escanear)" autocomplete="off"><div class="suggest" id="s" hidden></div></div>
+    <div class="search" style="position:relative"><input class="input" id="b" placeholder="Agregar un producto al pedido (buscar o escanear)" autocomplete="off"><div class="suggest" id="s" hidden></div></div>
+    <div class="small" style="margin-top:.6rem" id="bajo-box"></div>
   </div>
   <div id="grupos"></div>
   <div class="card card-pad" style="margin-top:1rem">
@@ -1951,20 +1951,25 @@ async function nuevoPedido() {
           ${it.proveedor_id !== it.habitual ? `<div class="small muted">habitual: ${esc(provName(it.habitual))}</div>` : ''}</td>
         <td><input class="input" type="number" min="0" step="any" value="${it.cantidad}" data-cant="${k}"></td>
         <td><button class="x" data-del="${k}" title="Quitar">×</button></td></tr>`).join('')}
-      </tbody></table></div></div>`).join('') || '<div class="card card-pad empty">No quedan productos en el pedido.</div>';
+      </tbody></table></div></div>`).join('') || '<div class="card card-pad empty">Todavía no hay productos: buscalos o escanealos arriba.</div>';
+    // atajo: sumar los que están en stock bajo (mínimo cargado y stock en el mínimo o por debajo)
+    const bajos = productos.filter(p => faltaStock(p) && !d.items.some(i => i.producto_id === p.id));
+    $('#bajo-box').innerHTML = bajos.length ? `<button class="btn sm" id="sumar-bajos">Sumar los de stock bajo (${bajos.length})</button>` : '<span class="muted">No hay otros productos con stock bajo.</span>';
+    const sb = $('#sumar-bajos'); if (sb) sb.onclick = () => { bajos.forEach(p => addP(p, false)); paint(); toast(`${bajos.length} producto(s) agregado(s)`); };
     $$('[data-prov]').forEach(s => s.onchange = () => { d.items[+s.dataset.prov].proveedor_id = s.value; paint(); });
     $$('[data-cant]').forEach(inp => inp.onchange = () => { d.items[+inp.dataset.cant].cantidad = Math.max(0, +inp.value || 0); });
     $$('[data-del]').forEach(bt => bt.onclick = () => { d.items.splice(+bt.dataset.del, 1); paint(); });
   }
-  paint();
-
   // agregar productos sueltos
   const b = $('#b'), s = $('#s');
-  const addP = p => {
+  function addP(p, repintar = true) {
     if (!d.items.some(i => i.producto_id === p.id)) d.items.push({ producto_id: p.id, descripcion: p.nombre, marca: p.marca || '', codigo: p.codigo_barras || '', stock: p.stock,
       stock_minimo: p.stock_minimo, proveedor_id: p.proveedor_id ? String(p.proveedor_id) : '', habitual: p.proveedor_id ? String(p.proveedor_id) : '', cantidad: Math.max(p.stock_minimo - p.stock, 1) });
+    if (!repintar) return;
     b.value = ''; s.hidden = true; paint(); b.focus();
-  };
+  }
+  paint();
+  b.focus();
   b.oninput = () => {
     const t = b.value.trim(); if (!t) { s.hidden = true; return; }
     const r = buscarProductos(productos, cats, t, p => !p.es_servicio);
