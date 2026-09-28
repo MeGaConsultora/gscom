@@ -781,6 +781,8 @@ async function productoModal(id, opts = {}) {
     <div class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem"><h2 style="margin-bottom:.4rem">Tienda online</h2>
       <div style="display:flex;gap:1.2rem;flex-wrap:wrap"><label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="publicado" ${v.publicado !== false ? 'checked' : ''}> Mostrar en la tienda</label>
         <label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="destacado" ${v.destacado ? 'checked' : ''}> ★ Destacado (aparece primero)</label></div>
+      <div class="field" style="margin:.7rem 0 0"><label>Cartel / oferta (opcional)</label><input class="input" name="etiqueta_web" maxlength="40" placeholder="ej: ¡¡OFERTA!!, ÚLTIMO INGRESO, 10 unid. x $45.000" value="${esc(v.etiqueta_web || '')}">
+        <div class="small muted" style="margin-top:.3rem">Se muestra como cartelito de color en su tarjeta de la tienda.</div></div>
       <div class="field" style="margin:.7rem 0 0"><label>Descripción para la web (la ven los clientes)</label><textarea class="input" name="descripcion_web" rows="2" placeholder="Si la dejás vacía, se muestra la descripción de arriba">${esc(v.descripcion_web || '')}</textarea></div>
       ${id ? `<div style="margin-top:.7rem">${FOTO_HTML}</div>` : '<p class="small muted" style="margin-top:.4rem">Guardá el producto para poder cargarle una foto.</p>'}</div>
     ${id && !v.es_servicio ? `<div class="card card-pad" style="background:#fafbfc"><h2 style="margin-bottom:.5rem">Stock</h2>
@@ -822,7 +824,7 @@ async function productoModal(id, opts = {}) {
     const f = formData(m.el);
     if (f.por_margen && (!(+f.precio_costo > 0) || f.margen === '')) return toast('Para calcular el precio por margen cargá el costo y el margen', true);
     if (!f.nombre || f.precio_venta === '') return toast('Completá nombre y precio de venta', true);
-    const data = { ...(id ? { id } : {}), publicado: f.publicado, destacado: f.destacado, descripcion_web: f.descripcion_web, nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, proveedor_id: f.proveedor_id ? +f.proveedor_id : null, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
+    const data = { ...(id ? { id } : {}), publicado: f.publicado, destacado: f.destacado, descripcion_web: f.descripcion_web, etiqueta_web: f.etiqueta_web, nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, proveedor_id: f.proveedor_id ? +f.proveedor_id : null, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
       precio_costo: +f.precio_costo || 0, precio_venta: +f.precio_venta || 0, margen: f.por_margen ? +f.margen : null, stock_minimo: +f.stock_minimo || 0, es_servicio: f.es_servicio };
     data.codigo_barras = f.codigo_barras;
     if (!id) data.stock = +f.stock || 0;
@@ -2739,7 +2741,7 @@ function tiendaProductos({ productos, categorias, config }) {
   const catName = id => categorias.find(c => c.id === id)?.nombre || '';
   const seVe = p => p.publicado && +p.precio_venta > 0 && !ocultas.has(p.categoria_id);
   const FILTROS = { todos: ['Todos', () => true], publicados: ['En la tienda', seVe], ocultos: ['Ocultos', p => !p.publicado], destacados: ['★ Destacados', p => p.destacado],
-    sinfoto: ['Sin foto', p => !p.foto_url], sindesc: ['Sin descripción web', p => !p.descripcion_web] };
+    conetiqueta: ['🏷️ Con cartel', p => !!p.etiqueta_web], sinfoto: ['Sin foto', p => !p.foto_url], sindesc: ['Sin descripción web', p => !p.descripcion_web] };
   let filtro = 'todos', texto = '', cat = '', mostrar = 150;
   $('#tienda-cuerpo').innerHTML = `
   <p class="small" id="resumen" style="margin:.2rem 0 .8rem"></p>
@@ -2766,7 +2768,7 @@ function tiendaProductos({ productos, categorias, config }) {
     $('#rows').innerHTML = l.slice(0, mostrar).map(p => `<tr class="click" data-id="${p.id}">
       <td><input type="checkbox" data-sel="${p.id}" ${tiendaSel.has(p.id) ? 'checked' : ''}></td>
       <td>${p.foto_url ? `<img src="${esc(p.foto_url)}" alt="" loading="lazy" style="width:44px;height:44px;object-fit:contain;border:1px solid var(--line);border-radius:6px;background:#fff">` : '<div class="small muted" style="width:44px;height:44px;border:1px dashed var(--line);border-radius:6px;display:grid;place-items:center">—</div>'}</td>
-      <td>${esc(p.nombre)} ${avisos(p)}<div class="small muted">${esc([p.marca, p.descripcion_web ? '✓ descripción web' : ''].filter(Boolean).join(' · '))}</div></td>
+      <td>${esc(p.nombre)} ${avisos(p)}${p.etiqueta_web ? ` <span class="pill red">${esc(p.etiqueta_web)}</span>` : ''}<div class="small muted">${esc([p.marca, p.descripcion_web ? '✓ descripción web' : ''].filter(Boolean).join(' · '))}</div></td>
       <td class="muted">${esc(catName(p.categoria_id))}</td><td class="num">${money(p.precio_venta)}</td>
       <td><span class="pill ${ESTADO_TIENDA[p.estado][1]}">${ESTADO_TIENDA[p.estado][0]}</span></td>
       <td style="text-align:center"><input type="checkbox" data-pub="${p.id}" ${p.publicado ? 'checked' : ''} title="Mostrar en la tienda"></td>
@@ -2803,6 +2805,8 @@ function tiendaProductoModal(p, catName, alGuardar) {
     <div class="small muted" style="margin-bottom:1rem">${esc([p.marca, catName(p.categoria_id), p.codigo_barras].filter(Boolean).join(' · '))} · <b style="color:var(--ink)">${money(p.precio_venta)}</b>
       · <span class="pill ${ESTADO_TIENDA[p.estado][1]}">${ESTADO_TIENDA[p.estado][0]}</span></div>
     <div style="margin-bottom:1rem">${FOTO_HTML}</div>
+    <div class="field"><label>Cartel / oferta (opcional)</label><input class="input" name="etiqueta_web" maxlength="40" placeholder="ej: ¡¡OFERTA!!, ÚLTIMO INGRESO, 10 unid. x $45.000" value="${esc(p.etiqueta_web || '')}">
+      <div class="small muted" style="margin-top:.3rem">Se muestra como cartelito de color en su tarjeta de la tienda.</div></div>
     <div class="field"><label>Descripción para la web</label><textarea class="input" name="descripcion_web" rows="4" maxlength="2000"
       placeholder="${esc(p.descripcion_publica ? `Si la dejás vacía se muestra: ${p.descripcion_publica}` : 'Características, medidas, compatibilidad, qué incluye…')}">${esc(p.descripcion_web)}</textarea></div>
     <div style="display:flex;gap:1.2rem;flex-wrap:wrap"><label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" name="publicado" ${p.publicado ? 'checked' : ''}> Mostrar en la tienda</label>
@@ -2811,7 +2815,7 @@ function tiendaProductoModal(p, catName, alGuardar) {
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
   controlFoto(m.el, p.id, p.foto_url, url => { p.foto_url = url; alGuardar(); });
   $('#ok', m.el).onclick = () => run(async () => {
-    const f = formData(m.el), cambios = { descripcion_web: f.descripcion_web, publicado: f.publicado, destacado: f.destacado };
+    const f = formData(m.el), cambios = { descripcion_web: f.descripcion_web, etiqueta_web: f.etiqueta_web, publicado: f.publicado, destacado: f.destacado };
     await store.tiendaActualizarProducto(p.id, cambios);
     Object.assign(p, cambios); m.close(); toast('Guardado'); alGuardar();
   });

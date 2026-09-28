@@ -21,6 +21,8 @@ body.tienda { background: #f4f5f7; }
 .t-img img { width: 100%; height: 100%; object-fit: contain; padding: .6rem; }
 .t-ph { width: 60%; aspect-ratio: 1; border-radius: 50%; background: #f2f4f7; display: grid; place-items: center; font-size: 2.2rem; color: #9aa3af; }
 .t-badge { position: absolute; top: .5rem; left: .5rem; font-size: .7rem; }
+.t-etq { position: absolute; left: 0; right: 0; bottom: 0; background: #e0483e; color: #fff; font-weight: 700; font-size: .72rem;
+  text-align: center; padding: .3rem .4rem; text-transform: uppercase; letter-spacing: .02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .t-body { padding: .7rem .8rem .8rem; display: flex; flex-direction: column; gap: .25rem; flex: 1; }
 .t-marca { font-size: .72rem; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
 .t-nombre { font-size: .88rem; font-weight: 500; line-height: 1.25; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; min-height: 3.3em; }

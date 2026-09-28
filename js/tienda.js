@@ -47,7 +47,7 @@ function modal(titulo, cuerpo, pie = '') {
   return { el: bg, cerrar };
 }
 const imagen = p => p.foto ? `<img src="${esc(p.foto)}" alt="${esc(p.nombre)}" loading="lazy">` : `<div class="t-ph">${icono(p)}</div>`;
-const badge = p => `<span class="pill ${ESTADO[p.estado][1]} t-badge">${ESTADO[p.estado][0]}</span>${p.destacado ? '<span class="t-dest" title="Destacado">★</span>' : ''}`;
+const badge = p => `<span class="pill ${ESTADO[p.estado][1]} t-badge">${ESTADO[p.estado][0]}</span>${p.destacado ? '<span class="t-dest" title="Destacado">★</span>' : ''}${p.etiqueta ? `<span class="t-etq">${esc(p.etiqueta)}</span>` : ''}`;
 // Redes: acepta el usuario (@gscom) o el link completo
 const RED = { instagram: ['Instagram', u => `https://instagram.com/${u}`], facebook: ['Facebook', u => `https://facebook.com/${u}`], tiktok: ['TikTok', u => `https://tiktok.com/@${u}`] };
 const linkRed = (red, v) => /^https?:\/\//i.test(v) ? v : RED[red][1](encodeURIComponent(String(v).trim().replace(/^@/, '')));

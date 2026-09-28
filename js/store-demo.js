@@ -102,7 +102,7 @@ export const store = {
       && !cfg.categorias_ocultas.includes(p.categoria_id)).map(p => ({
         id: p.id, nombre: p.nombre, marca: p.marca, descripcion: descPublica(p.descripcion_web, p.descripcion),
         categoria: byId('categorias', p.categoria_id)?.nombre || null, precio: p.precio_venta, foto: p.foto_url || '',
-        destacado: !!p.destacado, estado: estadoTienda(p) }))
+        destacado: !!p.destacado, etiqueta: p.etiqueta_web || null, estado: estadoTienda(p) }))
       .sort((a, b) => a.nombre.localeCompare(b.nombre));
     const n = db.negocio, { categorias_ocultas, ...tienda } = cfg;
     return clone({ negocio: { nombre: n.nombre, direccion: n.direccion, telefono: n.telefono, whatsapp: n.whatsapp, email: n.email, horario: n.horario }, tienda, productos });
@@ -113,11 +113,11 @@ export const store = {
       productos: db.productos.filter(p => p.activo && !p.es_servicio).map(p => ({
         id: p.id, codigo_barras: p.codigo_barras, nombre: p.nombre, marca: p.marca, categoria_id: p.categoria_id, precio_venta: p.precio_venta,
         publicado: p.publicado !== false, destacado: !!p.destacado, foto_url: p.foto_url || '', descripcion_web: p.descripcion_web || '',
-        descripcion_publica: descPublica('', p.descripcion), estado: estadoTienda(p) })).sort((a, b) => a.nombre.localeCompare(b.nombre)) });
+        etiqueta_web: p.etiqueta_web || '', descripcion_publica: descPublica('', p.descripcion), estado: estadoTienda(p) })).sort((a, b) => a.nombre.localeCompare(b.nombre)) });
   },
   async tiendaActualizarProducto(id, datos) {
     const p = byId('productos', id); if (!p) throw new Error('Producto no encontrado');
-    ['publicado', 'destacado', 'descripcion_web', 'foto_url'].forEach(k => { if (k in datos) p[k] = datos[k]; }); save();
+    ['publicado', 'destacado', 'descripcion_web', 'etiqueta_web', 'foto_url'].forEach(k => { if (k in datos) p[k] = datos[k]; }); save();
   },
   async guardarTiendaConfig(cfg) { db.tienda_config = { ...tiendaCfg(), ...cfg }; save(); },
   async publicarProductos(ids, publicado) { ids.forEach(id => { const p = byId('productos', id); if (p) p.publicado = publicado; }); save(); },
