@@ -74,10 +74,11 @@ function lista() {
   }
   const porNombre = (a, b) => a.nombre.localeCompare(b.nombre, 'es', { sensitivity: 'base', numeric: true });
   const conStock = (a, b) => (a.estado === 'encargo') - (b.estado === 'encargo');
-  // "Destacados" (el de entrada): destacados arriba de todo, después los que tienen stock, después por nombre.
+  const prioridad = p => (p.destacado || p.etiqueta) ? 1 : 0;
+  // "Destacados" (el de entrada): primero los destacados o con cartel (oferta, etc.), después los que tienen stock, después por nombre.
   // Los demás ordenan estrictamente por lo elegido (a igual precio, por nombre).
   const cmp = {
-    destacados: (a, b) => b.destacado - a.destacado || conStock(a, b) || porNombre(a, b),
+    destacados: (a, b) => prioridad(b) - prioridad(a) || conStock(a, b) || porNombre(a, b),
     nombre: porNombre,
     menor: (a, b) => a.precio - b.precio || porNombre(a, b),
     mayor: (a, b) => b.precio - a.precio || porNombre(a, b),
