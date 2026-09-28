@@ -115,7 +115,7 @@ function printHTML(html, pagina = 'margin: 8mm') {
   st.textContent = `@media print { @page { ${pagina} } }`;
   setTimeout(() => window.print(), 150);
 }
-const PAGINA_TICKET = 'margin: 0';                 // ticketera 57/58 mm: el tamaño lo da la impresora
+const PAGINA_TICKET = 'size: 58mm auto; margin: 0'; // ticketera 57/58 mm: ancho fijo, largo continuo (no cortar)
 const PAGINA_A4 = 'size: A4 portrait; margin: 0';
 
 function barcodeSVG(code, opts = {}) {
