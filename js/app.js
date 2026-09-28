@@ -116,20 +116,12 @@ function printHTML(html, pagina = 'margin: 8mm') {
   setTimeout(() => window.print(), 150);
 }
 const PAGINA_A4 = 'size: A4 portrait; margin: 0';
-
-// Ticket de ticketera 57/58 mm: Chrome no imprime bien un alto de página "auto"
-// para rollo continuo (en la vista previa queda una tira angosta imposible de leer,
-// y al imprimir corta). Se mide el alto real del contenido y se declara un @page
-// con ese alto exacto en mm, así nunca tiene que adivinarlo.
-function printTicket(html) {
-  const area = $('#print-area');
-  const prevDisplay = area.style.display;
-  area.style.display = 'block';
-  area.innerHTML = html;
-  const alturaMM = Math.ceil(area.scrollHeight / 96 * 25.4) + 8; // + margen de seguridad al final
-  area.style.display = prevDisplay;
-  printHTML(html, `size: 58mm ${alturaMM}mm; margin: 0`);
-}
+// Ticket de ticketera 57/58 mm: tamaño FIJO (no calculado por ticket). Con un alto
+// variable, cada impresión pedía un tamaño de papel "custom" distinto y Chrome
+// nunca lo dejaba guardado — obligaba a reconfigurar a mano en cada impresión,
+// sobre todo compartiendo la PC con otras impresoras. 210mm alcanza para
+// cualquier ticket real; si alguna vez no alcanza, se corta el final nomás.
+const PAGINA_TICKET = 'size: 58mm 210mm; margin: 0';
 
 function barcodeSVG(code, opts = {}) {
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
@@ -489,14 +481,14 @@ ROUTES.vender = async ({ q }) => {
 
 async function imprimirVenta(id) {
   const [v, n] = await Promise.all([store.venta(id), store.negocio()]);
-  printTicket(`<div class="ticket">
+  printHTML(`<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div><div class="c">${esc(n.direccion)}<br>${esc(n.telefono)}</div><hr>
     <div>Comprobante interno N° ${v.numero}<br>${fdatetime(v.fecha)}<br>Cliente: ${esc(v.cliente?.nombre || 'Consumidor final')}</div><hr>
     <table>${v.items.map(i => `<tr><td colspan="2">${esc(i.descripcion)}</td></tr><tr><td>${i.cantidad} x ${money(i.precio_unitario)}</td><td style="text-align:right">${money(i.subtotal)}</td></tr>`).join('')}</table><hr>
     ${v.descuento ? `<table><tr><td>Subtotal</td><td style="text-align:right">${money(v.subtotal)}</td></tr><tr><td>Descuento</td><td style="text-align:right">-${money(v.descuento)}</td></tr></table>` : ''}
     <table><tr><td class="big">TOTAL</td><td class="big" style="text-align:right">${money(v.total)}</td></tr></table>
     <div>Pago: ${esc(v.forma_pago)}</div>${v.anulada ? '<div class="c big">*** ANULADA ***</div>' : ''}<hr>
-    <div class="c">Documento no válido como factura.<br>¡Gracias por su compra!</div></div>`);
+    <div class="c">Documento no válido como factura.<br>¡Gracias por su compra!</div></div>`, PAGINA_TICKET);
 }
 
 async function ventaModal(id) {
@@ -1765,7 +1757,7 @@ async function imprimirRecibo(clienteId, ccId) {
     const etiqueta = !g || a.monto >= g.total - 0.009 ? '' : pagadoHasta(a.grupo) >= g.total - 0.009 ? 'cancela el saldo' : 'pago parcial';
     detalle.push({ titulo: `${g?.concepto || a.grupo} (${fdate(g?.fecha)})`, monto: a.monto, lineas, etiqueta });
   }
-  printTicket(`<div class="ticket">
+  printHTML(`<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div><div class="c">${esc(n.direccion)}<br>${esc(n.telefono)}</div><hr>
     <div class="c"><b>RECIBO DE PAGO</b><br>${esAnticipo ? 'Anticipo de service' : 'Cuenta corriente'}</div><hr>
     <div>Recibo N° ${pago.id}<br>${fdatetime(pago.fecha)}<br>Cliente: ${esc(c.nombre)}${c.dni_cuit ? `<br>DNI/CUIT: ${esc(c.dni_cuit)}` : ''}</div><hr>
@@ -1780,7 +1772,7 @@ async function imprimirRecibo(clienteId, ccId) {
       <tr><td class="big">PAGADO</td><td class="big" style="text-align:right">${money(-pago.monto)}</td></tr>
       <tr><td><b>Saldo actual</b></td><td style="text-align:right"><b>${money(saldoActual)}</b></td></tr>
     </table>${pago.anulado ? '<div class="c big">*** ANULADO ***</div>' : ''}<hr>
-    <div class="c">${saldoActual > 0.009 ? 'Queda un saldo pendiente.' : saldoActual < -0.009 ? 'Queda saldo a su favor.' : 'Cuenta al día. ¡Gracias!'}<br>Documento no válido como factura.</div></div>`);
+    <div class="c">${saldoActual > 0.009 ? 'Queda un saldo pendiente.' : saldoActual < -0.009 ? 'Queda saldo a su favor.' : 'Cuenta al día. ¡Gracias!'}<br>Documento no válido como factura.</div></div>`, PAGINA_TICKET);
 }
 
 function anticipoModal(o, onDone) {
