@@ -2781,7 +2781,16 @@ function tiendaProductos({ productos, categorias, config }) {
     $$('[data-dest]').forEach(b => b.onclick = () => { const p = productos.find(x => x.id === +b.dataset.dest); cambiar([p.id], 'destacado', !p.destacado); });
     pintarSel();
   }
-  const pintarSel = () => { $('#acciones-sel').hidden = !tiendaSel.size; $('#nsel').textContent = `${tiendaSel.size} seleccionado(s):`; };
+  const pintarSel = () => {
+    $('#acciones-sel').hidden = !tiendaSel.size;
+    $('#nsel').textContent = `${tiendaSel.size} seleccionado(s):`;
+    const sel = [...tiendaSel].map(id => productos.find(p => p.id === id)).filter(Boolean);
+    // Si toda la selección ya está en el mismo estado, ocultar la acción que no cambiaría nada (evita confusión)
+    $('[data-lote="publicado:1"]').hidden = sel.length > 0 && sel.every(p => p.publicado);
+    $('[data-lote="publicado:0"]').hidden = sel.length > 0 && sel.every(p => !p.publicado);
+    $('[data-lote="destacado:1"]').hidden = sel.length > 0 && sel.every(p => p.destacado);
+    $('[data-lote="destacado:0"]').hidden = sel.length > 0 && sel.every(p => !p.destacado);
+  };
   // Cambia publicado/destacado de uno o varios productos y actualiza la lista sin recargar
   const cambiar = (ids, campo, valor) => run(async () => {
     if (campo === 'publicado') await store.publicarProductos(ids, valor);
