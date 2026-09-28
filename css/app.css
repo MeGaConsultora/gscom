@@ -176,7 +176,7 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .step::after { content: ""; position: absolute; top: 11px; left: -50%; width: 100%; height: 2px; background: var(--line); }
 .step:first-child::after { display: none; }
 .step.done { color: var(--ink2); }
-.step.done::before, .step.done::after { background: var(--accent); }
+.step.done::before, .step.done::after, .step.current::after { background: var(--accent); }
 .step.current { color: var(--accent); font-weight: 600; }
 .step.current::before { box-shadow: 0 0 0 4px var(--accent-soft); background: var(--accent); }
 dl.kv { display: grid; grid-template-columns: 140px 1fr; gap: .45rem .8rem; font-size: .92rem; }
