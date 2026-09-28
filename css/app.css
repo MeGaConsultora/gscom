@@ -206,6 +206,9 @@ dl.kv dt { color: var(--muted); }
 .ticket table { width: 100%; border-collapse: collapse; font-size: 7.5pt; }
 .ticket td { padding: .3mm 0; vertical-align: top; word-break: break-word; overflow-wrap: break-word; }
 .ticket .big { font-size: 10pt; font-weight: 700; }
+.ticket .small { font-size: 6.5pt; color: #333; }
+.ticket-qr { display: flex; justify-content: center; margin: 2mm 0; }
+.ticket-qr svg { width: 42mm; height: 42mm; }
 
 /* Pedido de mercadería: hoja A4, una por proveedor */
 .hoja-pedido { width: 190mm; padding: 10mm; box-sizing: border-box; color: #000; font-family: 'DM Sans', Arial, sans-serif; }

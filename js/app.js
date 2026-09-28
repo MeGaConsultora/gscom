@@ -1376,39 +1376,32 @@ async function imprimirOrden(o, n, url) {
   const anticipos = await store.anticiposOrden(o.id).catch(() => []);
   const anticipado = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
   const eq = [o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' ');
-  const corto = (t, max) => { t = String(t || ''); return t.length > max ? t.slice(0, max - 1) + '…' : t; };
-  const fila = (k, v) => v ? `<tr><th>${k}</th><td>${v}</td></tr>` : '';
+  const fila = (k, v) => v ? `<div style="margin-bottom:.8mm"><b>${k}:</b> ${v}</div>` : '';
 
-  const copia = duplicado => `<div class="a6">
-    <div class="a6-head">
-      <img src="img/logo.png" alt="">
-      <div class="a6-neg"><b>${esc(n.nombre)}</b> · Service técnico<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}${n.whatsapp ? `<br>WhatsApp ${esc(n.whatsapp)}` : ''}</div>
-      <div class="a6-nro"><span>ORDEN N°</span><b>${o.numero}</b></div>
-    </div>
-    <div class="a6-copia">${duplicado ? 'DUPLICADO — LOCAL' : 'ORIGINAL — CLIENTE'} · Ingreso ${fdatetime(o.fecha_ingreso)}</div>
-    <table class="a6-datos">
-      ${fila('Cliente', esc(o.cliente.nombre))}
-      ${fila('Teléfono', esc(o.cliente.telefono))}
-      ${duplicado ? fila('DNI / CUIT', esc(o.cliente.dni_cuit)) : ''}
-      ${fila('Equipo', esc(eq))}
-      ${fila('N° de serie', esc(o.equipo?.nro_serie))}
-      ${fila('Accesorios', esc(o.accesorios) || 'Ninguno')}
-      ${fila('Falla', esc(corto(o.falla_reportada, duplicado ? 220 : 260)))}
-      ${fila('Fecha estimada', o.fecha_estimada ? fdate(o.fecha_estimada) : '')}
-      ${fila('Presupuesto', o.presupuesto != null ? money(o.presupuesto) : '')}
-      ${fila('Anticipo', anticipado ? money(anticipado) : '')}
-      ${duplicado ? fila('Contraseña', esc(o.contrasena_equipo)) + fila('Técnico', esc(o.tecnico)) : ''}
-    </table>
-    <div class="a6-pie">
-      ${duplicado
-        ? `<div class="a6-cond">${esc(n.pie_comprobante)}</div>
-           <div class="a6-firma"><span>Firma del cliente</span><span>Aclaración</span></div>`
-        : `<div class="a6-qr">${qrSVG(url)}<div><b>Seguí el estado de tu equipo</b> escaneando este código con la cámara del celular.
-             <div class="a6-cond">${esc(n.pie_comprobante)}</div></div></div>`}
-    </div>
+  const copia = duplicado => `<div class="ticket"${duplicado ? ' style="page-break-before:always"' : ''}>
+    <div class="c big">${esc(n.nombre)}</div>
+    <div class="c">Service técnico<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}${n.whatsapp ? `<br>WhatsApp ${esc(n.whatsapp)}` : ''}</div><hr>
+    <div class="c big">ORDEN N° ${o.numero}</div>
+    <div class="c">${duplicado ? 'DUPLICADO — LOCAL' : 'ORIGINAL — CLIENTE'}<br>Ingreso ${fdatetime(o.fecha_ingreso)}</div><hr>
+    ${fila('Cliente', esc(o.cliente.nombre))}
+    ${fila('Teléfono', esc(o.cliente.telefono))}
+    ${duplicado ? fila('DNI / CUIT', esc(o.cliente.dni_cuit)) : ''}
+    ${fila('Equipo', esc(eq))}
+    ${fila('N° de serie', esc(o.equipo?.nro_serie))}
+    ${fila('Accesorios', esc(o.accesorios) || 'Ninguno')}
+    ${fila('Falla', esc(o.falla_reportada))}
+    ${o.fecha_estimada ? fila('Fecha estimada', fdate(o.fecha_estimada)) : ''}
+    ${o.presupuesto != null ? fila('Presupuesto', money(o.presupuesto)) : ''}
+    ${anticipado ? fila('Anticipo', money(anticipado)) : ''}
+    ${duplicado ? fila('Contraseña', esc(o.contrasena_equipo)) + fila('Técnico', esc(o.tecnico)) : ''}
+    <hr>
+    ${duplicado
+      ? `<div style="margin-top:5mm">Firma del cliente:</div><div style="border-top:1px solid #000;margin-top:9mm"></div>`
+      : `<div class="ticket-qr">${qrSVG(url)}</div><div class="c"><b>Seguí el estado de tu equipo</b><br>escaneando este código con la cámara del celular.</div>`}
+    <div class="c small" style="margin-top:2mm">${esc(n.pie_comprobante)}</div>
   </div>`;
 
-  printHTML(`<div class="hoja-a4"><div class="dos-a6">${copia(false)}${copia(true)}</div></div>`, PAGINA_A4);
+  printHTML(`${copia(false)}${copia(true)}`, PAGINA_TICKET);
 }
 
 // =====================================================================
