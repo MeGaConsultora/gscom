@@ -12,7 +12,7 @@ export const ESTADOS = [
   { id: 'sin_reparacion', label: 'Sin reparación',      color: 'red',    cliente: 'El equipo no pudo ser reparado. Podés pasar a retirarlo.' },
 ];
 export const estadoInfo = id => ESTADOS.find(e => e.id === id) || ESTADOS[0];
-export const FORMAS_PAGO = ['Efectivo', 'Transferencia', 'Débito', 'Crédito', 'Mercado Pago'];
+export const FORMAS_PAGO = ['Efectivo', 'Transferencia', 'Débito', 'Crédito', 'Mercado Pago', 'Cheque'];
 export const CONDICIONES_IVA = ['Consumidor Final', 'Responsable Inscripto', 'Monotributo', 'Exento', 'No Responsable'];
 export const TIPOS_EQUIPO = ['Notebook', 'PC de escritorio', 'All in One', 'Celular', 'Tablet', 'Impresora', 'Monitor', 'Consola', 'Otro'];
 // Deja la venta o el service como deuda del cliente (Fichero) en vez de entrar a caja
