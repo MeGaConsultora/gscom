@@ -363,6 +363,7 @@ export const store = {
     if (m.tipo !== 'pago') throw new Error('Solo se pueden anular cobros');
     if (m.anulado) throw new Error('El cobro ya estaba anulado');
     if (m.orden_id && byId('ordenes_servicio', m.orden_id)?.estado === 'entregado') throw new Error('Esa orden ya fue entregada: anulá la entrega primero');
+    if (m.encargo_id && byId('encargos', m.encargo_id)?.estado === 'entregado') throw new Error('Ese encargo ya fue entregado: anulá la venta primero');
     const c = byId('clientes', m.cliente_id);
     m.anulado = true;
     insert('cc_movimientos', { cliente_id: m.cliente_id, fecha: now(), tipo: 'ajuste', monto: -m.monto, concepto: `Anulación de cobro del ${new Date(m.fecha).toLocaleDateString('es-AR')}`, forma_pago: '', anulado: false });
@@ -528,6 +529,34 @@ export const store = {
     const m = insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || `Anticipo orden #${o.numero}`, forma_pago, orden_id: o.id, anulado: false });
     insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Anticipo orden #${o.numero}`, monto: +monto, forma_pago, orden_id: o.id, cc_movimiento_id: m.id });
     save(); return m.id;
+  },
+  async anticiposEncargo(encargoId) { return clone(db.cc_movimientos.filter(m => m.encargo_id === +encargoId && m.tipo === 'pago')); },
+  async registrarAnticipoEncargo(id, { monto, forma_pago, nota = '' }) {
+    if (!(+monto > 0)) throw new Error('El monto del anticipo tiene que ser mayor a cero');
+    if (forma_pago === CC) throw new Error('Un anticipo es plata ya cobrada: elegí cómo lo pagó (efectivo, transferencia, etc.)');
+    const e = byId('encargos', id); if (!e) throw new Error('Encargo no encontrado');
+    if (['entregado', 'cancelado'].includes(e.estado)) throw new Error(`Ese ${e.tipo === 'reserva' ? 'reserva' : 'encargo'} ya está ${e.estado}`);
+    if (!e.cliente_id) throw new Error(`Este ${e.tipo === 'reserva' ? 'reserva' : 'encargo'} no tiene un cliente cargado (es a nombre de alguien que todavía no es cliente): no se le puede registrar un anticipo`);
+    const etiqueta = e.tipo === 'reserva' ? 'Anticipo reserva N°' : 'Anticipo encargo N°';
+    const m = insert('cc_movimientos', { cliente_id: e.cliente_id, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || `${etiqueta} ${e.numero}`, forma_pago, encargo_id: e.id, anulado: false });
+    insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `${etiqueta} ${e.numero}`, monto: +monto, forma_pago, encargo_id: e.id, cc_movimiento_id: m.id });
+    save(); return m.id;
+  },
+  async aplicarAnticipoEncargo(encargoId, ventaId) {
+    const e = byId('encargos', +encargoId); if (!e) return 0;
+    const anticipos = -db.cc_movimientos.filter(m => m.encargo_id === e.id && m.tipo === 'pago' && !m.anulado).reduce((s, m) => s + m.monto, 0);
+    if (anticipos > 0) {
+      const etiqueta = e.tipo === 'reserva' ? 'Reserva N°' : 'Encargo N°';
+      insert('cc_movimientos', { cliente_id: e.cliente_id, fecha: now(), tipo: 'cargo', monto: anticipos, concepto: `${etiqueta} ${e.numero} (aplica anticipo)`, forma_pago: '', encargo_id: e.id, venta_id: +ventaId, anulado: false });
+      save();
+    }
+    return anticipos;
+  },
+  async revertirAnticipoEncargo(ventaId) {
+    const m = db.cc_movimientos.filter(x => x.venta_id === +ventaId && x.encargo_id && x.tipo === 'cargo').sort((a, b) => b.id - a.id)[0];
+    if (!m) return;
+    insert('cc_movimientos', { cliente_id: m.cliente_id, fecha: now(), tipo: 'ajuste', monto: -m.monto, concepto: 'Anulación de venta: se libera el anticipo aplicado', forma_pago: '', encargo_id: m.encargo_id, venta_id: +ventaId, anulado: false });
+    save();
   },
   async entregarOrden(id, { total, forma_pago, comentario = '' }) {
     const o = byId('ordenes_servicio', id);

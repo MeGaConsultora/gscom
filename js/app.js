@@ -469,8 +469,11 @@ ROUTES.vender = async ({ q }) => {
       toast('Venta actualizada'); go('#/caja'); return;
     }
     const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago, notas: (cart.notas || '').trim() });
-    // Si la venta salió de un encargo, queda entregado
-    if (cart.encargoId) await store.actualizarEncargo(cart.encargoId, { estado: 'entregado', fecha_entrega: new Date().toISOString() }).catch(() => toast('La venta se registró, pero no se pudo marcar el encargo como entregado', true));
+    // Si la venta salió de un encargo, queda entregado y se aplica (cancela) el anticipo ya cobrado
+    if (cart.encargoId) {
+      await store.actualizarEncargo(cart.encargoId, { estado: 'entregado', fecha_entrega: new Date().toISOString() }).catch(() => toast('La venta se registró, pero no se pudo marcar el encargo como entregado', true));
+      await store.aplicarAnticipoEncargo(cart.encargoId, v.id).catch(() => toast('La venta se registró, pero no se pudo aplicar el anticipo', true));
+    }
     cart = carritoVacio();
     const m = modal(`Venta #${v.numero} registrada`, `<div class="empty" style="padding:1rem"><div class="total-box">${money(v.total)}</div><div class="muted">${esc(v.forma_pago)}</div></div>`,
       `<button class="btn" id="imp">Imprimir comprobante</button><button class="btn primary" data-close>Nueva venta</button>`);
@@ -506,7 +509,9 @@ async function ventaModal(id) {
   const an = $('#anular', m.el);
   if (an) an.onclick = () => run(async () => {
     if (!confirm('¿Anular esta venta? Se devuelve el stock y se registra un egreso en caja.')) return;
-    await store.anularVenta(id); m.close(); toast('Venta anulada'); render();
+    await store.anularVenta(id);
+    await store.revertirAnticipoEncargo(id).catch(() => {});   // si venía de un encargo con anticipo, se libera; si no, no hace nada
+    m.close(); toast('Venta anulada'); render();
   });
   const ed = $('#editar', m.el);
   if (ed) ed.onclick = () => run(async () => {
@@ -1651,10 +1656,12 @@ function editarCargoModal(mv, onDone) {
 function deudaPorConcepto(movs, imps = []) {
   const cron = movs.slice().sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || a.id - b.id);
   const grupos = new Map(), aplicaciones = {};
-  const claveDe = m => m.venta_id ? `venta:${m.venta_id}` : m.orden_id ? `orden:${m.orden_id}` : `cargo:${m.id}`;
+  // Un movimiento de un encargo agrupa por el encargo (aunque también tenga venta_id: es el mismo concepto
+  // desde que se cobra el anticipo hasta que la venta que lo entrega queda registrada).
+  const claveDe = m => m.encargo_id ? `encargo:${m.encargo_id}` : m.venta_id ? `venta:${m.venta_id}` : m.orden_id ? `orden:${m.orden_id}` : `cargo:${m.id}`;
   const grupo = (clave, m) => {
     if (!grupos.has(clave)) grupos.set(clave, { clave, fecha: m.fecha, concepto: m.concepto, venta_id: m.venta_id || null, orden_id: m.orden_id || null,
-      notas: m.venta?.notas || '', total: 0, pagado: 0, pendiente: 0 });
+      encargo_id: m.encargo_id || null, notas: m.venta?.notas || '', total: 0, pagado: 0, pendiente: 0 });
     return grupos.get(clave);
   };
   for (const m of cron) {
@@ -1663,15 +1670,17 @@ function deudaPorConcepto(movs, imps = []) {
       if (m.anulado) continue;                                  // su anulación lo compensa
       let resto = -monto; const apl = aplicaciones[m.id] = [];
       const aplicar = (g, max) => { const x = Math.min(max, resto); if (x <= 0.009) return; g.pendiente -= x; g.pagado += x; resto -= x; apl.push({ grupo: g.clave, monto: x }); };
-      if (m.orden_id) { const g = grupo(`orden:${m.orden_id}`, m); if (!g.total) g.desdeAnticipo = true; aplicar(g, resto); }   // anticipo: va a su orden
+      if (m.orden_id) { const g = grupo(`orden:${m.orden_id}`, m); if (!g.total) g.desdeAnticipo = true; aplicar(g, resto); }   // anticipo de service: va a su orden
+      else if (m.encargo_id) { const g = grupo(`encargo:${m.encargo_id}`, m); if (!g.total) g.desdeAnticipo = true; aplicar(g, resto); }   // anticipo de encargo/reserva: va a su encargo
       imps.filter(x => x.pago_id === m.id).forEach(x => { const g = grupos.get(x.grupo); if (g) aplicar(g, Math.min(+x.monto, Math.max(g.pendiente, 0))); });
       [...grupos.values()].filter(g => g.pendiente > 0.009).forEach(g => aplicar(g, g.pendiente));   // resto: a lo más viejo
       if (resto > 0.009) apl.push({ grupo: null, monto: resto });            // a favor del cliente
       continue;
     }
-    if (m.tipo === 'ajuste' && !m.venta_id && !m.orden_id && /^Anulación de cobro/.test(m.concepto)) continue;
+    if (m.tipo === 'ajuste' && !m.venta_id && !m.orden_id && !m.encargo_id && /^Anulación de cobro/.test(m.concepto)) continue;
     const g = grupo(claveDe(m), m);
     if (m.tipo === 'cargo' && g.desdeAnticipo) { g.concepto = m.concepto.replace(/ \(aplica anticipo\)$/, ''); g.fecha = m.fecha; g.desdeAnticipo = false; }
+    if (m.venta_id && !g.venta_id) g.venta_id = m.venta_id;   // la venta que terminó de aplicar el anticipo, para poder verla
     g.total += monto; g.pendiente += monto;
   }
   return { grupos: [...grupos.values()], aplicaciones };
@@ -2308,7 +2317,7 @@ ROUTES.encargos = async ({ q }) => {
       || '<tr><td colspan="7" class="empty">No hay nada acá.</td></tr>';
     $$('tr[data-enc]').forEach(tr => tr.onclick = ev => { if (ev.target.closest('button, a')) return; run(() => encargoModal(encargos.find(x => x.id === +tr.dataset.enc))); });
     $$('[data-avisar]').forEach(b => b.onclick = () => { const e = encargos.find(x => x.id === +b.dataset.avisar); avisarEncargo(e, hermanos(e)); });
-    $$('[data-entregar]').forEach(b => b.onclick = () => entregarEncargo(encargos.find(x => x.id === +b.dataset.entregar)));
+    $$('[data-entregar]').forEach(b => b.onclick = () => run(() => entregarEncargo(encargos.find(x => x.id === +b.dataset.entregar))));
     $$('[data-encargar]').forEach(b => b.onclick = () => agregarAPedidoModal(encargos.find(x => x.id === +b.dataset.encargar), proveedores));
   };
   $('#buscar').oninput = e => { texto = e.target.value.trim(); paint(); };
@@ -2380,7 +2389,9 @@ async function solicitudModal(s) {
 // Alta y edición. Al dar de alta un producto con stock disponible se puede reservar;
 // si piden más de lo disponible, se reserva lo que hay y se encarga el resto.
 async function encargoModal(e) {
-  const [clientes, productos, proveedores, cats, encargos] = await Promise.all([store.clientes(), store.productos(), store.proveedores(), store.categorias(), store.encargos()]);
+  const [clientes, productos, proveedores, cats, encargos, anticiposIni] = await Promise.all([store.clientes(), store.productos(), store.proveedores(), store.categorias(), store.encargos(),
+    e ? store.anticiposEncargo(e.id).catch(() => []) : Promise.resolve([])]);
+  let anticipos = anticiposIni;
   const nuevo = !e, editable = nuevo || e.estado === 'pendiente';
   const esReserva = !nuevo && e.tipo === 'reserva';
   const v = e || { cliente_id: null, contacto: '', telefono: '', producto_id: null, descripcion: '', cantidad: 1, precio: null, proveedor_id: null, notas: '', reservado_hasta: null };
@@ -2407,6 +2418,8 @@ async function encargoModal(e) {
       <div class="small" id="reparto" style="margin:.4rem 0 .2rem"></div>
       <div class="field" style="margin:.5rem 0 0;max-width:220px"><label>Reservado hasta (opcional)</label><input class="input" type="date" name="reservado_hasta"></div></div>` : ''}
     ${esReserva ? `<div class="field" style="max-width:220px"><label>Reservado hasta (opcional)</label><input class="input" type="date" name="reservado_hasta" value="${v.reservado_hasta || ''}"></div>` : ''}
+    ${!nuevo ? `<div class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem"><h2 style="margin-bottom:.5rem">Anticipo (seña / pago a cuenta) ${['entregado', 'cancelado'].includes(e.estado) ? '' : '<button class="btn sm" id="add-anticipo-enc">+ Registrar anticipo</button>'}</h2>
+      <div id="anticipos-enc-cont"></div></div>` : ''}
     <div class="field"><label>Notas internas</label><input class="input" name="notas" value="${esc(v.notas)}" placeholder="ej: lo necesita antes del lunes · dejó seña"></div>`,
     `${!nuevo && !['entregado', 'cancelado'].includes(e.estado) ? `<button class="btn danger" id="cancelar" style="margin-right:auto">${esReserva ? 'Liberar reserva' : 'Cancelar encargo'}</button>` : ''}
      <button class="btn" data-close>Cerrar</button><button class="btn primary" id="ok">${nuevo ? 'Guardar' : 'Guardar cambios'}</button>`, { wide: true });
@@ -2461,10 +2474,29 @@ async function encargoModal(e) {
     inpDesc.onblur = () => setTimeout(() => s.hidden = true, 150);
   }
 
+  const pintarAnticipos = () => {
+    const cont = $('#anticipos-enc-cont', m.el); if (!cont) return;
+    const total = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
+    cont.innerHTML = `${anticipos.length ? `<table class="tbl small" style="margin-bottom:.6rem"><tbody>${anticipos.map(a => `<tr><td>${fdatetime(a.fecha)}</td><td>${esc(a.forma_pago)}</td>
+        <td class="num">${money(-a.monto)}</td><td>${a.anulado ? '<span class="pill red">Anulado</span>' : ['entregado', 'cancelado'].includes(e.estado) ? '' : `<button class="x" data-anular-ant-enc="${a.id}" title="Anular">×</button>`}</td></tr>`).join('')}</tbody></table>`
+      : '<p class="small muted" style="margin-bottom:.6rem">Sin anticipos registrados.</p>'}
+      <div class="small muted">Anticipado: <b>${money(total)}</b></div>
+      <p class="small muted" style="margin-top:.3rem">Se descuenta solo al entregar por "Vender". Impacta caja al momento y el saldo del cliente en el Fichero.</p>`;
+    const add = $('#add-anticipo-enc', m.el);
+    if (add) add.onclick = () => anticipoEncargoModal(e, async () => { anticipos = await store.anticiposEncargo(e.id); pintarAnticipos(); });
+    $$('[data-anular-ant-enc]', m.el).forEach(b => b.onclick = () => run(async () => {
+      if (!confirm('¿Anular este anticipo? Se descuenta de caja y del saldo del cliente.')) return;
+      await store.anularCobroCuenta(+b.dataset.anularAntEnc); anticipos = await store.anticiposEncargo(e.id); pintarAnticipos(); toast('Anticipo anulado');
+    }));
+  };
+  if (!nuevo) pintarAnticipos();
+
   const can = $('#cancelar', m.el);
   if (can) can.onclick = () => run(async () => {
-    const msg = esReserva ? `¿Liberar la reserva N° ${e.numero}? Las unidades vuelven a estar disponibles.`
-      : `¿Cancelar el encargo N° ${e.numero}?${e.estado === 'pedido' ? '\n\nSi el pedido todavía está pendiente, se lo quita de ese pedido.' : ''}`;
+    const antTotal = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
+    const avisoAnt = antTotal > 0 ? `\n\n⚠ Ya se cobró un anticipo de ${money(antTotal)}: queda como saldo a favor del cliente en el Fichero (se le puede devolver o aplicar a otra compra desde ahí).` : '';
+    const msg = (esReserva ? `¿Liberar la reserva N° ${e.numero}? Las unidades vuelven a estar disponibles.`
+      : `¿Cancelar el encargo N° ${e.numero}?${e.estado === 'pedido' ? '\n\nSi el pedido todavía está pendiente, se lo quita de ese pedido.' : ''}`) + avisoAnt;
     if (!confirm(msg)) return;
     await store.cancelarEncargo(e.id); m.close(); toast(esReserva ? 'Reserva liberada' : 'Encargo cancelado'); render();
   });
@@ -2498,6 +2530,25 @@ async function encargoModal(e) {
       toast(`Reserva N° ${reserva.numero}: ${reservar} unidad(es) apartada(s)`);
       go('#/encargos?tipo=reserva'); if (parseHash().name === 'encargos') render();
     }
+  });
+}
+
+function anticipoEncargoModal(e, onDone) {
+  const tipoTxt = e.tipo === 'reserva' ? 'reserva' : 'encargo';
+  let forma = 'Efectivo';
+  const m = modal(`Anticipo — ${tipoTxt} N° ${e.numero}`, `
+    <p class="small muted" style="margin-top:-.4rem">Plata que el cliente ya pagó a cuenta de ${tipoTxt === 'reserva' ? 'esta reserva' : 'este encargo'}. Entra a caja ahora y se descuenta del total cuando se entregue por "Vender".</p>
+    <div class="field"><label>Monto</label><input class="input" type="number" step="any" min="0" id="monto"></div>
+    <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div>
+    <div class="field"><label>Nota (opcional)</label><input class="input" id="nota" placeholder="ej: comprobante de transferencia"></div>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Registrar anticipo</button>`);
+  $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); });
+  $('#monto', m.el).focus();
+  $('#ok', m.el).onclick = () => run(async () => {
+    const monto = +$('#monto', m.el).value;
+    if (!(monto > 0)) return toast('Ingresá el monto del anticipo', true);
+    await store.registrarAnticipoEncargo(e.id, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
+    m.close(); toast(`Anticipo registrado · ${money(monto)}`); onDone();
   });
 }
 
@@ -2658,17 +2709,23 @@ function avisarEncargo(e, hermanos = []) {
 
 // Entregar: si el producto está en la base, se abre Vender con todo cargado (al cobrar queda entregado);
 // si no, se marca entregado directamente.
-function entregarEncargo(e) {
+async function entregarEncargo(e) {
+  const anticipos = await store.anticiposEncargo(e.id).catch(() => []);
+  const anticipado = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
   const m = modal(`Entregar ${e.tipo === 'reserva' ? 'reserva' : 'encargo'} N° ${e.numero}`, `
     <p>${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}<b>${esc(e.descripcion)}</b> · ${esc(quienEncarga(e))}${e.precio != null ? ` · acordado ${money(e.precio)}` : ''}</p>
+    ${anticipado ? `<p class="small" style="margin-top:.5rem;color:var(--ok)">Ya se cobró un anticipo de ${money(anticipado)}: se descuenta solo si entregás por "Vender".</p>` : ''}
     <p class="small muted" style="margin-top:.6rem">${e.producto_id ? '<b>Vender</b> abre la pantalla de venta con el producto y el cliente cargados; al cobrar, queda entregado.'
       : 'Es un producto que no está en la base: podés venderlo como ítem manual, o solo marcarlo como entregado.'}</p>`,
-    `<button class="btn" data-close>Cancelar</button><button class="btn" id="solo">Solo marcar entregado</button><button class="btn ok" id="vender">Vender</button>`);
-  $('#solo', m.el).onclick = () => run(async () => { await store.actualizarEncargo(e.id, { estado: 'entregado', fecha_entrega: new Date().toISOString() }); m.close(); toast('Entregado'); render(); });
+    `<button class="btn" data-close>Cancelar</button><button class="btn" id="solo" ${anticipado ? 'disabled title="Hay un anticipo cobrado: entregalo por Vender para que se aplique solo"' : ''}>Solo marcar entregado</button><button class="btn ok" id="vender">Vender</button>`);
+  const solo = $('#solo', m.el);
+  if (!anticipado) solo.onclick = () => run(async () => { await store.actualizarEncargo(e.id, { estado: 'entregado', fecha_entrega: new Date().toISOString() }); m.close(); toast('Entregado'); render(); });
   $('#vender', m.el).onclick = () => run(async () => {
     if (cart.items.length && !confirm('Tenés una venta en curso en "Vender". ¿Reemplazarla por esto?')) return;
     const p = e.producto_id ? (await store.productos()).find(x => x.id === e.producto_id) : null;
-    cart = { ...carritoVacio(), cliente_id: e.cliente_id ? String(e.cliente_id) : '', notas: `${e.tipo === 'reserva' ? 'Reserva' : 'Encargo'} N° ${e.numero}${!e.cliente_id && e.contacto ? ` · ${e.contacto}` : ''}`, encargoId: e.id,
+    cart = { ...carritoVacio(), cliente_id: e.cliente_id ? String(e.cliente_id) : '',
+      notas: `${e.tipo === 'reserva' ? 'Reserva' : 'Encargo'} N° ${e.numero}${!e.cliente_id && e.contacto ? ` · ${e.contacto}` : ''}${anticipado ? ` · anticipo ${money(anticipado)} aplicado` : ''}`,
+      encargoId: e.id, descuento: anticipado,
       items: [{ producto_id: p?.id || null, descripcion: p?.nombre || e.descripcion, cantidad: +e.cantidad, precio_unitario: e.precio ?? p?.precio_venta ?? 0, stock: p?.stock ?? 0, es_servicio: !p }] };
     m.close(); go('#/vender');
   });

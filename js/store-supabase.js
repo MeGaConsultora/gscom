@@ -250,6 +250,18 @@ export const store = {
   async registrarAnticipoOrden(id, { monto, forma_pago, nota = '' }) {
     return q(sb.rpc('registrar_anticipo_orden', { p_orden_id: id, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }));
   },
+  async anticiposEncargo(encargoId) {
+    return q(sb.from('cc_movimientos').select('*').eq('encargo_id', encargoId).eq('tipo', 'pago').order('fecha'));
+  },
+  async registrarAnticipoEncargo(id, { monto, forma_pago, nota = '' }) {
+    return q(sb.rpc('registrar_anticipo_encargo', { p_encargo_id: id, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }));
+  },
+  async aplicarAnticipoEncargo(encargoId, ventaId) {
+    return q(sb.rpc('aplicar_anticipo_encargo', { p_encargo_id: encargoId, p_venta_id: ventaId }));
+  },
+  async revertirAnticipoEncargo(ventaId) {
+    await q(sb.rpc('revertir_anticipo_encargo', { p_venta_id: ventaId }));
+  },
 
   // Página pública (no requiere login)
   async seguimiento(token) {
