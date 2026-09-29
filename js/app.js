@@ -1219,7 +1219,7 @@ async function detalleOrden(id) {
 
   view().innerHTML = `
   <div class="page-head"><div><a href="#/service" class="small muted">← Service</a><h1>Orden #${o.numero} ${pill(o.estado)}${respuestaPresu(o)}</h1></div>
-    <div class="actions"><button class="btn" id="imp">Imprimir comprobante</button>${cerrada ? '<button class="btn danger" id="anular-entrega">Anular entrega</button>' : '<button class="btn ok" id="entregar">Entregar y cobrar</button>'}</div></div>
+    <div class="actions"><button class="btn" id="imp">${cerrada ? 'Imprimir comprobante de entrega' : 'Imprimir comprobante'}</button>${cerrada ? '<button class="btn danger" id="anular-entrega">Anular entrega</button>' : '<button class="btn ok" id="entregar">Entregar y cobrar</button>'}</div></div>
   <div class="card card-pad" style="margin-bottom:1rem">${stepper(o.estado)}</div>
   <div class="split">
     <div class="grid">
@@ -1274,7 +1274,7 @@ async function detalleOrden(id) {
   };
   const wa = $('#wa'); if (wa) wa.href = waLink(o.cliente.telefono, msgWA(o.estado, ''));
   $('#copiar').onclick = async () => { try { await navigator.clipboard.writeText(url); toast('Link copiado'); } catch { prompt('Copiá el link:', url); } };
-  $('#imp').onclick = () => imprimirOrden(o, n, url);
+  $('#imp').onclick = () => cerrada ? run(() => imprimirEntregaOrden(id, n)) : imprimirOrden(o, n, url);
 
   $('#guardar-datos').onclick = () => run(async () => {
     await store.actualizarOrden(id, { fecha_estimada: $('#fecha-est').value || null, tecnico: $('#tecnico').value.trim(),
@@ -1374,8 +1374,12 @@ async function detalleOrden(id) {
     $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarSaldo(); });
     pintarSaldo();
     $('#ok', m.el).onclick = () => run(async () => {
-      await store.entregarOrden(id, { total: +$('#tot', m.el).value || 0, forma_pago: forma, comentario: $('#msg', m.el).value.trim(), notaInterna: $('#nota-interna', m.el).value.trim() });
-      m.close(); toast('Orden entregada'); render();
+      const total = +$('#tot', m.el).value || 0;
+      await store.entregarOrden(id, { total, forma_pago: forma, comentario: $('#msg', m.el).value.trim(), notaInterna: $('#nota-interna', m.el).value.trim() });
+      m.close(); render();
+      const r = modal('Orden entregada', `<div class="empty" style="padding:1rem"><div class="total-box">${money(total)}</div><div class="muted">${esc(forma)}</div></div>`,
+        `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="imp2">Imprimir comprobante</button>`);
+      $('#imp2', r.el).onclick = () => run(() => imprimirEntregaOrden(id, n));
     });
   };
 
@@ -1424,6 +1428,33 @@ async function imprimirOrden(o, n, url) {
     window.removeEventListener('afterprint', onAfter);
     if (confirm('¿Imprimir también el duplicado para el local?')) printHTML(copia(true), PAGINA_TICKET);
   });
+}
+
+// Comprobante de entrega: lo que se hizo, el total, lo ya anticipado y lo cobrado al entregar.
+// Se reconstruye desde la orden ya entregada, así sirve tanto justo después de entregar como para reimprimirlo más tarde.
+async function imprimirEntregaOrden(id, n) {
+  const [o, anticipos] = await Promise.all([store.orden(id), store.anticiposOrden(id).catch(() => [])]);
+  const anticipado = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
+  const eq = [o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' ');
+  const total = +o.total_cobrado || 0;
+  const restante = Math.max(total - anticipado, 0);
+  const comentario = [...o.historial].reverse().find(h => h.estado === 'entregado')?.comentario || '';
+
+  printHTML(`<div class="ticket">
+    <div class="c big">${esc(n.nombre)}</div>
+    <div class="c">Service técnico<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}</div><hr>
+    <div class="c big">ORDEN N° ${o.numero}</div>
+    <div class="c">COMPROBANTE DE ENTREGA<br>${fdatetime(o.fecha_entrega)}</div><hr>
+    <div>Cliente: ${esc(o.cliente.nombre)}</div>
+    <div>Equipo: ${esc(eq)}</div>
+    ${o.items.length ? `<hr><table>${o.items.map(i => `<tr><td colspan="2">${esc(i.descripcion)}</td></tr>
+      <tr><td>${i.cantidad} x ${money(i.precio_unitario)}</td><td style="text-align:right">${money(i.cantidad * i.precio_unitario)}</td></tr>`).join('')}</table>` : ''}
+    <hr><table><tr><td class="big">TOTAL</td><td class="big" style="text-align:right">${money(total)}</td></tr></table>
+    ${anticipado ? `<table><tr><td>Anticipo ya pagado</td><td style="text-align:right">-${money(anticipado)}</td></tr></table>` : ''}
+    <table><tr><td>${restante > 0 ? `Cobrado ahora (${esc(o.forma_pago_entrega)})` : 'Nada más a cobrar'}</td><td style="text-align:right">${money(restante)}</td></tr></table><hr>
+    ${comentario ? `<div>${esc(comentario)}</div><hr>` : ''}
+    <div class="c">Documento no válido como factura.<br>¡Gracias por confiar en nosotros!</div>
+  </div>`, PAGINA_TICKET);
 }
 
 // =====================================================================
@@ -1760,7 +1791,6 @@ async function imprimirRecibo(clienteId, ccId) {
   const pago = cron[i];
   const saldoActual = cron.slice(0, i + 1).reduce((s, m) => s + +m.monto, 0);
   const saldoAnterior = saldoActual - +pago.monto;    // el pago tiene monto negativo
-  const esAnticipo = !!pago.orden_id;
   // Qué conceptos cubrió este pago (con los productos de cada venta)
   const { grupos, aplicaciones } = deudaPorConcepto(movs, imps);
   const detalle = [];
@@ -1778,7 +1808,7 @@ async function imprimirRecibo(clienteId, ccId) {
   }
   printHTML(`<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div><div class="c">${esc(n.direccion)}<br>${esc(n.telefono)}</div><hr>
-    <div class="c"><b>RECIBO DE PAGO</b><br>${esAnticipo ? 'Anticipo de service' : 'Cuenta corriente'}</div><hr>
+    <div class="c"><b>RECIBO DE PAGO</b><br>${pago.orden_id ? 'Anticipo de service' : pago.encargo_id ? 'Anticipo de encargo' : 'Cuenta corriente'}</div><hr>
     <div>Recibo N° ${pago.id}<br>${fdatetime(pago.fecha)}<br>Cliente: ${esc(c.nombre)}${c.dni_cuit ? `<br>DNI/CUIT: ${esc(c.dni_cuit)}` : ''}</div><hr>
     ${pago.concepto && pago.concepto !== 'Cobro de cuenta corriente' ? `<div>Nota: ${esc(pago.concepto)}</div>` : ''}
     ${detalle.length ? `<div><b>Detalle de lo pagado</b></div><table>${detalle.map(d => `
@@ -1807,8 +1837,11 @@ function anticipoModal(o, onDone) {
   $('#ok', m.el).onclick = () => run(async () => {
     const monto = +$('#monto', m.el).value;
     if (!(monto > 0)) return toast('Ingresá el monto del anticipo', true);
-    await store.registrarAnticipoOrden(o.id, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
-    m.close(); toast(`Anticipo registrado · ${money(monto)}`); onDone();
+    const ccId = await store.registrarAnticipoOrden(o.id, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
+    m.close(); onDone();
+    const r = modal('Anticipo registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(forma)} · Orden #${o.numero}</div></div>`,
+      `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="rec">Imprimir recibo</button>`);
+    $('#rec', r.el).onclick = () => run(() => imprimirRecibo(o.cliente.id, ccId));
   });
 }
 
