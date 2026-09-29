@@ -206,6 +206,8 @@ dl.kv dt { color: var(--muted); }
 .ticket table { width: 100%; border-collapse: collapse; font-size: 7.5pt; }
 .ticket td { padding: .3mm 0; vertical-align: top; word-break: break-word; overflow-wrap: break-word; }
 .ticket .big { font-size: 10pt; font-weight: 700; }
+/* los importes (columna derecha) nunca se parten en dos renglones: "$ 150.000" queda entero */
+.ticket td[style*="text-align:right"], .ticket td.n { white-space: nowrap; word-break: normal; overflow-wrap: normal; padding-left: 1.5mm; text-align: right; }
 .ticket-qr { display: flex; justify-content: center; margin: 2mm 0; }
 .ticket-qr svg { width: 42mm; height: 42mm; }
 

@@ -241,8 +241,9 @@ export const store = {
       orden_id: id, producto_id: i.producto_id || null, descripcion: i.descripcion, cantidad: +i.cantidad, precio_unitario: +i.precio_unitario,
     }))));
   },
-  async entregarOrden(id, { total, forma_pago, comentario = '', notaInterna = '' }) {
-    await q(sb.rpc('entregar_orden', { p_orden_id: id, p_total: +total || 0, p_forma_pago: forma_pago, p_comentario: comentario, p_nota_interna: notaInterna }));
+  // pagado: cuánto paga ahora (lo que falta queda en su cuenta corriente); si no viene, paga todo
+  async entregarOrden(id, { total, forma_pago, comentario = '', notaInterna = '', pagado = null }) {
+    await q(sb.rpc('entregar_orden', { p_orden_id: id, p_total: +total || 0, p_forma_pago: forma_pago, p_comentario: comentario, p_nota_interna: notaInterna, p_pagado: pagado == null ? null : +pagado }));
   },
   async anticiposOrden(ordenId) {
     return q(sb.from('cc_movimientos').select('*').eq('orden_id', ordenId).eq('tipo', 'pago').order('fecha'));
