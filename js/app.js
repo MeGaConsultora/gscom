@@ -1405,7 +1405,7 @@ async function imprimirOrden(o, n, url) {
     ${duplicado
       ? `<div style="margin-top:5mm">Firma del cliente:</div><div style="border-top:1px solid #000;margin-top:9mm"></div>`
       : `<div class="ticket-qr">${qrSVG(url)}</div><div class="c"><b>Seguí el estado de tu equipo</b><br>escaneando este código con la cámara del celular.</div>`}
-    <div class="c small" style="margin-top:2mm">${esc(n.pie_comprobante)}</div>
+    <div class="c" style="margin-top:2mm">${esc(n.pie_comprobante)}</div>
   </div>`;
 
   printHTML(`${copia(false)}${copia(true)}`, PAGINA_TICKET);
