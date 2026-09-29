@@ -1377,15 +1377,16 @@ async function detalleOrden(id) {
   }
 }
 
-// Comprobante de ingreso: dos A6 (105 × 148 mm) lado a lado en la mitad superior de una A4.
-// Izquierda: original para el cliente (con QR). Derecha: duplicado para el local (con contraseña y firma).
+// Comprobante de ingreso: original para el cliente (con QR) y duplicado para el local
+// (con contraseña y firma), como dos impresiones separadas para que la ticketera
+// corte cada una — si fueran una sola, la tira sale entera y hay que cortarla a mano.
 async function imprimirOrden(o, n, url) {
   const anticipos = await store.anticiposOrden(o.id).catch(() => []);
   const anticipado = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
   const eq = [o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' ');
   const fila = (k, v) => v ? `<div style="margin-bottom:.8mm"><b>${k}:</b> ${v}</div>` : '';
 
-  const copia = duplicado => `<div class="ticket"${duplicado ? ' style="page-break-before:always"' : ''}>
+  const copia = duplicado => `<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div>
     <div class="c">Service técnico<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}${n.whatsapp ? `<br>WhatsApp ${esc(n.whatsapp)}` : ''}</div><hr>
     <div class="c big">ORDEN N° ${o.numero}</div>
@@ -1408,7 +1409,11 @@ async function imprimirOrden(o, n, url) {
     <div class="c" style="margin-top:2mm">${esc(n.pie_comprobante)}</div>
   </div>`;
 
-  printHTML(`${copia(false)}${copia(true)}`, PAGINA_TICKET);
+  printHTML(copia(false), PAGINA_TICKET);
+  window.addEventListener('afterprint', function onAfter() {
+    window.removeEventListener('afterprint', onAfter);
+    if (confirm('¿Imprimir también el duplicado para el local?')) printHTML(copia(true), PAGINA_TICKET);
+  });
 }
 
 // =====================================================================
