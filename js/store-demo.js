@@ -558,7 +558,7 @@ export const store = {
     insert('cc_movimientos', { cliente_id: m.cliente_id, fecha: now(), tipo: 'ajuste', monto: -m.monto, concepto: 'Anulación de venta: se libera el anticipo aplicado', forma_pago: '', encargo_id: m.encargo_id, venta_id: +ventaId, anulado: false });
     save();
   },
-  async entregarOrden(id, { total, forma_pago, comentario = '' }) {
+  async entregarOrden(id, { total, forma_pago, comentario = '', notaInterna = '' }) {
     const o = byId('ordenes_servicio', id);
     if (o.estado === 'entregado') throw new Error('La orden ya fue entregada');
     db.orden_items.filter(i => i.orden_id === o.id && i.producto_id).forEach(i => movStock(i.producto_id, -i.cantidad, 'service', { orden_id: o.id, nota: `Orden #${o.numero}` }));
@@ -571,6 +571,7 @@ export const store = {
       insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Service orden #${o.numero}`, monto: restante, forma_pago, orden_id: o.id });
     }
     o.total_cobrado = +total; o.forma_pago_entrega = forma_pago;
+    if (notaInterna.trim()) o.notas_internas = o.notas_internas ? `${o.notas_internas}\n${notaInterna.trim()}` : notaInterna.trim();
     await this.cambiarEstadoOrden(id, 'entregado', comentario);
   },
   async anularEntregaOrden(id) {

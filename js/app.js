@@ -1352,19 +1352,29 @@ async function detalleOrden(id) {
       <p class="small muted" style="margin:-.4rem 0 .8rem">${totalItems ? 'Sugerido: suma de repuestos y mano de obra.' : o.presupuesto ? 'Sugerido: presupuesto.' : 'Poné 0 si no se cobra (garantía, sin reparación).'}${anticipadoTotal ? ` Ya se cobraron ${money(anticipadoTotal)} en anticipos: se descuentan solos.` : ''}</p>
       <div class="field"><label>Forma de pago del saldo restante</label><div class="pay-opts">${FORMAS_COBRO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div>
         <div class="small muted" style="margin-top:.3rem" id="saldo-restante"></div></div>
-      <div class="field"><label>Mensaje final para el cliente (opcional)</label><input class="input" id="msg" placeholder="ej: Garantía de ${n.garantia_dias} días sobre el trabajo realizado."></div>`,
+      <div class="field"><label>Mensaje final para el cliente (opcional)</label><input class="input" id="msg" placeholder="ej: Garantía de ${n.garantia_dias} días sobre el trabajo realizado."></div>
+      <div class="field" id="nota-interna-box" hidden><label>Motivo interno de la entrega sin cobrar <span class="muted">(el cliente no lo ve)</span></label>
+        <input class="input" id="nota-interna" list="motivos-sin-cobro" placeholder="ej: El cliente no quiso repararlo">
+        <datalist id="motivos-sin-cobro">
+          <option value="Se arrepintió antes de diagnosticar">
+          <option value="No quiso repararlo">
+          <option value="Le pareció caro, va a comprar uno nuevo">
+          <option value="Garantía">
+        </datalist></div>`,
       `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Confirmar entrega</button>`);
     const pintarSaldo = () => {
-      const restante = Math.max((+$('#tot', m.el).value || 0) - anticipadoTotal, 0);
+      const tot = +$('#tot', m.el).value || 0;
+      const restante = Math.max(tot - anticipadoTotal, 0);
       $('#saldo-restante', m.el).textContent = forma === 'Cuenta corriente'
         ? `Queda ${money(restante)} como deuda del cliente en el Fichero (no entra a caja).`
         : restante ? `Se cobra ${money(restante)} ahora por ${forma.toLowerCase()}.` : 'Nada más que cobrar: el anticipo ya cubre el total.';
+      $('#nota-interna-box', m.el).hidden = tot !== 0;
     };
     $('#tot', m.el).oninput = pintarSaldo;
     $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarSaldo(); });
     pintarSaldo();
     $('#ok', m.el).onclick = () => run(async () => {
-      await store.entregarOrden(id, { total: +$('#tot', m.el).value || 0, forma_pago: forma, comentario: $('#msg', m.el).value.trim() });
+      await store.entregarOrden(id, { total: +$('#tot', m.el).value || 0, forma_pago: forma, comentario: $('#msg', m.el).value.trim(), notaInterna: $('#nota-interna', m.el).value.trim() });
       m.close(); toast('Orden entregada'); render();
     });
   };
