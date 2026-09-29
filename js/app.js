@@ -2569,11 +2569,33 @@ async function nuevoEncargoModal() {
     <div id="lineas"></div>
     <button class="btn sm" id="otra">+ Agregar otro producto</button>
     <div class="row" style="margin-top:1rem"><div class="field" id="f-hasta" hidden style="flex:0 0 220px"><label>Reservado hasta (opcional)</label><input class="input" type="date" name="reservado_hasta"></div>
-      <div class="field"><label>Notas internas</label><input class="input" name="notas" placeholder="ej: lo necesita antes del lunes · dejó seña"></div></div>`,
+      <div class="field"><label>Notas internas</label><input class="input" name="notas" placeholder="ej: lo necesita antes del lunes · dejó seña"></div></div>
+    <div class="card card-pad" id="ant-card" style="background:#fafbfc;margin-top:.4rem">
+      <label class="small" style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" id="con-anticipo"> <b>Cobrar una seña / anticipo ahora</b></label>
+      <div class="row" id="anticipo-box" style="margin-top:.6rem" hidden>
+        <div class="field" style="flex:0 0 160px;margin:0"><label class="small">Monto</label><input class="input" type="number" min="0" step="any" id="ant-monto"></div>
+        <div class="field" style="margin:0"><label class="small">Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button type="button" class="chip ${f === 'Efectivo' ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div>
+      </div>
+      <p class="small muted" id="ant-hint" style="margin-top:.4rem"></p>
+    </div>`,
     `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="ok">Guardar</button>`, { wide: true });
 
   const selCli = $('[name=cliente_id]', m.el);
-  selCli.onchange = () => $('#contacto', m.el).hidden = !!selCli.value;
+  selCli.onchange = () => { $('#contacto', m.el).hidden = !!selCli.value; pintarAnt(); };
+
+  let antForma = 'Efectivo';
+  const antCk = $('#con-anticipo', m.el), antBox = $('#anticipo-box', m.el), antHint = $('#ant-hint', m.el), antMonto = $('#ant-monto', m.el);
+  $$('#ant-card .pay-opts .chip', m.el).forEach(b => b.onclick = () => { antForma = b.dataset.f; $$('#ant-card .pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); });
+  const pintarAnt = () => {
+    const hayCliente = !!selCli.value;
+    antCk.disabled = !hayCliente;
+    if (!hayCliente) antCk.checked = false;
+    antBox.hidden = !antCk.checked;
+    antHint.textContent = hayCliente ? 'Impacta caja al momento; se descuenta solo cuando se entregue por "Vender". Si hay más de un producto, se carga sobre el primero.'
+      : 'Para cobrar una seña, elegí un cliente cargado (no alcanza con nombre/teléfono suelto).';
+  };
+  antCk.onchange = pintarAnt;
+  pintarAnt();
   const lineas = [];   // { id, productoId, el }
   let sec = 0;
   const val = (l, sel) => $(sel, l.el).value.trim();
@@ -2650,22 +2672,29 @@ async function nuevoEncargoModal() {
     const plan = lineas.filter(l => val(l, '[data-desc]')).map(l => ({ ...reparto(l), l, desc: val(l, '[data-desc]'),
       precio: val(l, '[data-precio]') === '' ? null : +val(l, '[data-precio]'), prov: val(l, '[data-prov]') ? +val(l, '[data-prov]') : null }));
     if (!plan.length) return toast('Cargá al menos un producto', true);
+    const antMontoVal = antCk.checked ? +antMonto.value : 0;
+    if (antCk.checked && !(antMontoVal > 0)) return toast('Ingresá el monto de la seña', true);
     const quien = { cliente_id: f.cliente_id ? +f.cliente_id : null, contacto: f.cliente_id ? '' : f.contacto, telefono: f.cliente_id ? '' : f.telefono };
     const partes = plan.reduce((n, x) => n + (x.reservar ? 1 : 0) + (x.encargar ? 1 : 0), 0);
     const vinculo = partes > 1 && crypto.randomUUID ? crypto.randomUUID() : null;
-    const pedidos = new Set(); let nRes = 0, nEnc = 0, ultimaReserva = null;
+    const pedidos = new Set(); let nRes = 0, nEnc = 0, ultimaReserva = null, primero = null;
     for (const x of plan) {
       const base = { ...quien, producto_id: x.p?.id || null, descripcion: x.desc, precio: x.precio, notas: f.notas, solicitud: vinculo };
-      if (x.reservar) { ultimaReserva = await store.crearEncargo({ ...base, tipo: 'reserva', estado: 'reservado', cantidad: x.reservar, proveedor_id: null, reservado_hasta: f.reservado_hasta || null }); nRes++; }
-      if (x.encargar) { const e = await store.crearEncargo({ ...base, tipo: 'encargo', cantidad: x.encargar, proveedor_id: x.prov }); pedidos.add(await store.encargar(e.id, x.prov)); nEnc++; }
+      if (x.reservar) { ultimaReserva = await store.crearEncargo({ ...base, tipo: 'reserva', estado: 'reservado', cantidad: x.reservar, proveedor_id: null, reservado_hasta: f.reservado_hasta || null }); nRes++; if (!primero) primero = ultimaReserva; }
+      if (x.encargar) { const e = await store.crearEncargo({ ...base, tipo: 'encargo', cantidad: x.encargar, proveedor_id: x.prov }); pedidos.add(await store.encargar(e.id, x.prov)); nEnc++; if (!primero) primero = e; }
+    }
+    let antMsg = '';
+    if (antMontoVal > 0 && primero) {
+      try { await store.registrarAnticipoEncargo(primero.id, { monto: antMontoVal, forma_pago: antForma, nota: '' }); antMsg = ` · seña ${money(antMontoVal)} registrada`; }
+      catch (err) { toast(`Se guardó, pero la seña no se pudo registrar: ${err.message || 'Error'}`, true); }
     }
     m.close();
     if (plan.length === 1 && pedidos.size === 1 && !nRes) {   // un solo encargo: como siempre, a su pedido
       const ped = await store.pedido([...pedidos][0]);
-      toast(`Encargo agregado al pedido N° ${ped.numero}`); return go(`#/pedidos/${ped.id}`);
+      toast(`Encargo agregado al pedido N° ${ped.numero}${antMsg}`); return go(`#/pedidos/${ped.id}`);
     }
-    toast(plan.length === 1 && !nEnc ? `Reserva N° ${ultimaReserva.numero}: ${nRes && plan[0].reservar} unidad(es) apartada(s)`
-      : `${[nRes && `${nRes} reserva(s)`, nEnc && `${nEnc} encargo(s)`].filter(Boolean).join(' y ')} guardados${pedidos.size ? ` · sumados a ${pedidos.size} pedido(s)` : ''}`);
+    toast((plan.length === 1 && !nEnc ? `Reserva N° ${ultimaReserva.numero}: ${nRes && plan[0].reservar} unidad(es) apartada(s)`
+      : `${[nRes && `${nRes} reserva(s)`, nEnc && `${nEnc} encargo(s)`].filter(Boolean).join(' y ')} guardados${pedidos.size ? ` · sumados a ${pedidos.size} pedido(s)` : ''}`) + antMsg);
     go('#/encargos'); if (parseHash().name === 'encargos') render();
   });
 }
