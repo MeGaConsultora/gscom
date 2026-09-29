@@ -2560,9 +2560,13 @@ async function nuevoEncargoModal() {
   const reservados = reservasPorProducto(encargos);
   const opcProv = sel => `<option value="">— Sin proveedor —</option>${proveedores.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}`;
   const m = modal('Nuevo encargo / reserva', `
-    <div class="field"><label>¿Quién lo pide?</label><select class="input" name="cliente_id">
-      <option value="">— No es cliente (cargar nombre y teléfono) —</option>
-      ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.telefono ? ' — ' + esc(c.telefono) : ''}</option>`).join('')}</select></div>
+    <div class="field"><label>¿Quién lo pide?</label>
+      <div class="row" style="align-items:center;gap:.5rem">
+        <select class="input" name="cliente_id" style="flex:1;margin:0">
+          <option value="">— No es cliente (cargar nombre y teléfono) —</option>
+          ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.telefono ? ' — ' + esc(c.telefono) : ''}</option>`).join('')}</select>
+        <button type="button" class="btn sm" id="nuevo-cli" style="flex:0 0 auto">+ Nuevo cliente</button>
+      </div></div>
     <div class="row" id="contacto"><div class="field"><label>Nombre / empresa</label><input class="input" name="contacto"></div>
       <div class="field"><label>Teléfono (WhatsApp)</label><input class="input" name="telefono"></div></div>
     <label style="display:block;margin-bottom:.4rem">¿Qué pide? <span class="muted small">(buscá un producto de la base, o escribí la descripción si es algo nuevo)</span></label>
@@ -2582,6 +2586,14 @@ async function nuevoEncargoModal() {
 
   const selCli = $('[name=cliente_id]', m.el);
   selCli.onchange = () => { $('#contacto', m.el).hidden = !!selCli.value; pintarAnt(); };
+  $('#nuevo-cli', m.el).onclick = () => clienteModal(null, nc => {
+    clientes.push(nc);
+    const opt = document.createElement('option');
+    opt.value = nc.id; opt.textContent = nc.nombre + (nc.telefono ? ' — ' + nc.telefono : '');
+    selCli.appendChild(opt);
+    selCli.value = nc.id;
+    selCli.dispatchEvent(new Event('change', { bubbles: true }));
+  });
 
   let antForma = 'Efectivo';
   const antCk = $('#con-anticipo', m.el), antBox = $('#anticipo-box', m.el), antHint = $('#ant-hint', m.el), antMonto = $('#ant-monto', m.el);
