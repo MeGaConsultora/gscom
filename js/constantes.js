@@ -10,8 +10,9 @@ export const ESTADOS = [
   { id: 'listo',          label: 'Listo para retirar',  color: 'green',  cliente: '¡Tu equipo está listo! Podés pasar a retirarlo.' },
   { id: 'entregado',      label: 'Entregado',           color: 'gray',   cliente: 'Equipo entregado. ¡Gracias por confiar en nosotros!' },
   { id: 'sin_reparacion', label: 'Sin reparación',      color: 'red',    cliente: 'El equipo no pudo ser reparado. Podés pasar a retirarlo.' },
-  { id: 'encargado',      label: 'Encargado',           color: 'gray',   cliente: 'Registramos el armado de tu PC.' },
-  { id: 'en_armado',      label: 'En proceso de armado', color: 'blue',  cliente: 'Estamos armando tu PC.' },
+  { id: 'encargado',      label: 'Encargado',           color: 'gray',   cliente: 'Registramos tu pedido.' },
+  // sirve para armar una PC o para preparar un equipo ya armado (instalación de software, configuración)
+  { id: 'en_armado',      label: 'En preparación',      color: 'blue',   cliente: 'Estamos preparando tu equipo.' },
 ];
 export const estadoInfo = id => ESTADOS.find(e => e.id === id) || ESTADOS[0];
 export const FORMAS_PAGO = ['Efectivo', 'Transferencia', 'Débito', 'Crédito', 'Mercado Pago', 'Cheque'];
