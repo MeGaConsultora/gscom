@@ -1040,7 +1040,7 @@ ROUTES.clientes = async ({ id }) => {
 function clienteModal(c, onSaved) {
   const v = c || { apellido: '', nombres: '', telefono: '', dni_cuit: '', email: '', direccion: '', notas: '', condicion_iva: CONDICIONES_IVA[0] };
   const m = modal(c ? 'Editar cliente' : 'Nuevo cliente', `
-    <div class="row"><div class="field"><label>Apellido / Razón social *</label><input class="input" name="apellido" value="${esc(v.apellido ?? v.nombre)}"></div>
+    <div class="row"><div class="field"><label>Apellido / Razón social *</label><input class="input" name="apellido" style="text-transform:uppercase" value="${esc(v.apellido ?? v.nombre)}"></div>
       <div class="field"><label>Nombres</label><input class="input" name="nombres" value="${esc(v.nombres)}" placeholder="(vacío si es empresa)"></div></div>
     <div class="row"><div class="field"><label>Teléfono (WhatsApp)</label><input class="input" name="telefono" value="${esc(v.telefono)}" placeholder="ej: 342 555-1234"></div>
       <div class="field"><label>DNI / CUIT</label><input class="input" name="dni_cuit" value="${esc(v.dni_cuit)}"></div></div>
@@ -1159,7 +1159,7 @@ async function nuevaOrdenModal(clienteId = null) {
     <div class="field"><label>Cliente *</label><select class="input" name="cliente_id"><option value="">Elegí un cliente…</option><option value="__nuevo">+ Cliente nuevo</option>
       ${clientes.map(c => `<option value="${c.id}" ${c.id === clienteId ? 'selected' : ''}>${esc(c.nombre)}${c.telefono ? ' — ' + esc(c.telefono) : ''}</option>`).join('')}</select></div>
     <div id="cli-nuevo" hidden class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem">
-      <div class="row"><div class="field"><label>Apellido / Razón social *</label><input class="input" name="c_apellido"></div>
+      <div class="row"><div class="field"><label>Apellido / Razón social *</label><input class="input" name="c_apellido" style="text-transform:uppercase"></div>
       <div class="field"><label>Nombres</label><input class="input" name="c_nombres"></div></div>
       <div class="row"><div class="field"><label>Teléfono (WhatsApp)</label><input class="input" name="c_telefono"></div>
       <div class="field"><label>DNI / CUIT</label><input class="input" name="c_dni_cuit"></div></div></div>

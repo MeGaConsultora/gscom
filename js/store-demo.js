@@ -217,6 +217,8 @@ export const store = {
   async clientes() { return clone(db.clientes.slice().sort((a, b) => a.nombre.localeCompare(b.nombre))); },
   async cliente(id) { return clone(byId('clientes', id)); },
   async guardarCliente(c) {
+    if ('apellido' in c) c = { ...c, apellido: apellidoFormato(c.apellido) };
+    if ('nombres' in c) c = { ...c, nombres: nombresFormato(c.nombres) };
     c = { ...c, nombre: nombreCliente(c) };  // igual que el trigger armar_nombre_cliente de la base
     if (c.id) { Object.assign(byId('clientes', c.id), c); save(); return clone(byId('clientes', c.id)); }
     const r = insert('clientes', { apellido: '', nombres: '', dni_cuit: '', telefono: '', email: '', direccion: '', notas: '', condicion_iva: 'Consumidor Final', cuenta_corriente: false, created_at: now(), ...c });
@@ -636,6 +638,11 @@ export const store = {
   },
 };
 
+// Formato del nombre (igual que el trigger armar_nombre_cliente de la base, 33_formato_nombre_cliente.sql):
+// apellido / razón social en MAYÚSCULAS y nombres con la primera letra de cada uno en mayúscula
+const limpiar = t => String(t || '').trim().replace(/\s+/g, ' ');
+const apellidoFormato = t => limpiar(t).toLocaleUpperCase('es');
+const nombresFormato = t => limpiar(t).toLocaleLowerCase('es').replace(/(^|[^\p{L}\p{N}])(\p{L})/gu, (m, a, b) => a + b.toLocaleUpperCase('es'));
 function nombreCliente({ apellido = '', nombres = '', nombre = '' }) {
   apellido = apellido.trim(); nombres = nombres.trim();
   return apellido && nombres ? `${apellido}, ${nombres}` : apellido || nombres || nombre;
