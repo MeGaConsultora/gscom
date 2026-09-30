@@ -296,7 +296,7 @@ ROUTES.inicio = async () => {
     <div class="card kpi"><div class="label">Para retirar</div><div class="value">${listas.length}</div><div class="sub">listos o sin reparación</div></div>
   </div>
   <div class="grid grid-2">
-    <div class="card card-pad"><h2>Service por estado <a class="small" href="#/service">Ver todo →</a></h2>
+    <div class="card card-pad"><h2>Órdenes por estado <a class="small" href="#/service">Ver todo →</a></h2>
       <table class="tbl"><tbody>${ESTADOS.filter(e => e.id !== 'entregado').map(e => {
         const n = ordenes.filter(o => o.estado === e.id).length;
         return `<tr class="click" data-href="#/service?estado=${e.id}"><td>${pill(e.id)}</td><td class="num"><b>${n}</b></td></tr>`;
@@ -1131,10 +1131,10 @@ ROUTES.service = async ({ id, q }) => {
   const ordenes = await store.ordenes();
   let filtro = q.get('estado') || 'activas', texto = '';
   view().innerHTML = `
-  <div class="page-head"><h1>Service técnico</h1><div class="actions"><button class="btn primary" id="nueva">+ Nueva orden</button></div></div>
-  <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por N° de orden, cliente, equipo o falla"></div></div>
+  <div class="page-head"><h1>Service técnico</h1><div class="actions"><button class="btn" id="nueva-armado">+ Armado de PC</button><button class="btn primary" id="nueva">+ Nueva orden</button></div></div>
+  <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por N° de orden, cliente, equipo o detalle"></div></div>
   <div class="chips" id="chips"></div>
-  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Ingreso</th><th>Cliente</th><th>Equipo</th><th>Falla</th><th>Estado</th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Ingreso</th><th>Cliente</th><th>Equipo</th><th>Detalle</th><th>Estado</th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const opts = [['activas', 'En taller', ordenes.filter(ACTIVAS).length], ...ESTADOS.map(e => [e.id, e.label, ordenes.filter(o => o.estado === e.id).length]), ['todas', 'Todas', ordenes.length]];
   const paint = () => {
     $('#chips').innerHTML = opts.map(([k, l, n]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}<span class="count">${n}</span></button>`).join('');
@@ -1143,19 +1143,21 @@ ROUTES.service = async ({ id, q }) => {
       && (String(o.numero) === texto.replace('#', '') || matches(texto, o.cliente?.nombre, o.equipo?.marca, o.equipo?.modelo, o.equipo?.tipo, o.falla_reportada)));
     $('#rows').innerHTML = l.map(o => `<tr class="click" data-href="#/service/${o.id}"><td class="mono"><b>#${o.numero}</b></td>
       <td class="nowrap">${fdate(o.fecha_ingreso)}<div class="small muted">${daysSince(o.fecha_ingreso) === 0 ? 'hoy' : `hace ${daysSince(o.fecha_ingreso)} d`}</div></td>
-      <td>${esc(o.cliente?.nombre)}</td><td>${esc([o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' '))}</td>
+      <td>${esc(o.cliente?.nombre)}</td><td>${o.tipo === 'armado' ? '<span class="pill violet">Armado de PC</span>' : esc([o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' '))}</td>
       <td class="small" style="max-width:280px">${esc(o.falla_reportada)}</td><td>${pill(o.estado)}${respuestaPresu(o)}</td></tr>`).join('')
       || '<tr><td colspan="6" class="empty">No hay órdenes en este estado.</td></tr>';
     bindRowLinks();
   };
   $('#buscar').oninput = e => { texto = e.target.value.trim(); paint(); };
   $('#nueva').onclick = () => nuevaOrdenModal();
+  $('#nueva-armado').onclick = () => nuevaOrdenModal(null, 'armado');
   paint();
 };
 
-async function nuevaOrdenModal(clienteId = null) {
+async function nuevaOrdenModal(clienteId = null, tipo = 'reparacion') {
+  const esArmado = tipo === 'armado';
   const clientes = await store.clientes();
-  const m = modal('Nueva orden de service', `
+  const m = modal(esArmado ? 'Nuevo armado de PC' : 'Nueva orden de service', `
     <div class="field"><label>Cliente *</label><select class="input" name="cliente_id"><option value="">Elegí un cliente…</option><option value="__nuevo">+ Cliente nuevo</option>
       ${clientes.map(c => `<option value="${c.id}" ${c.id === clienteId ? 'selected' : ''}>${esc(c.nombre)}${c.telefono ? ' — ' + esc(c.telefono) : ''}</option>`).join('')}</select></div>
     <div id="cli-nuevo" hidden class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem">
@@ -1163,47 +1165,58 @@ async function nuevaOrdenModal(clienteId = null) {
       <div class="field"><label>Nombres</label><input class="input" name="c_nombres"></div></div>
       <div class="row"><div class="field"><label>Teléfono (WhatsApp)</label><input class="input" name="c_telefono"></div>
       <div class="field"><label>DNI / CUIT</label><input class="input" name="c_dni_cuit"></div></div></div>
-    <div class="field"><label>Equipo *</label><select class="input" name="equipo_id"></select></div>
-    <div id="eq-nuevo" hidden class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem">${equipoFields({ tipo: 'Notebook', marca: '', modelo: '', nro_serie: '', notas: '' }, 'e_')}</div>
-    <div class="field"><label>Falla reportada por el cliente *</label><textarea class="input" name="falla_reportada" placeholder="Lo que cuenta el cliente, con sus palabras"></textarea></div>
-    <div class="row"><div class="field"><label>Accesorios que deja</label><input class="input" name="accesorios" placeholder="ej: cargador, funda"></div>
-      <div class="field"><label>Contraseña / patrón del equipo</label><input class="input" name="contrasena_equipo" placeholder="(opcional, uso interno)"></div></div>
+    ${esArmado ? '' : `<div class="field"><label>Equipo *</label><select class="input" name="equipo_id"></select></div>
+    <div id="eq-nuevo" hidden class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem">${equipoFields({ tipo: 'Notebook', marca: '', modelo: '', nro_serie: '', notas: '' }, 'e_')}</div>`}
+    <div class="field"><label>${esArmado ? 'Especificaciones *' : 'Falla reportada por el cliente *'}</label>
+      <textarea class="input" name="falla_reportada" placeholder="${esArmado ? 'ej: Ryzen 5 5600, 16GB RAM, SSD 480GB · se instala Windows 11 + Office' : 'Lo que cuenta el cliente, con sus palabras'}"></textarea></div>
+    ${esArmado ? '' : `<div class="row"><div class="field"><label>Accesorios que deja</label><input class="input" name="accesorios" placeholder="ej: cargador, funda"></div>
+      <div class="field"><label>Contraseña / patrón del equipo</label><input class="input" name="contrasena_equipo" placeholder="(opcional, uso interno)"></div></div>`}
     <div class="row"><div class="field"><label>Fecha estimada</label><input class="input" type="date" name="fecha_estimada"></div>
       <div class="field"><label>Técnico</label><input class="input" name="tecnico"></div></div>`,
-    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Crear orden</button>`);
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">${esArmado ? 'Crear armado' : 'Crear orden'}</button>`);
   const selC = $('[name=cliente_id]', m.el), selE = $('[name=equipo_id]', m.el);
   const onCliente = async () => {
     $('#cli-nuevo', m.el).hidden = selC.value !== '__nuevo';
+    if (!selE) return;
     const eqs = selC.value && selC.value !== '__nuevo' ? await store.equipos(+selC.value) : [];
     selE.innerHTML = eqs.map(e => `<option value="${e.id}">${esc([e.tipo, e.marca, e.modelo].filter(Boolean).join(' '))}${e.nro_serie ? ' · S/N ' + esc(e.nro_serie) : ''}</option>`).join('') + '<option value="__nuevo">+ Equipo nuevo</option>';
     if (!eqs.length) selE.value = '__nuevo';
     $('#eq-nuevo', m.el).hidden = selE.value !== '__nuevo';
   };
-  selC.onchange = onCliente; selE.onchange = () => $('#eq-nuevo', m.el).hidden = selE.value !== '__nuevo';
+  selC.onchange = onCliente; if (selE) selE.onchange = () => $('#eq-nuevo', m.el).hidden = selE.value !== '__nuevo';
   onCliente();
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el);
     if (!f.cliente_id) return toast('Elegí el cliente', true);
     if (f.cliente_id === '__nuevo' && !f.c_apellido) return toast('Completá el apellido del cliente nuevo', true);
-    if (!f.falla_reportada) return toast('Describí la falla reportada', true);
+    if (!f.falla_reportada) return toast(esArmado ? 'Describí las especificaciones' : 'Describí la falla reportada', true);
     let cid = +f.cliente_id;
     if (f.cliente_id === '__nuevo') cid = (await store.guardarCliente({ apellido: f.c_apellido, nombres: f.c_nombres, telefono: f.c_telefono, dni_cuit: f.c_dni_cuit })).id;
-    let eid = +f.equipo_id;
-    if (f.equipo_id === '__nuevo') eid = (await store.guardarEquipo({ cliente_id: cid, tipo: f.e_tipo, marca: f.e_marca, modelo: f.e_modelo, nro_serie: f.e_nro_serie, notas: f.e_notas })).id;
-    const o = await store.crearOrden({ cliente_id: cid, equipo_id: eid, falla_reportada: f.falla_reportada, accesorios: f.accesorios,
-      contrasena_equipo: f.contrasena_equipo, fecha_estimada: f.fecha_estimada || null, tecnico: f.tecnico });
-    m.close(); toast(`Orden #${o.numero} creada`);
+    let eid = null;
+    if (!esArmado) {
+      eid = +f.equipo_id;
+      if (f.equipo_id === '__nuevo') eid = (await store.guardarEquipo({ cliente_id: cid, tipo: f.e_tipo, marca: f.e_marca, modelo: f.e_modelo, nro_serie: f.e_nro_serie, notas: f.e_notas })).id;
+    }
+    const o = await store.crearOrden({ cliente_id: cid, equipo_id: eid, falla_reportada: f.falla_reportada, accesorios: f.accesorios || '',
+      contrasena_equipo: f.contrasena_equipo || '', fecha_estimada: f.fecha_estimada || null, tecnico: f.tecnico,
+      tipo, estado: esArmado ? 'encargado' : 'recibido' });
+    m.close(); toast(`${esArmado ? 'Armado' : 'Orden'} #${o.numero} ${esArmado ? 'creado' : 'creada'}`);
     go(`#/service/${o.id}?nueva=1`);
   });
 }
 
 const FLUJO = ['recibido', 'diagnostico', 'presupuesto', 'reparacion', 'listo', 'entregado'];
-function stepper(estado) {
-  const pos = ['repuesto', 'derivado'].includes(estado) ? FLUJO.indexOf('reparacion') : estado === 'sin_reparacion' ? FLUJO.indexOf('listo') : FLUJO.indexOf(estado);
-  return `<div class="stepper">${FLUJO.map((s, i) => {
+const FLUJO_ARMADO = ['encargado', 'en_armado', 'listo', 'entregado'];
+const ESTADOS_POR_TIPO = { reparacion: FLUJO.concat(['derivado', 'repuesto', 'sin_reparacion']), armado: FLUJO_ARMADO };
+function stepper(estado, tipo = 'reparacion') {
+  const esArmado = tipo === 'armado';
+  const flujo = esArmado ? FLUJO_ARMADO : FLUJO;
+  const pos = esArmado ? flujo.indexOf(estado)
+    : ['repuesto', 'derivado'].includes(estado) ? flujo.indexOf('reparacion') : estado === 'sin_reparacion' ? flujo.indexOf('listo') : flujo.indexOf(estado);
+  return `<div class="stepper">${flujo.map((s, i) => {
     let label = estadoInfo(s).label;
-    if (i === pos && ['repuesto', 'derivado'].includes(estado)) label = estadoInfo(estado).label;
-    if (i === pos && estado === 'sin_reparacion') label = 'Sin reparación';
+    if (!esArmado && i === pos && ['repuesto', 'derivado'].includes(estado)) label = estadoInfo(estado).label;
+    if (!esArmado && i === pos && estado === 'sin_reparacion') label = 'Sin reparación';
     return `<div class="step ${i < pos ? 'done' : ''} ${i === pos ? 'current' : ''}">${esc(label)}</div>`;
   }).join('')}</div>`;
 }
@@ -1211,6 +1224,7 @@ function stepper(estado) {
 async function detalleOrden(id) {
   const [o, productos, n, cats, anticipos] = await Promise.all([store.orden(id), store.productos(), store.negocio(), store.categorias(), store.anticiposOrden(id)]);
   if (!o) { view().innerHTML = '<div class="empty">Orden no encontrada</div>'; return; }
+  const esArmado = o.tipo === 'armado';
   const url = trackingURL(o.token);
   const items = o.items.slice();
   const eq = [o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' ');
@@ -1218,27 +1232,27 @@ async function detalleOrden(id) {
   const anticipadoTotal = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
 
   view().innerHTML = `
-  <div class="page-head"><div><a href="#/service" class="small muted">← Service</a><h1>Orden #${o.numero} ${pill(o.estado)}${respuestaPresu(o)}</h1></div>
+  <div class="page-head"><div><a href="#/service" class="small muted">← Service</a><h1>${esArmado ? 'Armado' : 'Orden'} #${o.numero} ${pill(o.estado)}${respuestaPresu(o)}</h1></div>
     <div class="actions"><button class="btn" id="imp">${cerrada ? 'Imprimir comprobante de entrega' : 'Imprimir comprobante'}</button>${cerrada ? '<button class="btn danger" id="anular-entrega">Anular entrega</button>' : '<button class="btn ok" id="entregar">Entregar y cobrar</button>'}</div></div>
-  <div class="card card-pad" style="margin-bottom:1rem">${stepper(o.estado)}</div>
+  <div class="card card-pad" style="margin-bottom:1rem">${stepper(o.estado, o.tipo)}</div>
   <div class="split">
     <div class="grid">
-      <div class="card card-pad"><h2>Equipo y cliente</h2>
+      <div class="card card-pad"><h2>${esArmado ? 'Cliente' : 'Equipo y cliente'}</h2>
         <dl class="kv"><dt>Cliente</dt><dd><a href="#/clientes/${o.cliente.id}">${esc(o.cliente.nombre)}</a> · ${esc(o.cliente.telefono)}</dd>
-        <dt>Equipo</dt><dd>${esc(eq)}${o.equipo?.nro_serie ? ` <span class="small muted mono">S/N ${esc(o.equipo.nro_serie)}</span>` : ''}</dd>
-        <dt>Ingreso</dt><dd>${fdatetime(o.fecha_ingreso)}</dd>
+        ${esArmado ? '' : `<dt>Equipo</dt><dd>${esc(eq)}${o.equipo?.nro_serie ? ` <span class="small muted mono">S/N ${esc(o.equipo.nro_serie)}</span>` : ''}</dd>`}
+        <dt>${esArmado ? 'Encargado' : 'Ingreso'}</dt><dd>${fdatetime(o.fecha_ingreso)}</dd>
         ${o.fecha_entrega ? `<dt>Entregado</dt><dd>${fdatetime(o.fecha_entrega)} · ${money(o.total_cobrado)}</dd>` : ''}</dl>
         <div class="row"><div class="field"><label>Fecha estimada</label><input class="input" type="date" id="fecha-est" value="${o.fecha_estimada || ''}"></div>
           <div class="field"><label>Técnico</label><input class="input" id="tecnico" value="${esc(o.tecnico)}"></div></div>
-        <div class="field"><label>Falla reportada</label><textarea class="input" id="falla">${esc(o.falla_reportada)}</textarea></div>
-        <div class="row"><div class="field"><label>Accesorios</label><input class="input" id="accesorios" value="${esc(o.accesorios)}"></div>
-          <div class="field"><label>Contraseña / patrón</label><input class="input mono" id="contrasena" value="${esc(o.contrasena_equipo)}"></div></div>
+        <div class="field"><label>${esArmado ? 'Especificaciones' : 'Falla reportada'}</label><textarea class="input" id="falla">${esc(o.falla_reportada)}</textarea></div>
+        ${esArmado ? '' : `<div class="row"><div class="field"><label>Accesorios</label><input class="input" id="accesorios" value="${esc(o.accesorios)}"></div>
+          <div class="field"><label>Contraseña / patrón</label><input class="input mono" id="contrasena" value="${esc(o.contrasena_equipo)}"></div></div>`}
         <button class="btn" id="guardar-datos">Guardar</button></div>
-      <div class="card card-pad"><h2>Diagnóstico y presupuesto</h2>
-        <div class="field"><label>Diagnóstico técnico</label><textarea class="input" id="diag">${esc(o.diagnostico)}</textarea></div>
+      <div class="card card-pad"><h2>${esArmado ? 'Notas internas' : 'Diagnóstico y presupuesto'}</h2>
+        ${esArmado ? '' : `<div class="field"><label>Diagnóstico técnico</label><textarea class="input" id="diag">${esc(o.diagnostico)}</textarea></div>
         <div class="field"><label>Trabajo realizado</label><textarea class="input" id="trab">${esc(o.trabajo_realizado)}</textarea></div>
         <div class="row"><div class="field"><label>Presupuesto ($)</label><input class="input" type="number" step="any" min="0" id="pres" value="${o.presupuesto ?? ''}"></div>
-          <div class="field"><label>¿Aprobado por el cliente?</label><select class="input" id="aprob"><option value="">Pendiente</option><option value="si" ${o.presupuesto_aprobado === true ? 'selected' : ''}>Sí</option><option value="no" ${o.presupuesto_aprobado === false ? 'selected' : ''}>No</option></select></div></div>
+          <div class="field"><label>¿Aprobado por el cliente?</label><select class="input" id="aprob"><option value="">Pendiente</option><option value="si" ${o.presupuesto_aprobado === true ? 'selected' : ''}>Sí</option><option value="no" ${o.presupuesto_aprobado === false ? 'selected' : ''}>No</option></select></div></div>`}
         <div class="field"><label>Notas internas (el cliente no las ve)</label><textarea class="input" id="notas">${esc(o.notas_internas)}</textarea></div>
         <button class="btn" id="guardar-diag">Guardar</button></div>
       <div class="card card-pad"><h2>Anticipos (pago a cuenta) ${cerrada ? '' : '<button class="btn sm" id="add-anticipo">+ Registrar anticipo</button>'}</h2>
@@ -1261,8 +1275,8 @@ async function detalleOrden(id) {
     </div>
     <div class="grid">
       ${cerrada ? '' : `<div class="card card-pad"><h2>Cambiar estado</h2>
-        <div class="field"><select class="input" id="nuevo-estado">${ESTADOS.filter(e => e.id !== 'entregado').map(e => `<option value="${e.id}" ${e.id === o.estado ? 'selected' : ''}>${e.label}</option>`).join('')}</select></div>
-        <div class="field"><label>Mensaje para el cliente (lo ve en el seguimiento)</label><textarea class="input" id="coment" placeholder="ej: Presupuesto: cambio de pantalla $85.000. Demora 3 días."></textarea></div>
+        <div class="field"><select class="input" id="nuevo-estado">${ESTADOS.filter(e => ESTADOS_POR_TIPO[esArmado ? 'armado' : 'reparacion'].includes(e.id) && e.id !== 'entregado').map(e => `<option value="${e.id}" ${e.id === o.estado ? 'selected' : ''}>${e.label}</option>`).join('')}</select></div>
+        <div class="field"><label>Mensaje para el cliente (lo ve en el seguimiento)</label><textarea class="input" id="coment" placeholder="${esArmado ? 'ej: Ya llegaron todos los componentes, arranca el armado esta semana.' : 'ej: Presupuesto: cambio de pantalla $85.000. Demora 3 días.'}"></textarea></div>
         <label class="small" style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem"><input type="checkbox" id="avisar" checked> Avisar por WhatsApp al guardar</label>
         <button class="btn primary block" id="cambiar">Actualizar estado</button></div>`}
       <div class="card card-pad"><h2>Seguimiento del cliente</h2>
@@ -1277,23 +1291,29 @@ async function detalleOrden(id) {
 
   const msgWA = (estado, coment) => {
     const e = estadoInfo(estado);
-    return `Hola ${primerNombre(o.cliente)}! Te escribimos de ${n.nombre} por tu ${eq} (orden #${o.numero}).\n\nEstado: *${e.label}*\n${coment || e.cliente}\n\nPodés seguirlo acá: ${url}`;
+    const eqTxt = eq || 'armado de PC';
+    return `Hola ${primerNombre(o.cliente)}! Te escribimos de ${n.nombre} por tu ${eqTxt} (orden #${o.numero}).\n\nEstado: *${e.label}*\n${coment || e.cliente}\n\nPodés seguirlo acá: ${url}`;
   };
   const wa = $('#wa'); if (wa) wa.href = waLink(o.cliente.telefono, msgWA(o.estado, ''));
   $('#copiar').onclick = async () => { try { await navigator.clipboard.writeText(url); toast('Link copiado'); } catch { prompt('Copiá el link:', url); } };
   $('#imp').onclick = () => cerrada ? run(() => imprimirEntregaOrden(id, n)) : imprimirOrden(o, n, url);
 
   $('#guardar-datos').onclick = () => run(async () => {
-    await store.actualizarOrden(id, { fecha_estimada: $('#fecha-est').value || null, tecnico: $('#tecnico').value.trim(),
-      falla_reportada: $('#falla').value.trim(), accesorios: $('#accesorios').value.trim(), contrasena_equipo: $('#contrasena').value.trim() });
+    const cambios = { fecha_estimada: $('#fecha-est').value || null, tecnico: $('#tecnico').value.trim(), falla_reportada: $('#falla').value.trim() };
+    if (!esArmado) Object.assign(cambios, { accesorios: $('#accesorios').value.trim(), contrasena_equipo: $('#contrasena').value.trim() });
+    await store.actualizarOrden(id, cambios);
     toast('Guardado');
   });
 
   $('#guardar-diag').onclick = () => run(async () => {
-    const ap = $('#aprob').value;
-    await store.actualizarOrden(id, { diagnostico: $('#diag').value.trim(), trabajo_realizado: $('#trab').value.trim(),
-      presupuesto: $('#pres').value === '' ? null : +$('#pres').value, presupuesto_aprobado: ap === '' ? null : ap === 'si', notas_internas: $('#notas').value.trim() });
-    Object.assign(o, { diagnostico: $('#diag').value.trim(), presupuesto: $('#pres').value === '' ? null : +$('#pres').value, presupuesto_aprobado: ap === '' ? null : ap === 'si' });
+    const cambios = { notas_internas: $('#notas').value.trim() };
+    if (!esArmado) {
+      const ap = $('#aprob').value;
+      Object.assign(cambios, { diagnostico: $('#diag').value.trim(), trabajo_realizado: $('#trab').value.trim(),
+        presupuesto: $('#pres').value === '' ? null : +$('#pres').value, presupuesto_aprobado: ap === '' ? null : ap === 'si' });
+    }
+    await store.actualizarOrden(id, cambios);
+    Object.assign(o, cambios);
     pintarPresRef(); paintItems();   // el detalle final se compara contra el presupuesto nuevo
     toast('Guardado');
   });
@@ -1310,10 +1330,10 @@ async function detalleOrden(id) {
   if (cambiar) cambiar.onclick = () => run(async () => {
     const estado = $('#nuevo-estado').value, coment = $('#coment').value.trim();
     if (estado === o.estado && !coment) return toast('Elegí un estado distinto o escribí un mensaje', true);
-    const pres = $('#pres').value === '' ? null : +$('#pres').value;
+    const pres = $('#pres') ? ($('#pres').value === '' ? null : +$('#pres').value) : null;
     if (estado === 'presupuesto' && pres == null) return toast('Cargá el monto en "Presupuesto ($)" para que el cliente pueda aceptarlo desde el link', true);
     // Presupuesto nuevo o modificado: se guarda y queda pendiente de respuesta del cliente
-    if (pres !== o.presupuesto) await store.actualizarOrden(id, { presupuesto: pres, presupuesto_aprobado: null });
+    if (!esArmado && pres !== o.presupuesto) await store.actualizarOrden(id, { presupuesto: pres, presupuesto_aprobado: null });
     await store.cambiarEstadoOrden(id, estado, coment); // mismo estado + mensaje = novedad para el cliente
     if ($('#avisar').checked && o.cliente.telefono) window.open(waLink(o.cliente.telefono, msgWA(estado, coment)), '_blank', 'noopener');
     toast('Estado actualizado'); render();
@@ -1323,6 +1343,7 @@ async function detalleOrden(id) {
   // y se ve cuánto queda por cobrar al entregar (descontando los pagos a cuenta).
   const totalItems = () => items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
   const pintarPresRef = () => {
+    if (esArmado) { $('#pres-ref').hidden = true; return; }
     const ap = o.presupuesto_aprobado === true ? '<span class="pill green">aprobado</span>' : o.presupuesto_aprobado === false ? '<span class="pill red">rechazado</span>' : '<span class="pill amber">sin respuesta</span>';
     $('#pres-ref').innerHTML = o.presupuesto != null
       ? `Presupuesto enviado: <b>${money(o.presupuesto)}</b> ${ap}${o.diagnostico ? `<div class="muted" style="margin-top:.2rem">${esc(o.diagnostico)}</div>` : ''}`
@@ -1389,9 +1410,9 @@ async function detalleOrden(id) {
     const tItems = totalItems();
     const sugerido = tItems || o.presupuesto || 0;
     let forma = 'Efectivo', pagaEditado = false;
-    const m = modal(`Entregar orden #${o.numero}`, `
+    const m = modal(`Entregar ${esArmado ? 'armado' : 'orden'} #${o.numero}`, `
       <div class="field"><label>Total del trabajo</label><input class="input" type="number" step="any" min="0" id="tot" value="${sugerido}"></div>
-      <p class="small muted" style="margin:-.4rem 0 .8rem">${tItems ? 'Sugerido: total del detalle final.' : o.presupuesto ? 'Sugerido: presupuesto.' : 'Poné 0 si no se cobra (garantía, sin reparación).'}</p>
+      <p class="small muted" style="margin:-.4rem 0 .8rem">${tItems ? 'Sugerido: total del detalle final.' : o.presupuesto ? 'Sugerido: presupuesto.' : esArmado ? 'Cargá el total del armado.' : 'Poné 0 si no se cobra (garantía, sin reparación).'}</p>
       <table class="tbl small" style="margin-bottom:.8rem"><tbody id="cuentas-ent"></tbody></table>
       <div class="row" style="align-items:flex-end"><div class="field" style="flex:0 0 170px"><label>Paga ahora</label><input class="input" type="number" step="any" min="0" id="paga"></div>
         <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div></div>
@@ -1436,7 +1457,7 @@ async function detalleOrden(id) {
       await store.entregarOrden(id, { total: tot, forma_pago: paga > 0 ? forma : CUENTA_CORRIENTE, pagado: paga,
         comentario: $('#msg', m.el).value.trim(), notaInterna: $('#nota-interna', m.el).value.trim() });
       m.close(); render();
-      const r = modal('Orden entregada', `<div class="empty" style="padding:1rem"><div class="total-box">${money(tot)}</div>
+      const r = modal(esArmado ? 'Armado entregado' : 'Orden entregada', `<div class="empty" style="padding:1rem"><div class="total-box">${money(tot)}</div>
           <div class="muted">${paga ? `Pagó ${money(paga)} (${esc(forma)})` : saldo ? 'No pagó al retirar' : 'Sin saldo a cobrar'}${queda > 0.009 ? ` · quedan ${money(queda)} en su cuenta corriente` : ''}</div></div>`,
         `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="imp2">Imprimir comprobante</button>`);
       $('#imp2', r.el).onclick = () => run(() => imprimirEntregaOrden(id, n));
@@ -1445,8 +1466,9 @@ async function detalleOrden(id) {
 
   if (parseHash().q.get('nueva')) {
     history.replaceState(null, '', `#/service/${id}`);
-    const m = modal(`Orden #${o.numero} creada`, `<p>¿Imprimimos el comprobante de ingreso para el cliente? Incluye el código QR para seguir el estado del equipo.</p>`,
-      `<button class="btn" data-close>Ahora no</button>${o.cliente.telefono ? `<a class="btn wa" target="_blank" rel="noopener" href="${waLink(o.cliente.telefono, msgWA('recibido', ''))}">Enviar link por WhatsApp</a>` : ''}<button class="btn primary" id="p">Imprimir</button>`);
+    const m = modal(`${esArmado ? 'Armado' : 'Orden'} #${o.numero} ${esArmado ? 'creado' : 'creada'}`,
+      `<p>¿Imprimimos el comprobante${esArmado ? '' : ' de ingreso'} para el cliente? Incluye el código QR para seguir el estado ${esArmado ? 'del armado' : 'de tu equipo'}.</p>`,
+      `<button class="btn" data-close>Ahora no</button>${o.cliente.telefono ? `<a class="btn wa" target="_blank" rel="noopener" href="${waLink(o.cliente.telefono, msgWA(o.estado, ''))}">Enviar link por WhatsApp</a>` : ''}<button class="btn primary" id="p">Imprimir</button>`);
     $('#p', m.el).onclick = () => { m.close(); imprimirOrden(o, n, url); };
   }
 }
@@ -1455,6 +1477,7 @@ async function detalleOrden(id) {
 // (con contraseña y firma), como dos impresiones separadas para que la ticketera
 // corte cada una — si fueran una sola, la tira sale entera y hay que cortarla a mano.
 async function imprimirOrden(o, n, url) {
+  const esArmado = o.tipo === 'armado';
   const anticipos = await store.anticiposOrden(o.id).catch(() => []);
   const anticipado = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
   const eq = [o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' ');
@@ -1462,16 +1485,16 @@ async function imprimirOrden(o, n, url) {
 
   const copia = duplicado => `<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div>
-    <div class="c">Service técnico<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}${n.whatsapp ? `<br>WhatsApp ${esc(n.whatsapp)}` : ''}</div><hr>
-    <div class="c big">ORDEN N° ${o.numero}</div>
-    <div class="c">${duplicado ? 'DUPLICADO — LOCAL' : 'ORIGINAL — CLIENTE'}<br>Ingreso ${fdatetime(o.fecha_ingreso)}</div><hr>
+    <div class="c">${esArmado ? 'Armado de PC' : 'Service técnico'}<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}${n.whatsapp ? `<br>WhatsApp ${esc(n.whatsapp)}` : ''}</div><hr>
+    <div class="c big">${esArmado ? 'ARMADO' : 'ORDEN'} N° ${o.numero}</div>
+    <div class="c">${duplicado ? 'DUPLICADO — LOCAL' : 'ORIGINAL — CLIENTE'}<br>${esArmado ? 'Encargado' : 'Ingreso'} ${fdatetime(o.fecha_ingreso)}</div><hr>
     ${fila('Cliente', esc(o.cliente.nombre))}
     ${fila('Teléfono', esc(o.cliente.telefono))}
     ${duplicado ? fila('DNI / CUIT', esc(o.cliente.dni_cuit)) : ''}
-    ${fila('Equipo', esc(eq))}
-    ${fila('N° de serie', esc(o.equipo?.nro_serie))}
-    ${fila('Accesorios', esc(o.accesorios) || 'Ninguno')}
-    ${fila('Falla', esc(o.falla_reportada))}
+    ${esArmado ? '' : fila('Equipo', esc(eq))}
+    ${esArmado ? '' : fila('N° de serie', esc(o.equipo?.nro_serie))}
+    ${esArmado ? '' : fila('Accesorios', esc(o.accesorios) || 'Ninguno')}
+    ${fila(esArmado ? 'Especificaciones' : 'Falla', esc(o.falla_reportada))}
     ${o.fecha_estimada ? fila('Fecha estimada', fdate(o.fecha_estimada)) : ''}
     ${o.presupuesto != null ? fila('Presupuesto', money(o.presupuesto)) : ''}
     ${anticipado ? fila('Anticipo', money(anticipado)) : ''}
@@ -1479,7 +1502,7 @@ async function imprimirOrden(o, n, url) {
     <hr>
     ${duplicado
       ? `<div style="margin-top:5mm">Firma del cliente:</div><div style="border-top:1px solid #000;margin-top:9mm"></div>`
-      : `<div class="ticket-qr">${qrSVG(url)}</div><div class="c"><b>Seguí el estado de tu equipo</b><br>escaneando este código con la cámara del celular.</div>`}
+      : `<div class="ticket-qr">${qrSVG(url)}</div><div class="c"><b>Seguí el estado de ${esArmado ? 'tu armado' : 'tu equipo'}</b><br>escaneando este código con la cámara del celular.</div>`}
     <div class="c" style="margin-top:2mm">${esc(n.pie_comprobante)}</div>
   </div>`;
 
@@ -1494,6 +1517,7 @@ async function imprimirOrden(o, n, url) {
 // Se reconstruye desde la orden ya entregada, así sirve tanto justo después de entregar como para reimprimirlo más tarde.
 async function imprimirEntregaOrden(id, n) {
   const [o, anticipos] = await Promise.all([store.orden(id), store.anticiposOrden(id).catch(() => [])]);
+  const esArmado = o.tipo === 'armado';
   const anticipado = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
   const eq = [o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' ');
   const total = +o.total_cobrado || 0;
@@ -1505,11 +1529,11 @@ async function imprimirEntregaOrden(id, n) {
 
   printHTML(`<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div>
-    <div class="c">Service técnico<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}</div><hr>
-    <div class="c big">ORDEN N° ${o.numero}</div>
+    <div class="c">${esArmado ? 'Armado de PC' : 'Service técnico'}<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}</div><hr>
+    <div class="c big">${esArmado ? 'ARMADO' : 'ORDEN'} N° ${o.numero}</div>
     <div class="c">COMPROBANTE DE ENTREGA<br>${fdatetime(o.fecha_entrega)}</div><hr>
     <div>Cliente: ${esc(o.cliente.nombre)}</div>
-    <div>Equipo: ${esc(eq)}</div>
+    ${eq ? `<div>Equipo: ${esc(eq)}</div>` : ''}
     ${o.items.length ? `<hr><table>${o.items.map(i => `<tr><td colspan="2">${esc(i.descripcion)}</td></tr>
       <tr><td>${i.cantidad} x ${money(i.precio_unitario)}</td><td style="text-align:right">${money(i.cantidad * i.precio_unitario)}</td></tr>`).join('')}</table>` : ''}
     <hr><table><tr><td class="big">TOTAL</td><td class="big" style="text-align:right">${money(total)}</td></tr></table>
@@ -1907,7 +1931,7 @@ async function imprimirReciboAnticipo(ordenId, ccId) {
   const fila = (l, v, cls = '') => `<tr><td class="${cls}">${l}</td><td class="${cls}" style="text-align:right">${v}</td></tr>`;
   printHTML(`<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div><div class="c">${esc(n.direccion)}<br>${esc(n.telefono)}</div><hr>
-    <div class="c"><b>RECIBO DE PAGO A CUENTA</b><br>Service técnico</div><hr>
+    <div class="c"><b>RECIBO DE PAGO A CUENTA</b><br>${o.tipo === 'armado' ? 'Armado de PC' : 'Service técnico'}</div><hr>
     <div>Recibo N° ${pago.id}<br>${fdatetime(pago.fecha)}<br>Cliente: ${esc(o.cliente.nombre)}${o.cliente.dni_cuit ? `<br>DNI/CUIT: ${esc(o.cliente.dni_cuit)}` : ''}</div><hr>
     <div><b>Orden N° ${o.numero}</b>${eq ? `<br>${esc(eq)}` : ''}</div><hr>
     <table>

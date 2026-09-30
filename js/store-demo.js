@@ -502,10 +502,10 @@ export const store = {
   },
   async crearOrden(o) {
     db.seq.orden_numero = (db.seq.orden_numero || 0) + 1;
-    const r = insert('ordenes_servicio', { numero: db.seq.orden_numero, token: token(), accesorios: '', contrasena_equipo: '', diagnostico: '',
+    const r = insert('ordenes_servicio', { numero: db.seq.orden_numero, token: token(), tipo: 'reparacion', accesorios: '', contrasena_equipo: '', diagnostico: '',
       trabajo_realizado: '', presupuesto: null, presupuesto_aprobado: null, estado: 'recibido', tecnico: '', fecha_ingreso: now(),
       fecha_estimada: null, fecha_entrega: null, total_cobrado: null, notas_internas: '', ...o });
-    insert('orden_estados', { orden_id: r.id, estado: 'recibido', comentario: '', created_at: now() });
+    insert('orden_estados', { orden_id: r.id, estado: r.estado, comentario: '', created_at: now() });
     save(); return clone(r);
   },
   async actualizarOrden(id, cambios) { Object.assign(byId('ordenes_servicio', id), cambios); save(); },
@@ -601,7 +601,7 @@ export const store = {
     const saldoPendiente = o.estado === 'entregado' && o.forma_pago_entrega !== CC ? 0
       : Math.max((o.total_cobrado ?? o.presupuesto ?? 0) - anticipoPagado, 0);
     return clone({
-      numero: o.numero, cliente: c?.nombres || (c?.nombre || '').split(' ')[0],
+      numero: o.numero, tipo: o.tipo, cliente: c?.nombres || (c?.nombre || '').split(' ')[0],
       equipo: e ? [e.tipo, e.marca, e.modelo].filter(Boolean).join(' ') : '',
       falla: o.falla_reportada, estado: o.estado, fecha_ingreso: o.fecha_ingreso, fecha_estimada: o.fecha_estimada,
       fecha_entrega: o.fecha_entrega, presupuesto: o.presupuesto, presupuesto_aprobado: o.presupuesto_aprobado,
