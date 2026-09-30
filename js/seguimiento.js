@@ -24,7 +24,7 @@ function render(o) {
   const n = o.negocio;
   const wa = texto => n.whatsapp ? linkWhatsApp(n.whatsapp, texto) : '';
   const pendiente = o.estado === 'presupuesto' && o.presupuesto != null && o.presupuesto_aprobado == null;
-  document.title = `Orden #${o.numero} — ${e.label}`;
+  document.title = `${esArmado ? 'Equipo nuevo' : 'Reparación'} #${o.numero} — ${e.label}`;
 
   let bloquePresu = '';
   if (o.presupuesto != null && ['presupuesto', 'reparacion', 'derivado', 'repuesto', 'listo'].includes(o.estado)) {
@@ -49,7 +49,7 @@ function render(o) {
   const waConsulta = wa(`Hola! Consulto por mi orden #${o.numero}${equipoTxt}.`);
   app.innerHTML = `
   <div class="card status">
-    <div class="num">Hola ${esc(o.cliente)} · Orden #${o.numero}</div>
+    <div class="num">Hola ${esc(o.cliente)} · ${esArmado ? 'Equipo nuevo' : 'Reparación'} #${o.numero}</div>
     ${o.equipo ? `<div class="eq">${esc(o.equipo)}</div>` : ''}
     <div class="stepper">${flujo.map((s, i) => {
       let label = estadoInfo(s).label;

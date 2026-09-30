@@ -14,6 +14,13 @@ export const ESTADOS = [
   // sirve para armar una PC o para preparar un equipo ya armado (instalación de software, configuración)
   { id: 'en_armado',      label: 'En preparación',      color: 'blue',   cliente: 'Estamos preparando tu equipo.' },
 ];
+// Tipos de orden de service: reparación de un equipo del cliente, o trabajo sobre un equipo nuevo
+// (armar una PC, instalar software o configurar un equipo que se compró). El id 'armado' queda por compatibilidad.
+export const TIPOS_ORDEN = {
+  reparacion: { nombre: 'Reparación', mayus: 'REPARACIÓN', fem: true },
+  armado: { nombre: 'Equipo nuevo', mayus: 'EQUIPO NUEVO', fem: false },
+};
+export const tipoOrden = o => TIPOS_ORDEN[(typeof o === 'string' ? o : o?.tipo)] || TIPOS_ORDEN.reparacion;
 export const estadoInfo = id => ESTADOS.find(e => e.id === id) || ESTADOS[0];
 export const FORMAS_PAGO = ['Efectivo', 'Transferencia', 'Débito', 'Crédito', 'Mercado Pago', 'Cheque'];
 export const CONDICIONES_IVA = ['Consumidor Final', 'Responsable Inscripto', 'Monotributo', 'Exento', 'No Responsable'];

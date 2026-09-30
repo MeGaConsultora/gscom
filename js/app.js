@@ -1,4 +1,4 @@
-import { store, ESTADOS, estadoInfo, FORMAS_PAGO, FORMAS_COBRO, CUENTA_CORRIENTE, TIPOS_EQUIPO, CONDICIONES_IVA, resetDemo } from './store.js';
+import { store, ESTADOS, estadoInfo, tipoOrden, FORMAS_PAGO, FORMAS_COBRO, CUENTA_CORRIENTE, TIPOS_EQUIPO, CONDICIONES_IVA, resetDemo } from './store.js';
 
 // =====================================================================
 // Utilidades
@@ -274,7 +274,7 @@ ROUTES.inicio = async () => {
 
   view().innerHTML = `
   <div class="page-head"><h1>Resumen de hoy</h1>
-    <div class="actions"><a class="btn primary" href="#/vender">Nueva venta</a><button class="btn" id="nueva-orden">Nueva orden de service</button></div></div>
+    <div class="actions"><a class="btn primary" href="#/vender">Nueva venta</a><button class="btn" id="nueva-orden">Nueva reparación</button></div></div>
   ${(() => {
     const resp = ordenes.filter(o => o.estado === 'presupuesto' && o.presupuesto_aprobado != null);
     return resp.length ? `<div class="card card-pad" style="margin-bottom:1rem;border-left:4px solid var(--ok)">
@@ -1091,7 +1091,7 @@ async function fichaCliente(id) {
 
   view().innerHTML = `
   <div class="page-head"><div><a href="#/clientes" class="small muted">← Clientes</a><h1>${esc(c.nombre)}</h1></div>
-    <div class="actions"><a class="btn" href="#/vender?cliente=${c.id}">Nueva venta</a><button class="btn primary" id="orden">Nueva orden de service</button></div></div>
+    <div class="actions"><a class="btn" href="#/vender?cliente=${c.id}">Nueva venta</a><button class="btn primary" id="orden">Nueva reparación</button></div></div>
   <div class="grid grid-4" style="margin-bottom:1rem">
     <a class="card kpi" href="#/fichero/${c.id}" style="text-decoration:none;color:inherit"><div class="label">Cuenta corriente</div>
       <div class="value" style="${saldo > 0 ? 'color:var(--bad)' : ''}">${money(saldo)}</div><div class="sub">${saldo > 0 ? 'adeuda · ver / cobrar →' : cc.length ? 'al día · ver movimientos →' : 'sin movimientos'}</div></a>
@@ -1131,7 +1131,7 @@ ROUTES.service = async ({ id, q }) => {
   const ordenes = await store.ordenes();
   let filtro = q.get('estado') || 'activas', texto = '';
   view().innerHTML = `
-  <div class="page-head"><h1>Service técnico</h1><div class="actions"><button class="btn" id="nueva-armado">+ Armado de PC</button><button class="btn primary" id="nueva">+ Nueva orden</button></div></div>
+  <div class="page-head"><h1>Service técnico</h1><div class="actions"><button class="btn" id="nueva-armado" title="Armar una PC, instalar software o configurar un equipo nuevo">+ Equipo nuevo</button><button class="btn primary" id="nueva" title="Reparar un equipo que trae el cliente">+ Reparación</button></div></div>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por N° de orden, cliente, equipo o detalle"></div></div>
   <div class="chips" id="chips"></div>
   <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Ingreso</th><th>Cliente</th><th>Equipo</th><th>Detalle</th><th>Estado</th></tr></thead><tbody id="rows"></tbody></table></div>`;
@@ -1143,7 +1143,7 @@ ROUTES.service = async ({ id, q }) => {
       && (String(o.numero) === texto.replace('#', '') || matches(texto, o.cliente?.nombre, o.equipo?.marca, o.equipo?.modelo, o.equipo?.tipo, o.falla_reportada)));
     $('#rows').innerHTML = l.map(o => `<tr class="click" data-href="#/service/${o.id}"><td class="mono"><b>#${o.numero}</b></td>
       <td class="nowrap">${fdate(o.fecha_ingreso)}<div class="small muted">${daysSince(o.fecha_ingreso) === 0 ? 'hoy' : `hace ${daysSince(o.fecha_ingreso)} d`}</div></td>
-      <td>${esc(o.cliente?.nombre)}</td><td>${o.tipo === 'armado' ? '<span class="pill violet">Armado de PC</span>' : esc([o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' '))}</td>
+      <td>${esc(o.cliente?.nombre)}</td><td>${o.tipo === 'armado' ? '<span class="pill violet">Equipo nuevo</span>' : esc([o.equipo?.tipo, o.equipo?.marca, o.equipo?.modelo].filter(Boolean).join(' '))}</td>
       <td class="small" style="max-width:280px">${esc(o.falla_reportada)}</td><td>${pill(o.estado)}${respuestaPresu(o)}</td></tr>`).join('')
       || '<tr><td colspan="6" class="empty">No hay órdenes en este estado.</td></tr>';
     bindRowLinks();
@@ -1157,7 +1157,7 @@ ROUTES.service = async ({ id, q }) => {
 async function nuevaOrdenModal(clienteId = null, tipo = 'reparacion') {
   const esArmado = tipo === 'armado';
   const clientes = await store.clientes();
-  const m = modal(esArmado ? 'Nuevo armado de PC' : 'Nueva orden de service', `
+  const m = modal(esArmado ? 'Equipo nuevo (armado o preparación)' : 'Reparación de equipo', `
     <div class="field"><label>Cliente *</label><select class="input" name="cliente_id"><option value="">Elegí un cliente…</option><option value="__nuevo">+ Cliente nuevo</option>
       ${clientes.map(c => `<option value="${c.id}" ${c.id === clienteId ? 'selected' : ''}>${esc(c.nombre)}${c.telefono ? ' — ' + esc(c.telefono) : ''}</option>`).join('')}</select></div>
     <div id="cli-nuevo" hidden class="card card-pad" style="background:#fafbfc;margin-bottom:.8rem">
@@ -1173,7 +1173,7 @@ async function nuevaOrdenModal(clienteId = null, tipo = 'reparacion') {
       <div class="field"><label>Contraseña / patrón del equipo</label><input class="input" name="contrasena_equipo" placeholder="(opcional, uso interno)"></div></div>`}
     <div class="row"><div class="field"><label>Fecha estimada</label><input class="input" type="date" name="fecha_estimada"></div>
       <div class="field"><label>Técnico</label><input class="input" name="tecnico"></div></div>`,
-    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">${esArmado ? 'Crear armado' : 'Crear orden'}</button>`);
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Crear</button>`);
   const selC = $('[name=cliente_id]', m.el), selE = $('[name=equipo_id]', m.el);
   const onCliente = async () => {
     $('#cli-nuevo', m.el).hidden = selC.value !== '__nuevo';
@@ -1200,7 +1200,7 @@ async function nuevaOrdenModal(clienteId = null, tipo = 'reparacion') {
     const o = await store.crearOrden({ cliente_id: cid, equipo_id: eid, falla_reportada: f.falla_reportada, accesorios: f.accesorios || '',
       contrasena_equipo: f.contrasena_equipo || '', fecha_estimada: f.fecha_estimada || null, tecnico: f.tecnico,
       tipo, estado: esArmado ? 'encargado' : 'recibido' });
-    m.close(); toast(`${esArmado ? 'Armado' : 'Orden'} #${o.numero} ${esArmado ? 'creado' : 'creada'}`);
+    m.close(); toast(`${tipoOrden(tipo).nombre} #${o.numero} ${tipoOrden(tipo).fem ? 'creada' : 'creado'}`);
     go(`#/service/${o.id}?nueva=1`);
   });
 }
@@ -1232,7 +1232,7 @@ async function detalleOrden(id) {
   const anticipadoTotal = anticipos.filter(a => !a.anulado).reduce((s, a) => s - a.monto, 0);
 
   view().innerHTML = `
-  <div class="page-head"><div><a href="#/service" class="small muted">← Service</a><h1>${esArmado ? 'Armado' : 'Orden'} #${o.numero} ${pill(o.estado)}${respuestaPresu(o)}</h1></div>
+  <div class="page-head"><div><a href="#/service" class="small muted">← Service</a><h1>${tipoOrden(o).nombre} #${o.numero} ${pill(o.estado)}${respuestaPresu(o)}</h1></div>
     <div class="actions"><button class="btn" id="imp">${cerrada ? 'Imprimir comprobante de entrega' : 'Imprimir comprobante'}</button>${cerrada ? '<button class="btn danger" id="anular-entrega">Anular entrega</button>' : '<button class="btn ok" id="entregar">Entregar y cobrar</button>'}</div></div>
   <div class="card card-pad" style="margin-bottom:1rem">${stepper(o.estado, o.tipo)}</div>
   <div class="split">
@@ -1276,7 +1276,7 @@ async function detalleOrden(id) {
     <div class="grid">
       ${cerrada ? '' : `<div class="card card-pad"><h2>Cambiar estado</h2>
         <div class="field"><select class="input" id="nuevo-estado">${ESTADOS.filter(e => ESTADOS_POR_TIPO[esArmado ? 'armado' : 'reparacion'].includes(e.id) && e.id !== 'entregado').map(e => `<option value="${e.id}" ${e.id === o.estado ? 'selected' : ''}>${e.label}</option>`).join('')}</select></div>
-        <div class="field"><label>Mensaje para el cliente (lo ve en el seguimiento)</label><textarea class="input" id="coment" placeholder="${esArmado ? 'ej: Ya llegaron todos los componentes, arranca el armado esta semana.' : 'ej: Presupuesto: cambio de pantalla $85.000. Demora 3 días.'}"></textarea></div>
+        <div class="field"><label>Mensaje para el cliente (lo ve en el seguimiento)</label><textarea class="input" id="coment" placeholder="${esArmado ? 'ej: Ya llegaron los componentes, esta semana lo preparamos.' : 'ej: Presupuesto: cambio de pantalla $85.000. Demora 3 días.'}"></textarea></div>
         <label class="small" style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem"><input type="checkbox" id="avisar" checked> Avisar por WhatsApp al guardar</label>
         <button class="btn primary block" id="cambiar">Actualizar estado</button></div>`}
       <div class="card card-pad"><h2>Seguimiento del cliente</h2>
@@ -1291,7 +1291,7 @@ async function detalleOrden(id) {
 
   const msgWA = (estado, coment) => {
     const e = estadoInfo(estado);
-    const eqTxt = eq || 'armado de PC';
+    const eqTxt = eq || 'equipo nuevo';
     return `Hola ${primerNombre(o.cliente)}! Te escribimos de ${n.nombre} por tu ${eqTxt} (orden #${o.numero}).\n\nEstado: *${e.label}*\n${coment || e.cliente}\n\nPodés seguirlo acá: ${url}`;
   };
   const wa = $('#wa'); if (wa) wa.href = waLink(o.cliente.telefono, msgWA(o.estado, ''));
@@ -1410,9 +1410,9 @@ async function detalleOrden(id) {
     const tItems = totalItems();
     const sugerido = tItems || o.presupuesto || 0;
     let forma = 'Efectivo', pagaEditado = false;
-    const m = modal(`Entregar ${esArmado ? 'armado' : 'orden'} #${o.numero}`, `
+    const m = modal(`Entregar ${tipoOrden(o).nombre.toLowerCase()} #${o.numero}`, `
       <div class="field"><label>Total del trabajo</label><input class="input" type="number" step="any" min="0" id="tot" value="${sugerido}"></div>
-      <p class="small muted" style="margin:-.4rem 0 .8rem">${tItems ? 'Sugerido: total del detalle final.' : o.presupuesto ? 'Sugerido: presupuesto.' : esArmado ? 'Cargá el total del armado.' : 'Poné 0 si no se cobra (garantía, sin reparación).'}</p>
+      <p class="small muted" style="margin:-.4rem 0 .8rem">${tItems ? 'Sugerido: total del detalle final.' : o.presupuesto ? 'Sugerido: presupuesto.' : esArmado ? 'Cargá el total del trabajo.' : 'Poné 0 si no se cobra (garantía, sin reparación).'}</p>
       <table class="tbl small" style="margin-bottom:.8rem"><tbody id="cuentas-ent"></tbody></table>
       <div class="row" style="align-items:flex-end"><div class="field" style="flex:0 0 170px"><label>Paga ahora</label><input class="input" type="number" step="any" min="0" id="paga"></div>
         <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div></div>
@@ -1457,7 +1457,7 @@ async function detalleOrden(id) {
       await store.entregarOrden(id, { total: tot, forma_pago: paga > 0 ? forma : CUENTA_CORRIENTE, pagado: paga,
         comentario: $('#msg', m.el).value.trim(), notaInterna: $('#nota-interna', m.el).value.trim() });
       m.close(); render();
-      const r = modal(esArmado ? 'Armado entregado' : 'Orden entregada', `<div class="empty" style="padding:1rem"><div class="total-box">${money(tot)}</div>
+      const r = modal(esArmado ? 'Equipo nuevo entregado' : 'Reparación entregada', `<div class="empty" style="padding:1rem"><div class="total-box">${money(tot)}</div>
           <div class="muted">${paga ? `Pagó ${money(paga)} (${esc(forma)})` : saldo ? 'No pagó al retirar' : 'Sin saldo a cobrar'}${queda > 0.009 ? ` · quedan ${money(queda)} en su cuenta corriente` : ''}</div></div>`,
         `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="imp2">Imprimir comprobante</button>`);
       $('#imp2', r.el).onclick = () => run(() => imprimirEntregaOrden(id, n));
@@ -1466,8 +1466,8 @@ async function detalleOrden(id) {
 
   if (parseHash().q.get('nueva')) {
     history.replaceState(null, '', `#/service/${id}`);
-    const m = modal(`${esArmado ? 'Armado' : 'Orden'} #${o.numero} ${esArmado ? 'creado' : 'creada'}`,
-      `<p>¿Imprimimos el comprobante${esArmado ? '' : ' de ingreso'} para el cliente? Incluye el código QR para seguir el estado ${esArmado ? 'del armado' : 'de tu equipo'}.</p>`,
+    const m = modal(`${tipoOrden(o).nombre} #${o.numero} ${tipoOrden(o).fem ? 'creada' : 'creado'}`,
+      `<p>¿Imprimimos el comprobante${esArmado ? '' : ' de ingreso'} para el cliente? Incluye el código QR para seguir el estado de su equipo.</p>`,
       `<button class="btn" data-close>Ahora no</button>${o.cliente.telefono ? `<a class="btn wa" target="_blank" rel="noopener" href="${waLink(o.cliente.telefono, msgWA(o.estado, ''))}">Enviar link por WhatsApp</a>` : ''}<button class="btn primary" id="p">Imprimir</button>`);
     $('#p', m.el).onclick = () => { m.close(); imprimirOrden(o, n, url); };
   }
@@ -1485,8 +1485,8 @@ async function imprimirOrden(o, n, url) {
 
   const copia = duplicado => `<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div>
-    <div class="c">${esArmado ? 'Armado de PC' : 'Service técnico'}<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}${n.whatsapp ? `<br>WhatsApp ${esc(n.whatsapp)}` : ''}</div><hr>
-    <div class="c big">${esArmado ? 'ARMADO' : 'ORDEN'} N° ${o.numero}</div>
+    <div class="c">Service técnico<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}${n.whatsapp ? `<br>WhatsApp ${esc(n.whatsapp)}` : ''}</div><hr>
+    <div class="c big">${tipoOrden(o).mayus} N° ${o.numero}</div>
     <div class="c">${duplicado ? 'DUPLICADO — LOCAL' : 'ORIGINAL — CLIENTE'}<br>${esArmado ? 'Encargado' : 'Ingreso'} ${fdatetime(o.fecha_ingreso)}</div><hr>
     ${fila('Cliente', esc(o.cliente.nombre))}
     ${fila('Teléfono', esc(o.cliente.telefono))}
@@ -1502,7 +1502,7 @@ async function imprimirOrden(o, n, url) {
     <hr>
     ${duplicado
       ? `<div style="margin-top:5mm">Firma del cliente:</div><div style="border-top:1px solid #000;margin-top:9mm"></div>`
-      : `<div class="ticket-qr">${qrSVG(url)}</div><div class="c"><b>Seguí el estado de ${esArmado ? 'tu armado' : 'tu equipo'}</b><br>escaneando este código con la cámara del celular.</div>`}
+      : `<div class="ticket-qr">${qrSVG(url)}</div><div class="c"><b>Seguí el estado de tu equipo</b><br>escaneando este código con la cámara del celular.</div>`}
     <div class="c" style="margin-top:2mm">${esc(n.pie_comprobante)}</div>
   </div>`;
 
@@ -1529,8 +1529,8 @@ async function imprimirEntregaOrden(id, n) {
 
   printHTML(`<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div>
-    <div class="c">${esArmado ? 'Armado de PC' : 'Service técnico'}<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}</div><hr>
-    <div class="c big">${esArmado ? 'ARMADO' : 'ORDEN'} N° ${o.numero}</div>
+    <div class="c">Service técnico<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}</div><hr>
+    <div class="c big">${tipoOrden(o).mayus} N° ${o.numero}</div>
     <div class="c">COMPROBANTE DE ENTREGA<br>${fdatetime(o.fecha_entrega)}</div><hr>
     <div>Cliente: ${esc(o.cliente.nombre)}</div>
     ${eq ? `<div>Equipo: ${esc(eq)}</div>` : ''}
@@ -1931,9 +1931,9 @@ async function imprimirReciboAnticipo(ordenId, ccId) {
   const fila = (l, v, cls = '') => `<tr><td class="${cls}">${l}</td><td class="${cls}" style="text-align:right">${v}</td></tr>`;
   printHTML(`<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div><div class="c">${esc(n.direccion)}<br>${esc(n.telefono)}</div><hr>
-    <div class="c"><b>RECIBO DE PAGO A CUENTA</b><br>${o.tipo === 'armado' ? 'Armado de PC' : 'Service técnico'}</div><hr>
+    <div class="c"><b>RECIBO DE PAGO A CUENTA</b><br>Service técnico</div><hr>
     <div>Recibo N° ${pago.id}<br>${fdatetime(pago.fecha)}<br>Cliente: ${esc(o.cliente.nombre)}${o.cliente.dni_cuit ? `<br>DNI/CUIT: ${esc(o.cliente.dni_cuit)}` : ''}</div><hr>
-    <div><b>Orden N° ${o.numero}</b>${eq ? `<br>${esc(eq)}` : ''}</div><hr>
+    <div><b>${tipoOrden(o).nombre} N° ${o.numero}</b>${eq ? `<br>${esc(eq)}` : ''}</div><hr>
     <table>
       ${referencia ? fila(referencia[0], money(referencia[1])) : ''}
       ${anteriores ? fila('Pagos a cuenta anteriores', money(anteriores)) : ''}
@@ -1960,7 +1960,7 @@ function anticipoModal(o, onDone) {
     if (!(monto > 0)) return toast('Ingresá el monto del anticipo', true);
     const ccId = await store.registrarAnticipoOrden(o.id, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
     m.close(); onDone();
-    const r = modal('Anticipo registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(forma)} · Orden #${o.numero}</div></div>`,
+    const r = modal('Anticipo registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(forma)} · ${tipoOrden(o).nombre} #${o.numero}</div></div>`,
       `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="rec">Imprimir recibo</button>`);
     $('#rec', r.el).onclick = () => run(() => imprimirReciboAnticipo(o.id, ccId));
   });
