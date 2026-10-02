@@ -1022,7 +1022,10 @@ ROUTES.elit = async () => {
   $('#probar').onclick = () => run(async () => {
     const r = await store.elitFuncion('probar');
     modal('Conexión con Elit', `<p style="margin-bottom:.6rem">✅ La conexión funciona.${r.ejemplo ? ` Ejemplo recibido: <b>${esc(r.ejemplo)}</b>` : ''}</p>
-      <p class="small muted">Datos que trae cada producto: ${esc((r.campos_producto || []).join(', '))}</p>`, '<button class="btn primary" data-close>Listo</button>');
+      ${r.por_pagina != null ? `<p class="small" style="margin-bottom:.6rem">Paginación: ${r.por_pagina} productos por página · segunda página: ${r.segunda_pagina}
+        ${r.segunda_distinta ? '<span class="pill green">distinta ✓</span>' : r.segunda_pagina ? '<span class="pill red">repite la primera</span>' : ''}${r.total_informado ? ` · total informado por Elit: ${r.total_informado}` : ''}</p>` : ''}
+      <p class="small muted">Datos que trae cada producto: ${esc((r.campos_producto || []).join(', '))}</p>
+      <p class="small muted">Campos de la respuesta: ${esc((r.campos_respuesta || []).join(', '))}</p>`, '<button class="btn primary" data-close>Listo</button>');
   });
   $('#margenes').onclick = () => margenesElitModal(nombresCat, cats, margenCatf, categorias, elitProds);
   if (!elitProds.length) return;

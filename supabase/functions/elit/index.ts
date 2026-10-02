@@ -44,6 +44,11 @@ async function elit(path: string, body: Record<string, unknown> = {}, method = '
 // La lista de productos de la respuesta (sin depender del nombre exacto del campo)
 const lista = (d: any): any[] => Array.isArray(d) ? d
   : (d?.resultado ?? d?.productos ?? d?.data ?? d?.items ?? Object.values(d ?? {}).find(Array.isArray) ?? []);
+// Total de productos del catálogo, si Elit lo informa (en algún campo tipo paginador.total)
+const totalDe = (d: any): number | null => {
+  const t = d?.paginador?.total ?? d?.paginacion?.total ?? d?.total ?? d?.cantidad ?? d?.meta?.total ?? null;
+  return t == null || isNaN(Number(t)) ? null : Number(t);
+};
 const num = (v: unknown) => (v === null || v === undefined || v === '') ? null : Number(String(v).replace(',', '.'));
 
 // Un producto de Elit → una fila de elit_productos
@@ -97,22 +102,32 @@ Deno.serve(async (req) => {
     const { accion } = await req.json().catch(() => ({}));
 
     if (accion === 'probar') {
-      const d = await elit('/productos', { limit: 1 });
-      const p = lista(d)[0] ?? {};
-      return json({ ok: true, campos_respuesta: Object.keys(d ?? {}), campos_producto: Object.keys(p), ejemplo: p.nombre ?? null });
+      // dos páginas seguidas: cuántos trae cada una y si la segunda es distinta (para verificar la paginación)
+      const d1 = await elit('/productos', { limit: 100, offset: 0 });
+      const l1 = lista(d1);
+      const l2 = l1.length ? lista(await elit('/productos', { limit: 100, offset: l1.length })) : [];
+      const p = l1[0] ?? {};
+      return json({ ok: true, campos_respuesta: Object.keys(d1 ?? {}), campos_producto: Object.keys(p), ejemplo: p.nombre ?? null,
+        por_pagina: l1.length, segunda_pagina: l2.length, segunda_distinta: !!l2.length && Number(l2[0]?.id) !== Number(l1[0]?.id),
+        total_informado: totalDe(d1) });
     }
 
     if (accion === 'sincronizar') {
       const ahora = new Date().toISOString();
+      const vistos = new Set<number>();
       let offset = 0, total = 0;
-      for (;;) {
+      // Elit puede devolver menos productos por página que el "limit" pedido (ej: 40): se sigue
+      // pidiendo hasta que venga una página vacía o repita lo que ya se recibió.
+      for (let pagina = 0; pagina < 500; pagina++) {
         const l = lista(await elit('/productos', { limit: 100, offset }));
         if (!l.length) break;
-        const filas = l.map((p) => mapear(p, ahora)).filter((x) => x.id);
+        const nuevos = l.filter((p) => !vistos.has(Number(p.id)));
+        if (!nuevos.length) break;
+        nuevos.forEach((p) => vistos.add(Number(p.id)));
+        const filas = nuevos.map((p) => mapear(p, ahora)).filter((x) => x.id);
         const { error } = await admin.from('elit_productos').upsert(filas);
         if (error) throw new Error(`No se pudo guardar el catálogo: ${error.message}`);
-        total += l.length; offset += l.length;
-        if (l.length < 100 || offset >= 30000) break;
+        total += nuevos.length; offset += l.length;
       }
       if (!total) throw new Error('Elit no devolvió productos');
       // lo que no vino en esta sincronización completa dejó de estar en el catálogo de Elit
