@@ -16,6 +16,7 @@
 // =====================================================================
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
+declare const EdgeRuntime: { waitUntil(p: Promise<unknown>): void };   // lo provee Supabase (tareas en segundo plano)
 const BASE = 'https://clientes.elit.com.ar/v1/api';
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -157,6 +158,7 @@ Deno.serve(async (req) => {
     }
 
     if (accion === 'sincronizar') {
+      const sincronizar = async () => {
       const ahora = new Date().toISOString();
       // 1) catálogo completo en CSV; 2) si eso falla, consulta paginada (puede venir incompleta)
       let productos: any[] = [], origen = 'csv', aviso = '';
@@ -187,7 +189,18 @@ Deno.serve(async (req) => {
       if (errCostos) throw new Error(`No se pudieron actualizar los costos: ${errCostos.message}`);
       const resultado = { total, costos_actualizados: costos ?? 0, origen, automatica: esCron, ...(aviso ? { aviso } : {}) };
       await admin.from('elit_config').update({ ultima_sync: ahora, ultimo_resultado: resultado }).eq('id', 1);
-      return json({ ok: true, ...resultado });
+      return resultado;
+      };
+      // Supabase Cron no espera más de 1 segundo: se responde enseguida y la sincronización sigue en segundo plano.
+      // Si falla, el error queda en elit_config.ultimo_resultado (GScom lo muestra en el Catálogo Elit).
+      if (esCron) {
+        const tarea = sincronizar().catch(async (e) => {
+          await admin.from('elit_config').update({ ultimo_resultado: { error: (e as Error).message, automatica: true, fecha: new Date().toISOString() } }).eq('id', 1);
+        });
+        if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(tarea); else await tarea;
+        return json({ ok: true, en_segundo_plano: true }, 202);
+      }
+      return json({ ok: true, ...(await sincronizar()) });
     }
 
     // ---------- Carrito de Elit (etapa 2) ----------
