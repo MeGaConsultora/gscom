@@ -41,6 +41,37 @@ async function elit(path: string, body: Record<string, unknown> = {}, method = '
   return d;
 }
 
+// Catálogo completo de una sola vez, en CSV (GET /productos/csv; acá las credenciales van en la URL, como pide Elit).
+// La consulta paginada de /productos devuelve de a 40 y no respeta "offset", por eso se usa esta.
+function parseCsv(t: string): string[][] {
+  const filas: string[][] = []; let f: string[] = [], c = '', q = false;
+  for (let i = 0; i < t.length; i++) {
+    const ch = t[i];
+    if (q) { if (ch === '"') { if (t[i + 1] === '"') { c += '"'; i++; } else q = false; } else c += ch; continue; }
+    if (ch === '"') q = true;
+    else if (ch === ',') { f.push(c); c = ''; }
+    else if (ch === '\n') { f.push(c); filas.push(f); f = []; c = ''; }
+    else if (ch !== '\r') c += ch;
+  }
+  if (c || f.length) { f.push(c); filas.push(f); }
+  return filas;
+}
+async function catalogoCsv(): Promise<any[]> {
+  const { user_id, token } = credenciales();
+  const r = await fetch(`${BASE}/productos/csv?user_id=${encodeURIComponent(user_id)}&token=${encodeURIComponent(token)}`);
+  let t = await r.text();
+  if (!r.ok || t.trimStart().startsWith('{')) {
+    let msg = `HTTP ${r.status}`; try { const d = JSON.parse(t); msg = d.mensaje || d.message || d.error || msg; } catch { /* no era JSON */ }
+    throw new Error(`Elit no entregó el catálogo CSV (${msg})`);
+  }
+  if (t.charCodeAt(0) === 0xFEFF) t = t.slice(1);
+  if (/^sep=/i.test(t)) t = t.slice(t.indexOf('\n') + 1);       // primera línea "sep=," (para Excel)
+  const filas = parseCsv(t);
+  const h = (filas.shift() ?? []).map((s) => s.trim());
+  if (!h.includes('id') || !h.includes('nombre')) throw new Error('El CSV de Elit no tiene el formato esperado');
+  return filas.filter((f) => f.length >= h.length - 2 && f[0]).map((f) => Object.fromEntries(h.map((k, i) => [k, f[i] ?? ''])));
+}
+
 // La lista de productos de la respuesta (sin depender del nombre exacto del campo)
 const lista = (d: any): any[] => Array.isArray(d) ? d
   : (d?.resultado ?? d?.productos ?? d?.data ?? d?.items ?? Object.values(d ?? {}).find(Array.isArray) ?? []);
@@ -80,7 +111,8 @@ function mapear(p: any, ahora: string) {
     link: String(p.link ?? ''),
     imagen: String(primera(p.imagenes ?? p.imagen)),
     miniatura: String(primera(p.miniaturas ?? p.miniatura)),
-    atributos: p.atributos ?? null,
+    // en el CSV llegan como texto (vacío, o JSON): se guardan como dato estructurado si se puede
+    atributos: typeof p.atributos === 'string' ? (p.atributos.trim() ? (() => { try { return JSON.parse(p.atributos); } catch { return p.atributos; } })() : null) : (p.atributos ?? null),
     actualizado_elit: p.actualizado != null ? String(p.actualizado) : null,
     sincronizado_at: ahora,
     activo: true,
@@ -109,32 +141,39 @@ Deno.serve(async (req) => {
       const p = l1[0] ?? {};
       return json({ ok: true, campos_respuesta: Object.keys(d1 ?? {}), campos_producto: Object.keys(p), ejemplo: p.nombre ?? null,
         por_pagina: l1.length, segunda_pagina: l2.length, segunda_distinta: !!l2.length && Number(l2[0]?.id) !== Number(l1[0]?.id),
-        total_informado: totalDe(d1) });
+        total_informado: totalDe(d1), paginador: d1?.paginador ?? null });
     }
 
     if (accion === 'sincronizar') {
       const ahora = new Date().toISOString();
-      const vistos = new Set<number>();
-      let offset = 0, total = 0;
-      // Elit puede devolver menos productos por página que el "limit" pedido (ej: 40): se sigue
-      // pidiendo hasta que venga una página vacía o repita lo que ya se recibió.
-      for (let pagina = 0; pagina < 500; pagina++) {
-        const l = lista(await elit('/productos', { limit: 100, offset }));
-        if (!l.length) break;
-        const nuevos = l.filter((p) => !vistos.has(Number(p.id)));
-        if (!nuevos.length) break;
-        nuevos.forEach((p) => vistos.add(Number(p.id)));
-        const filas = nuevos.map((p) => mapear(p, ahora)).filter((x) => x.id);
-        const { error } = await admin.from('elit_productos').upsert(filas);
-        if (error) throw new Error(`No se pudo guardar el catálogo: ${error.message}`);
-        total += nuevos.length; offset += l.length;
+      // 1) catálogo completo en CSV; 2) si eso falla, consulta paginada (puede venir incompleta)
+      let productos: any[] = [], origen = 'csv', aviso = '';
+      try { productos = await catalogoCsv(); } catch (e) { aviso = (e as Error).message; }
+      if (!productos.length) {
+        origen = 'paginas';
+        const vistos = new Set<number>();
+        let offset = 0;
+        for (let pagina = 0; pagina < 500; pagina++) {
+          const l = lista(await elit('/productos', { limit: 100, offset }));
+          const nuevos = l.filter((p) => !vistos.has(Number(p.id)));
+          if (!nuevos.length) break;           // página vacía o repetida: no hay más
+          nuevos.forEach((p) => vistos.add(Number(p.id)));
+          productos.push(...nuevos); offset += l.length;
+        }
       }
-      if (!total) throw new Error('Elit no devolvió productos');
+      const filasTodas = productos.map((p) => mapear(p, ahora)).filter((x) => x.id);
+      const unicas = [...new Map(filasTodas.map((x) => [x.id, x])).values()];
+      for (let i = 0; i < unicas.length; i += 500) {
+        const { error } = await admin.from('elit_productos').upsert(unicas.slice(i, i + 500));
+        if (error) throw new Error(`No se pudo guardar el catálogo: ${error.message}`);
+      }
+      const total = unicas.length;
+      if (!total) throw new Error(`Elit no devolvió productos${aviso ? ` (${aviso})` : ''}`);
       // lo que no vino en esta sincronización completa dejó de estar en el catálogo de Elit
       await admin.from('elit_productos').update({ activo: false }).lt('sincronizado_at', ahora);
       const { data: costos, error: errCostos } = await admin.rpc('elit_aplicar_costos');
       if (errCostos) throw new Error(`No se pudieron actualizar los costos: ${errCostos.message}`);
-      const resultado = { total, costos_actualizados: costos ?? 0 };
+      const resultado = { total, costos_actualizados: costos ?? 0, origen, ...(aviso ? { aviso } : {}) };
       await admin.from('elit_config').update({ ultima_sync: ahora, ultimo_resultado: resultado }).eq('id', 1);
       return json({ ok: true, ...resultado });
     }

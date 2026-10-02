@@ -1025,7 +1025,9 @@ ROUTES.elit = async () => {
       ${r.por_pagina != null ? `<p class="small" style="margin-bottom:.6rem">Paginación: ${r.por_pagina} productos por página · segunda página: ${r.segunda_pagina}
         ${r.segunda_distinta ? '<span class="pill green">distinta ✓</span>' : r.segunda_pagina ? '<span class="pill red">repite la primera</span>' : ''}${r.total_informado ? ` · total informado por Elit: ${r.total_informado}` : ''}</p>` : ''}
       <p class="small muted">Datos que trae cada producto: ${esc((r.campos_producto || []).join(', '))}</p>
-      <p class="small muted">Campos de la respuesta: ${esc((r.campos_respuesta || []).join(', '))}</p>`, '<button class="btn primary" data-close>Listo</button>');
+      <p class="small muted">Campos de la respuesta: ${esc((r.campos_respuesta || []).join(', '))}</p>
+      ${r.paginador ? `<p class="small muted mono" style="word-break:break-all">paginador: ${esc(JSON.stringify(r.paginador))}</p>` : ''}
+      <p class="small muted" style="margin-top:.4rem">"Actualizar ahora" baja el catálogo completo en un solo archivo (CSV), así que no depende de la paginación.</p>`, '<button class="btn primary" data-close>Listo</button>');
   });
   $('#margenes').onclick = () => margenesElitModal(nombresCat, cats, margenCatf, categorias, elitProds);
   if (!elitProds.length) return;
