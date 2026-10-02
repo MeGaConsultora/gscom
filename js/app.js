@@ -980,7 +980,8 @@ ROUTES.elit = async () => {
     <div class="search" style="flex:3"><input class="input" id="buscar" placeholder="Buscar por nombre, marca o código"></div>
     <select class="input" id="cat" style="flex:1"><option value="">Todas las categorías</option>${nombresCat.map(c => `<option>${esc(c)}</option>`).join('')}</select></div></div>
   <div class="chips" id="filtros"></div>
-  <div class="actions" id="acciones-sel" hidden style="margin-bottom:.8rem"><span class="small" id="nsel"></span><button class="btn sm primary" id="agregar">Agregar a mis productos</button></div>
+  <div class="actions" id="acciones-sel" hidden style="margin-bottom:.8rem;align-items:center"><span class="small" id="nsel"></span><button class="btn sm primary" id="agregar">Agregar a mis productos</button>
+    <button class="btn sm" id="sel-todos" hidden></button><button class="btn sm" id="sel-ninguno">Quitar selección</button></div>
   <div class="card tbl-wrap"><table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" id="all"></th><th style="width:52px"></th><th>Producto</th><th>Categoría</th><th class="num">Stock Elit</th>
     <th class="num">Tu costo</th><th class="num">Margen</th><th class="num">Precio de venta</th><th>En GScom</th></tr></thead><tbody id="rows"></tbody></table></div>
   <div style="text-align:center;margin:1rem 0"><button class="btn" id="mas" hidden>Mostrar más</button></div>`
@@ -1017,7 +1018,13 @@ ROUTES.elit = async () => {
     $$('[data-sel]').forEach(cb => cb.onchange = () => { cb.checked ? sel.add(+cb.dataset.sel) : sel.delete(+cb.dataset.sel); pintarSel(); });
     pintarSel();
   }
-  const pintarSel = () => { $('#acciones-sel').hidden = !sel.size; $('#nsel').textContent = `${sel.size} seleccionado(s):`; };
+  // La casilla del encabezado tilda lo que se ve; si el filtro tiene más, se ofrece tildar todos los del filtro
+  const pintarSel = () => {
+    $('#acciones-sel').hidden = !sel.size; $('#nsel').textContent = `${sel.size} seleccionado(s):`;
+    const delFiltro = lista().filter(x => !enGscom.has(x.id)), faltan = delFiltro.filter(x => !sel.has(x.id)).length;
+    $('#sel-todos').hidden = !sel.size || !faltan;
+    $('#sel-todos').textContent = `Seleccionar los ${delFiltro.length} de este filtro`;
+  };
 
   $('#sync').onclick = () => run(async () => {
     const b = $('#sync'); b.disabled = true; b.textContent = 'Actualizando… (puede tardar un minuto)';
@@ -1044,6 +1051,8 @@ ROUTES.elit = async () => {
   let t; $('#buscar').oninput = e => { clearTimeout(t); t = setTimeout(() => { texto = e.target.value.trim(); mostrar = 150; pintar(); }, 150); };
   $('#cat').onchange = e => { cat = e.target.value; mostrar = 150; pintar(); };
   $('#all').onchange = e => { lista().slice(0, mostrar).filter(x => !enGscom.has(x.id)).forEach(x => e.target.checked ? sel.add(x.id) : sel.delete(x.id)); pintar(); };
+  $('#sel-todos').onclick = () => { lista().filter(x => !enGscom.has(x.id)).forEach(x => sel.add(x.id)); pintar(); };
+  $('#sel-ninguno').onclick = () => { sel.clear(); $('#all').checked = false; pintar(); };
   $('#agregar').onclick = () => {
     const elegidos = elitProds.filter(e => sel.has(e.id));
     const vinc = elegidos.filter(e => e.ean && porEan.has(e.ean)), nuevos = elegidos.length - vinc.length;
@@ -1057,7 +1066,16 @@ ROUTES.elit = async () => {
       ${sinCat.length ? `<p class="small" style="background:var(--warn-soft);padding:.5rem .8rem;border-radius:8px">Sin categoría de GScom asignada: ${sinCat.map(esc).join(', ')}. Entran sin categoría; podés asignarla antes en "Márgenes por categoría".</p>` : ''}`,
       `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Agregar ${elegidos.length}</button>`);
     $('#ok', m.el).onclick = () => run(async () => {
-      const r = await store.elitAgregar([...sel]);
+      // de a 200 por vez, para que la base no corte la operación por tiempo cuando son muchos
+      const ids = [...sel], b = $('#ok', m.el), r = { creados: 0, vinculados: 0, ya_estaban: 0 };
+      b.disabled = true;
+      try {
+        for (let i = 0; i < ids.length; i += 200) {
+          b.textContent = `Agregando… ${Math.min(i + 200, ids.length)} de ${ids.length}`;
+          const p = await store.elitAgregar(ids.slice(i, i + 200));
+          r.creados += p.creados; r.vinculados += p.vinculados; r.ya_estaban += p.ya_estaban;
+        }
+      } finally { b.disabled = false; }
       m.close(); toast(`${r.creados} agregado(s)${r.vinculados ? ` · ${r.vinculados} vinculado(s)` : ''}${r.ya_estaban ? ` · ${r.ya_estaban} ya estaban` : ''}`); render();
     });
   };
