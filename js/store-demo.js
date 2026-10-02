@@ -202,7 +202,26 @@ export const store = {
   escucharSolicitudes() {},
 
   // Mayorista Elit: en el demo no hay conexión real; "sincronizar" carga un catálogo de ejemplo
-  async elitFuncion(accion) {
+  async elitFuncion(accion, extra = {}) {
+    // carrito simulado (el de verdad está en Elit)
+    db.elit_carrito ??= [];
+    if (accion === 'carrito_ver') {
+      const det = db.elit_carrito.map(c => { const e = (db.elit_productos || []).find(x => x.id === c.code) || {}; return { code: c.code, nombre: e.nombre, quantity: c.quantity, precio: e.precio_usd, total: Math.round(e.precio_usd * c.quantity * 100) / 100 }; });
+      const sub = det.reduce((s, d) => s + d.total, 0);
+      return { codigo: 200, resultado: det.length ? [{ warehouse: 9, items: det.length, details: det, subtotal: sub, impuestos: Math.round(sub * 0.105 * 100) / 100, envio: 0, total: Math.round(sub * 1.105 * 100) / 100, moneda: 'USD' }] : [{ items: 0, details: [] }] };
+    }
+    if (accion === 'carrito_vaciar') { db.elit_carrito = []; save(); return { codigo: 200 }; }
+    if (accion === 'carrito_agregar') {
+      for (const it of extra.items || []) { const i = db.elit_carrito.findIndex(c => c.code === it.code); i >= 0 ? db.elit_carrito[i].quantity = it.quantity : db.elit_carrito.push({ code: it.code, quantity: it.quantity }); }
+      const p = extra.pedido_id && byId('pedidos', extra.pedido_id); if (p) p.elit_enviado_at = now();
+      save(); return { ok: true, agregados: (extra.items || []).length, errores: [] };
+    }
+    if (accion === 'carrito_confirmar') {
+      if (!db.elit_carrito.length) throw new Error('No cart available');
+      const r = { codigo: 200, notas: [{ numero: 'NV-DEMO-' + Date.now().toString().slice(-5), warehouse: 9 }] };
+      const p = extra.pedido_id && byId('pedidos', extra.pedido_id); if (p) Object.assign(p, { elit_confirmado_at: now(), elit_notas: r.notas });
+      db.elit_carrito = []; save(); return r;
+    }
     if (accion === 'probar') return { ok: true, campos_respuesta: ['codigo', 'resultado'], campos_producto: ['id', 'nombre', 'precio'], ejemplo: 'Mouse de ejemplo' };
     if (accion !== 'sincronizar') throw new Error('Acción desconocida');
     const ahora = now(), cot = 1545;

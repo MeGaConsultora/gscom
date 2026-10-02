@@ -972,7 +972,7 @@ ROUTES.elit = async () => {
   view().innerHTML = `
   <div class="page-head"><div><a href="#/productos" class="small muted">← Productos</a><h1>Catálogo Elit</h1>
       <div class="small muted">${cfg?.ultima_sync ? `Actualizado ${fdatetime(cfg.ultima_sync)} · ${elitProds.length} productos${cotiz ? ` · dólar Elit $${(+cotiz).toLocaleString('es-AR')}` : ''}` : 'Todavía no se bajó el catálogo'}</div></div>
-    <div class="actions"><button class="btn" id="margenes">Márgenes por categoría</button><button class="btn" id="probar">Probar conexión</button><button class="btn primary" id="sync">↻ Actualizar ahora</button></div></div>
+    <div class="actions"><button class="btn" id="margenes">Márgenes por categoría</button><button class="btn" id="probar">Probar conexión</button><button class="btn" id="carrito">Ver carrito</button><button class="btn primary" id="sync">↻ Actualizar ahora</button></div></div>
   ${elitProds.length ? `
   <div class="card card-pad" style="margin-bottom:1rem"><div class="row" style="align-items:center">
     <div class="search" style="flex:3"><input class="input" id="buscar" placeholder="Buscar por nombre, marca o código"></div>
@@ -1034,6 +1034,7 @@ ROUTES.elit = async () => {
       ${r.paginador ? `<p class="small muted mono" style="word-break:break-all">paginador: ${esc(JSON.stringify(r.paginador))}</p>` : ''}
       <p class="small muted" style="margin-top:.4rem">"Actualizar ahora" baja el catálogo completo en un solo archivo (CSV), así que no depende de la paginación.</p>`, '<button class="btn primary" data-close>Listo</button>');
   });
+  $('#carrito').onclick = () => run(() => elitCarritoModal(null));
   $('#margenes').onclick = () => margenesElitModal(nombresCat, cats, margenDef, categorias, elitProds);
   if (!elitProds.length) return;
 
@@ -2526,6 +2527,90 @@ async function nuevoPedido() {
   });
 }
 
+// =====================================================================
+// ELIT — carrito y compra (desde un pedido al proveedor ELIT)
+// Enviar: manda al carrito de Elit los productos del pedido vinculados a Elit.
+// Confirmar: COMPRA REAL (Elit genera la nota de venta). Solo con confirmación explícita.
+// Las respuestas de Elit se muestran sin asumir nombres exactos de campos.
+// =====================================================================
+const esProveedorElit = nombre => /^\s*elit\s*$/i.test(nombre || '');
+const elitCarritos = d => { const r = d?.resultado ?? d?.carritos ?? d?.data ?? d; return Array.isArray(r) ? r : [r]; };
+const elitDetalle = c => { const x = c?.details ?? c?.detalle ?? c?.detalles ?? c?.productos ?? (Array.isArray(c?.items) ? c.items : []); return Array.isArray(x) ? x : []; };
+const elitImporte = (v, mon) => v == null || v === '' || isNaN(+v) ? '—'
+  : `${/usd|^2$|d[oó]lar/i.test(String(mon ?? '')) ? 'USD ' : '$ '}${(+v).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+
+async function elitEnviarModal(p, productos) {
+  const elitProds = await store.elitProductos();
+  const filas = p.items.filter(i => +i.cantidad > 0).map(i => {
+    const pr = productos.find(x => x.id === i.producto_id);
+    return { i, pr, e: pr?.elit_id ? elitProds.find(x => x.id === pr.elit_id) : null };
+  });
+  const ok = filas.filter(f => f.e), sin = filas.filter(f => !f.e);
+  if (!ok.length) return toast('Ningún producto de este pedido está vinculado a Elit (se agregan o vinculan desde Productos → Catálogo Elit)', true);
+  const m = modal(`Enviar el pedido N° ${p.numero} al carrito de Elit`, `
+    ${p.elit_confirmado_at ? `<p class="small" style="background:var(--warn-soft);padding:.5rem .8rem;border-radius:8px;margin-bottom:.8rem">⚠ Este pedido <b>ya se compró en Elit</b> el ${fdatetime(p.elit_confirmado_at)}. Enviarlo de nuevo sirve solo si querés volver a comprarlo.</p>` : ''}
+    <table class="tbl" style="margin-bottom:.8rem"><thead><tr><th>Producto</th><th>Cód. Elit</th><th class="num">Cantidad</th><th class="num">Stock Elit</th><th class="num">Costo c/u</th></tr></thead><tbody>
+      ${ok.map(({ i, e }) => `<tr><td>${esc(i.descripcion)}</td><td class="mono small">${e.id}</td><td class="num"><b>${+i.cantidad}</b></td>
+        <td class="num">${+e.stock_total >= +i.cantidad ? +e.stock_total : `<span class="pill amber" title="Elit tiene menos de lo que pedís">${+e.stock_total}</span>`}</td><td class="num nowrap">${money(e.costo_ars)}</td></tr>`).join('')}</tbody></table>
+    ${sin.length ? `<p class="small" style="background:var(--warn-soft);padding:.5rem .8rem;border-radius:8px;margin-bottom:.8rem">No se envían (no están vinculados a Elit): ${sin.map(f => esc(f.i.descripcion)).join(', ')}.</p>` : ''}
+    <label class="small" style="display:flex;gap:.4rem;align-items:flex-start"><input type="checkbox" id="vaciar" checked style="margin-top:.15rem">
+      <span>Vaciar antes el carrito de Elit <span class="muted">— recomendado: así el carrito queda solo con este pedido (si no, se suma a lo que haya cargado desde la web de Elit)</span></span></label>
+    <p class="small muted" style="margin-top:.6rem">Enviar <b>no compra nada</b>: después vas a ver el carrito con los totales de Elit y recién ahí podés confirmar la compra.</p>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Enviar ${ok.length} producto(s) a Elit</button>`, { wide: true });
+  $('#ok', m.el).onclick = () => run(async () => {
+    const b = $('#ok', m.el); b.disabled = true; b.textContent = 'Enviando…';
+    try {
+      if ($('#vaciar', m.el).checked) await store.elitFuncion('carrito_vaciar');
+      const r = await store.elitFuncion('carrito_agregar', { pedido_id: p.id, items: ok.map(({ i, e }) => ({ code: e.id, quantity: +i.cantidad })) });
+      m.close();
+      if (r.errores?.length) toast(`${r.agregados} enviado(s); con error: ${r.errores.map(x => `${x.code} (${x.error})`).join(', ')}`, true);
+      else toast(`${r.agregados} producto(s) en el carrito de Elit`);
+      elitCarritoModal(p);
+    } finally { b.disabled = false; }
+  });
+}
+
+async function elitCarritoModal(pedido = null) {
+  const [d, elitProds] = await Promise.all([store.elitFuncion('carrito_ver'), store.elitProductos().catch(() => [])]);
+  const carritos = elitCarritos(d).filter(c => elitDetalle(c).length);
+  const nombreDe = code => elitProds.find(e => e.id === +code)?.nombre || '';
+  const totalDe = c => c.total ?? c.importe_total ?? null;
+  const html = !carritos.length ? '<p>El carrito de Elit está vacío.</p>' : `
+    <p class="small muted" style="margin-bottom:.8rem">Esto es lo que hay <b>ahora</b> en tu carrito de Elit (incluye lo que se haya cargado desde su web), con los precios y totales que calcula Elit.</p>
+    ${carritos.map(c => { const mon = c.moneda ?? c.currency; return `
+      ${c.warehouse ?? c.deposito ? `<h2 style="font-size:.95rem;margin:.4rem 0">Depósito ${esc(c.warehouse ?? c.deposito)}</h2>` : ''}
+      <table class="tbl" style="margin-bottom:.6rem"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Total</th></tr></thead><tbody>
+      ${elitDetalle(c).map(x => { const code = x.code ?? x.codigo ?? x.id ?? x.product_id, qty = x.quantity ?? x.cantidad ?? x.qty, pr = x.price ?? x.precio ?? x.precio_unitario ?? x.unit_price;
+        return `<tr><td>${esc(x.nombre ?? x.name ?? x.descripcion ?? x.description ?? x.producto ?? nombreDe(code))}<div class="small muted mono">${esc(code ?? '')}</div></td>
+          <td class="num">${esc(qty ?? '')}</td><td class="num nowrap">${elitImporte(pr, mon)}</td><td class="num nowrap">${elitImporte(x.total ?? x.subtotal ?? (qty && pr ? qty * pr : null), mon)}</td></tr>`; }).join('')}</tbody></table>
+      <table class="tbl small" style="max-width:340px;margin:0 0 1rem auto"><tbody>
+        ${[['Subtotal', c.subtotal], ['Impuestos', c.impuestos ?? c.taxes ?? c.iva], ['Envío', c.envio ?? c.shipping], ['<b>Total</b>', totalDe(c)]].filter(([, v]) => v != null)
+          .map(([l, v]) => `<tr><td>${l}</td><td class="num nowrap">${l.includes('Total') ? `<b>${elitImporte(v, mon)}</b>` : elitImporte(v, mon)}</td></tr>`).join('')}</tbody></table>`; }).join('')}`;
+  const m = modal(pedido ? `Carrito de Elit — pedido N° ${pedido.numero}` : 'Carrito de Elit', `${html}
+    <details style="margin-top:.4rem"><summary class="small muted" style="cursor:pointer">Ver la respuesta completa de Elit</summary>
+      <pre class="small" style="white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto;background:#fafbfc;padding:.6rem;border-radius:8px">${esc(JSON.stringify(d, null, 2))}</pre></details>`,
+    `<button class="btn" data-close>Cerrar</button>${carritos.length ? '<button class="btn danger" id="vaciar">Vaciar carrito</button><button class="btn ok" id="comprar">Confirmar compra en Elit</button>' : ''}`, { wide: true });
+  if (!carritos.length) return;
+  $('#vaciar', m.el).onclick = () => run(async () => {
+    if (!confirm('¿Vaciar el carrito de Elit? (no se compra nada)')) return;
+    await store.elitFuncion('carrito_vaciar'); m.close(); toast('Carrito de Elit vaciado');
+  });
+  $('#comprar', m.el).onclick = () => run(async () => {
+    const totales = carritos.map(c => elitImporte(totalDe(c), c.moneda ?? c.currency)).filter(t => t !== '—').join(' + ');
+    if (!confirm(`¿CONFIRMAR LA COMPRA EN ELIT${totales ? ` por ${totales}` : ''}?\n\nEsto genera la nota de venta en Elit: es una compra real y no se puede deshacer desde GScom.`)) return;
+    const b = $('#comprar', m.el); b.disabled = true; b.textContent = 'Confirmando…';
+    let r;
+    try { r = await store.elitFuncion('carrito_confirmar', { pedido_id: pedido?.id ?? null }); } finally { b.disabled = false; b.textContent = 'Confirmar compra en Elit'; }
+    m.close();
+    const notas = r?.notas ?? r?.resultado ?? r; const lista = Array.isArray(notas) ? notas : [notas];
+    if (parseHash().name === 'pedidos') await render();
+    modal('Compra confirmada en Elit', `<p style="margin-bottom:.6rem">✅ Elit generó ${lista.length > 1 ? `${lista.length} notas de venta` : 'la nota de venta'}:</p>
+      <ul class="small" style="margin:0 0 .8rem 1.2rem">${lista.map(n => `<li>${esc(n?.numero ?? n?.nota ?? n?.id ?? n?.nro ?? JSON.stringify(n))}</li>`).join('')}</ul>
+      <p class="small muted">${pedido ? 'Quedó registrado en el pedido. ' : ''}Cuando llegue la mercadería, cargala con <b>Cargar como compra</b> (desde el pedido) para sumar el stock.</p>`,
+      '<button class="btn primary" data-close>Listo</button>');
+  });
+}
+
 async function detallePedido(id) {
   const [p, proveedores, productos, encargos] = await Promise.all([store.pedido(id), store.proveedores(), store.productos(), store.encargosDePedido(id).catch(() => [])]);
   if (!p) { view().innerHTML = '<div class="empty">Pedido no encontrado</div>'; return; }
@@ -2536,7 +2621,7 @@ async function detallePedido(id) {
   view().innerHTML = `
   <div class="page-head"><div><a href="#/pedidos" class="small muted">← Pedidos</a><h1>Pedido N° ${p.numero} ${pillPedido(p.estado)}</h1></div>
     <div class="actions">
-      <button class="btn" id="imp">Imprimir / PDF</button><button class="btn" id="xls">Excel</button><button class="btn wa" id="wa">WhatsApp</button>
+      ${pendiente && esProveedorElit(provName(p.proveedor_id)) ? '<button class="btn primary" id="elit-enviar">🛒 Enviar al carrito de Elit</button><button class="btn" id="elit-carrito">Ver carrito de Elit</button>' : ''}<button class="btn" id="imp">Imprimir / PDF</button><button class="btn" id="xls">Excel</button><button class="btn wa" id="wa">WhatsApp</button>
       ${pendiente ? '<button class="btn" id="compra">Cargar como compra</button><button class="btn danger" id="cancelar">Cancelar pedido</button><button class="btn ok" id="recibido">Marcar recibido</button>'
         : '<button class="btn" id="reabrir">Volver a pendiente</button>'}</div></div>
   <div class="split">
@@ -2546,7 +2631,7 @@ async function detallePedido(id) {
     <div class="card card-pad"><h2>Datos</h2>
       <dl class="kv"><dt>Proveedor</dt><dd>${esc(provName(p.proveedor_id))}</dd><dt>Fecha</dt><dd>${fdatetime(p.fecha)}</dd>
         ${p.fecha_recibido ? `<dt>Recibido</dt><dd>${fdatetime(p.fecha_recibido)}</dd>` : ''}
-        <dt>Notas</dt><dd>${esc(p.notas) || '—'}</dd></dl>
+        <dt>Notas</dt><dd>${esc(p.notas) || '—'}</dd>${p.elit_enviado_at ? `<dt>Carrito Elit</dt><dd>enviado ${fdatetime(p.elit_enviado_at)}</dd>` : ''}${p.elit_confirmado_at ? `<dt>Compra Elit</dt><dd><span class="pill green">confirmada</span> ${fdatetime(p.elit_confirmado_at)}${(Array.isArray(p.elit_notas) ? p.elit_notas : p.elit_notas ? [p.elit_notas] : []).map(n => `<div class="small muted">Nota de venta: ${esc(n?.numero ?? n?.nota ?? n?.id ?? '')}</div>`).join('')}</dd>` : ''}</dl>
       <p class="small muted" style="margin-top:1rem">El pedido no mueve stock. Para ingresar la mercadería usá <b>Cargar como compra</b> (abre Compras → Ingresar mercadería con estos productos) o cargala directo en Compras.</p></div>
   </div>`;
   const stockDe = pid => productos.find(x => x.id === pid)?.stock ?? '—';
@@ -2561,6 +2646,10 @@ async function detallePedido(id) {
   paint();
   const estado = (cambios, msg) => run(async () => { await store.actualizarPedido(id, cambios); toast(msg); render(); });
   $('#imp').onclick = () => run(() => imprimirPedidos([{ ...p, items }], proveedores));
+  if ($('#elit-enviar')) {
+    $('#elit-enviar').onclick = () => { if (!$('#guardar-items')?.hidden) return toast('Guardá primero los cambios del pedido', true); run(() => elitEnviarModal(p, productos)); };
+    $('#elit-carrito').onclick = () => run(() => elitCarritoModal(p));
+  }
   const prov = proveedores.find(x => x.id === p.proveedor_id);
   $('#xls').onclick = () => run(async () => {
     const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');

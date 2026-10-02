@@ -7,6 +7,10 @@
 // Acciones (body JSON { accion }):
 //   probar       → consulta 1 producto y devuelve cómo viene la respuesta (para verificar la conexión)
 //   sincronizar  → baja el catálogo completo, lo guarda en elit_productos y actualiza costos
+//   carrito_ver / carrito_vaciar
+//   carrito_agregar   { items: [{ code, quantity }], pedido_id? }
+//   carrito_confirmar { pedido_id? } → COMPRA REAL (nota de venta en Elit); solo cuando un administrador
+//                       lo confirma en GScom. Queda registrada en elit_compras.
 // =====================================================================
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
@@ -131,7 +135,8 @@ Deno.serve(async (req) => {
     if (errAuth || !esAdmin) return json({ error: 'Sin permiso' }, 403);
     const admin = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
 
-    const { accion } = await req.json().catch(() => ({}));
+    const cuerpo: any = await req.json().catch(() => ({}));
+    const { accion } = cuerpo;
 
     if (accion === 'probar') {
       // dos páginas seguidas: cuántos trae cada una y si la segunda es distinta (para verificar la paginación)
@@ -176,6 +181,37 @@ Deno.serve(async (req) => {
       const resultado = { total, costos_actualizados: costos ?? 0, origen, ...(aviso ? { aviso } : {}) };
       await admin.from('elit_config').update({ ultima_sync: ahora, ultimo_resultado: resultado }).eq('id', 1);
       return json({ ok: true, ...resultado });
+    }
+
+    // ---------- Carrito de Elit (etapa 2) ----------
+    if (accion === 'carrito_ver') return json(await elit('/carrito/ver'));
+
+    if (accion === 'carrito_vaciar') return json(await elit('/carrito', {}, 'DELETE'));
+
+    if (accion === 'carrito_agregar') {
+      // items: [{ code: id del producto en Elit, quantity }]. Ojo: en Elit "quantity" REEMPLAZA la cantidad, no suma.
+      const items = Array.isArray(cuerpo.items) ? cuerpo.items : [];
+      if (!items.length) throw new Error('No hay productos para enviar');
+      const errores: { code: number; error: string }[] = [];
+      let agregados = 0;
+      for (const it of items) {
+        const code = Number(it.code), quantity = Number(it.quantity);
+        if (!code || !(quantity > 0)) { errores.push({ code, error: 'Código o cantidad inválidos' }); continue; }
+        try { await elit('/carrito', { code, quantity }); agregados++; }
+        catch (e) { errores.push({ code, error: (e as Error).message }); }
+      }
+      if (cuerpo.pedido_id && agregados) await admin.from('pedidos').update({ elit_enviado_at: new Date().toISOString() }).eq('id', Number(cuerpo.pedido_id));
+      return json({ ok: true, agregados, errores });
+    }
+
+    if (accion === 'carrito_confirmar') {
+      // COMPRA REAL: genera la nota de venta en Elit. Solo se llama cuando un administrador lo confirma en GScom.
+      const d = await elit('/carrito/confirmar');
+      const { data: u } = await usuario.auth.getUser();
+      const pedido_id = cuerpo.pedido_id ? Number(cuerpo.pedido_id) : null;
+      await admin.from('elit_compras').insert({ usuario_id: u?.user?.id ?? null, pedido_id, respuesta: d });
+      if (pedido_id) await admin.from('pedidos').update({ elit_confirmado_at: new Date().toISOString(), elit_notas: d?.notas ?? d }).eq('id', pedido_id);
+      return json(d);
     }
 
     return json({ error: 'Acción desconocida' }, 400);
