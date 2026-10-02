@@ -2599,9 +2599,13 @@ async function elitEnviarModal(p, productos) {
   });
 }
 
-async function elitCarritoModal(pedido = null) {
+// "Huella" del carrito: si cambia algo (productos, cantidades, precios, depósito, entrega, pago o total) cambia la huella
+const elitHuella = carritos => JSON.stringify(carritos.map(c => [c.deposito, c.envio, c.condicion, c.det.map(x => [x.code, x.qty, x.precio]), c.total]));
+
+async function elitCarritoModal(pedido = null, aviso = '') {
   const [d, elitProds] = await Promise.all([store.elitFuncion('carrito_ver'), store.elitProductos().catch(() => [])]);
   const carritos = elitCarritosDe(d);
+  const huella = elitHuella(carritos);
   const nombreDe = code => elitProds.find(e => e.id === +code)?.nombre || '';
   const pesos = (v, c) => c.cot && v != null && !isNaN(+v) ? ` <span class="muted small">≈ ${money(+v * c.cot)}</span>` : '';
   const html = !carritos.length ? '<p>El carrito de Elit está vacío.</p>' : `
@@ -2615,7 +2619,7 @@ async function elitCarritoModal(pedido = null) {
         ${[['Subtotal', c.subtotal], ['Recargo', c.recargo], ['Impuestos (IVA y otros)', c.impuestos], ['Envío', c.envioCosto]].filter(([, v]) => v != null && v !== '')
           .map(([l, v]) => `<tr><td>${l}</td><td class="num nowrap">${elitImporte(v, c.moneda)}</td></tr>`).join('')}
         <tr><td><b>Total</b></td><td class="num nowrap"><b>${elitImporte(c.total, c.moneda)}</b>${pesos(c.total, c)}</td></tr></tbody></table>`).join('')}`;
-  const m = modal(pedido ? `Carrito de Elit — pedido N° ${pedido.numero}` : 'Carrito de Elit', `${html}
+  const m = modal(pedido ? `Carrito de Elit — pedido N° ${pedido.numero}` : 'Carrito de Elit', `${aviso ? `<p class="small" style="background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px;margin-bottom:.8rem">⚠ ${aviso}</p>` : ''}${html}
     <details style="margin-top:.4rem"><summary class="small muted" style="cursor:pointer">Ver la respuesta completa de Elit</summary>
       <pre class="small" style="white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto;background:#fafbfc;padding:.6rem;border-radius:8px">${esc(JSON.stringify(d, null, 2))}</pre></details>`,
     `<button class="btn" data-close>Cerrar</button>${carritos.length ? '<button class="btn danger" id="vaciar">Vaciar carrito</button><button class="btn ok" id="comprar">Confirmar compra en Elit</button>' : ''}`, { wide: true });
@@ -2624,11 +2628,23 @@ async function elitCarritoModal(pedido = null) {
     if (!confirm('¿Vaciar el carrito de Elit? (no se compra nada)')) return;
     await store.elitFuncion('carrito_vaciar'); m.close(); toast('Carrito de Elit vaciado');
   });
+  // Antes de comprar se vuelve a consultar el carrito: si cambió algo desde que se abrió esta ventana, no se compra
+  const sigueIgual = async () => {
+    const ahora = elitCarritosDe(await store.elitFuncion('carrito_ver'));
+    if (elitHuella(ahora) === huella) return true;
+    m.close();
+    await elitCarritoModal(pedido, 'El carrito de Elit cambió desde que lo abriste (precio, dólar, productos o cantidades). <b>No se compró nada.</b> Revisá el carrito actualizado y, si está bien, confirmá de nuevo.');
+    return false;
+  };
   $('#comprar', m.el).onclick = () => run(async () => {
+    const b = $('#comprar', m.el); b.disabled = true; b.textContent = 'Verificando el carrito…';
+    try { if (!(await sigueIgual())) return; } finally { b.disabled = false; b.textContent = 'Confirmar compra en Elit'; }
     const totales = carritos.map(c => `${elitImporte(c.total, c.moneda)}${c.cot && c.total != null ? ` (≈ ${money(+c.total * c.cot)})` : ''}`).join(' + ');
     const detalle = carritos.map(c => [c.deposito && `Depósito ${c.deposito}`, c.envio, c.condicion].filter(Boolean).join(' · ')).filter(Boolean).join('\n');
     if (!confirm(`¿CONFIRMAR LA COMPRA EN ELIT por ${totales}?\n${detalle ? `\n${detalle}\n` : ''}\nEsto genera la nota de venta en Elit: es una compra real y no se puede deshacer desde GScom.`)) return;
-    const b = $('#comprar', m.el); b.disabled = true; b.textContent = 'Confirmando…';
+    b.disabled = true; b.textContent = 'Verificando el carrito…';
+    try { if (!(await sigueIgual())) return; } finally { b.disabled = false; b.textContent = 'Confirmar compra en Elit'; }   // por si el cartel quedó abierto un rato
+    b.disabled = true; b.textContent = 'Confirmando…';
     let r;
     try { r = await store.elitFuncion('carrito_confirmar', { pedido_id: pedido?.id ?? null }); } finally { b.disabled = false; b.textContent = 'Confirmar compra en Elit'; }
     m.close();
