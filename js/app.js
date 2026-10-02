@@ -174,7 +174,7 @@ async function render() {
     toast(`Se canceló la edición de la venta #${cart.editNumero}: quedó como estaba`);
     cart = carritoVacio();
   }
-  $$('nav.tabs a').forEach(a => a.classList.toggle('active', a.dataset.r === (r.name === 'inventario' ? 'productos' : r.name)));
+  $$('nav.tabs a').forEach(a => a.classList.toggle('active', a.dataset.r === (['inventario', 'elit'].includes(r.name) ? 'productos' : r.name)));
   const fn = ROUTES[r.name] || ROUTES.inicio;
   view().innerHTML = '<div class="empty">Cargando…</div>';
   await run(() => fn(r));
@@ -546,7 +546,7 @@ ROUTES.productos = async ({ q }) => {
   const aRevisar = p => (p.descripcion || '').startsWith('⚠');
   view().innerHTML = `
   <div class="page-head"><h1>Productos y stock <span class="muted small">(${productos.length})</span></h1><div class="actions">
-    <a class="btn" href="#/inventario">Carga rápida de stock</a><a class="btn" href="tienda.html" target="_blank" rel="noopener">Ver tienda ↗</a>
+    <a class="btn" href="#/inventario">Carga rápida de stock</a><a class="btn" href="#/elit" title="Catálogo del mayorista Elit">Catálogo Elit</a><a class="btn" href="tienda.html" target="_blank" rel="noopener">Ver tienda ↗</a>
     <button class="btn" id="pub-sel" hidden>Publicar en tienda</button><button class="btn" id="ocu-sel" hidden>Ocultar de tienda</button>
     <button class="btn danger" id="del-sel" hidden>Eliminar seleccionados</button>
     ${puedeDeshacer ? `<button class="btn" id="deshacer-precios" title="${esc(ultimoAjuste.detalle)} · ${fdatetime(ultimoAjuste.fecha)}">↶ Deshacer último cambio</button>` : ''}
@@ -590,7 +590,7 @@ ROUTES.productos = async ({ q }) => {
     $('#rows').innerHTML = l.map(p => `<tr class="click" data-id="${p.id}">
       <td><input type="checkbox" data-sel="${p.id}" ${prodSel.has(p.id) ? 'checked' : ''}></td>
       <td class="mono small">${esc(p.codigo_barras)}${p.codigo_interno ? ' <span class="pill blue" title="Código generado por GScom">int</span>' : ''}</td>
-      <td>${esc(p.nombre)}${p.foto_url ? ' <span title="Tiene foto">📷</span>' : ''}${p.publicado === false ? ' <span class="pill gray" title="No se muestra en la tienda online">oculto</span>' : ''}${p.marca || p.descripcion || p.proveedor_id ? `<div class="small muted">${[p.marca, p.descripcion, provName(p.proveedor_id) && `Prov.: ${provName(p.proveedor_id)}`].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
+      <td>${esc(p.nombre)}${p.elit_id ? ' <span class="pill violet" title="Producto del mayorista Elit: su costo se actualiza solo">Elit</span>' : ''}${p.foto_url ? ' <span title="Tiene foto">📷</span>' : ''}${p.publicado === false ? ' <span class="pill gray" title="No se muestra en la tienda online">oculto</span>' : ''}${p.marca || p.descripcion || p.proveedor_id ? `<div class="small muted">${[p.marca, p.descripcion, provName(p.proveedor_id) && `Prov.: ${provName(p.proveedor_id)}`].filter(Boolean).map(esc).join(' · ')}</div>` : ''}</td><td class="muted">${esc(catName(p.categoria_id))}</td>
       <td class="num">${p.es_servicio ? '<span class="muted">—</span>' : `<span class="pill ${p.stock <= 0 ? 'red' : faltaStock(p) ? 'amber' : 'green'}">${p.stock}</span>${reservados.get(p.id) ? `<div class="small" style="color:#6b3fc4" title="Reservado para clientes">${reservados.get(p.id)} reserv.</div>` : ''}`}</td>
       <td class="num muted">${money(p.precio_costo)}</td>
       <td class="num nowrap">${margenDe(p) == null ? '<span class="muted">—</span>' : `${Math.round(margenDe(p))}%`}${p.margen != null ? ' <span class="pill blue" title="El precio de venta se calcula con el margen">auto</span>' : ''}</td>
@@ -947,6 +947,133 @@ async function imprimirPedidos(pedidos, proveedores) {
       ${p.items.map(i => `<tr><td class="mono">${esc(i.codigo)}</td><td>${esc(i.descripcion)}</td><td class="num"><b>${+i.cantidad}</b></td></tr>`).join('')}
       </tbody></table>
     </div>`).join(''), PAGINA_A4);
+}
+
+// =====================================================================
+// CATÁLOGO ELIT (mayorista): se ve todo su catálogo con tu costo y su stock,
+// y se pasan a "Productos" los que elijas (con el margen de su categoría).
+// La conexión con Elit la hace la función "elit" de Supabase (las credenciales nunca llegan acá).
+// =====================================================================
+ROUTES.elit = async () => {
+  const [elitProds, cats, cfg, productos, categorias] = await Promise.all([store.elitProductos(), store.elitCategorias(), store.elitConfig(), store.productos(), store.categorias()]);
+  const margenCatf = +(cfg?.margen_defecto ?? 30);
+  const enGscom = new Map(productos.filter(p => p.elit_id).map(p => [p.elit_id, p]));
+  const porEan = new Map(productos.filter(p => p.codigo_barras).map(p => [p.codigo_barras, p]));
+  const catCfg = c => cats.find(x => x.categoria === c) || {};
+  const margenCat = e => catCfg(e.categoria).margen ?? margenCatf;
+  const nombresCat = [...new Set(elitProds.map(e => e.categoria).filter(Boolean))].sort();
+  const sel = new Set();
+  let texto = '', cat = '', filtro = 'todos', mostrar = 150;
+  const cotiz = elitProds.find(e => +e.cotizacion > 1)?.cotizacion;
+
+  view().innerHTML = `
+  <div class="page-head"><div><a href="#/productos" class="small muted">← Productos</a><h1>Catálogo Elit</h1>
+      <div class="small muted">${cfg?.ultima_sync ? `Actualizado ${fdatetime(cfg.ultima_sync)} · ${elitProds.length} productos${cotiz ? ` · dólar Elit $${(+cotiz).toLocaleString('es-AR')}` : ''}` : 'Todavía no se bajó el catálogo'}</div></div>
+    <div class="actions"><button class="btn" id="margenes">Márgenes por categoría</button><button class="btn" id="probar">Probar conexión</button><button class="btn primary" id="sync">↻ Actualizar ahora</button></div></div>
+  ${elitProds.length ? `
+  <div class="card card-pad" style="margin-bottom:1rem"><div class="row" style="align-items:center">
+    <div class="search" style="flex:3"><input class="input" id="buscar" placeholder="Buscar por nombre, marca o código"></div>
+    <select class="input" id="cat" style="flex:1"><option value="">Todas las categorías</option>${nombresCat.map(c => `<option>${esc(c)}</option>`).join('')}</select></div></div>
+  <div class="chips" id="filtros"></div>
+  <div class="actions" id="acciones-sel" hidden style="margin-bottom:.8rem"><span class="small" id="nsel"></span><button class="btn sm primary" id="agregar">Agregar a mis productos</button></div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" id="all"></th><th style="width:52px"></th><th>Producto</th><th>Categoría</th><th class="num">Stock Elit</th>
+    <th class="num">Tu costo</th><th class="num">Margen</th><th class="num">Precio de venta</th><th>En GScom</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div style="text-align:center;margin:1rem 0"><button class="btn" id="mas" hidden>Mostrar más</button></div>`
+  : `<div class="card card-pad"><h2>Primeros pasos</h2><ol class="small" style="margin:.5rem 0 0 1.2rem;line-height:1.8">
+      <li>Tocá <b>Probar conexión</b> para verificar que la función de Supabase y tus credenciales de Elit funcionan.</li>
+      <li>Tocá <b>Actualizar ahora</b> para bajar el catálogo completo (tarda un minuto).</li>
+      <li>Definí los <b>márgenes por categoría</b> y elegí qué productos pasan a tu catálogo.</li></ol></div>`}`;
+
+  const precioVenta = e => e.costo_ars > 0 ? precioPorMargen(+e.costo_ars, margenCat(e), 1) : null;
+  const FILTROS = { todos: ['Todos', () => true], stock: ['Con stock en Elit', e => +e.stock_total > 0], agregados: ['Ya en mis productos', e => enGscom.has(e.id)],
+    nuevos: ['No agregados', e => !enGscom.has(e.id)], coinciden: ['Coinciden con uno mío (EAN)', e => !enGscom.has(e.id) && e.ean && porEan.has(e.ean)] };
+  const lista = () => elitProds.filter(e => FILTROS[filtro][1](e) && (!cat || e.categoria === cat)
+    && (String(e.id) === texto || String(e.codigo_producto) === texto || mismoCodigo(e.ean, texto) || matches(texto, e.nombre, e.marca, e.codigo_alfa, e.sub_categoria)));
+  function pintar() {
+    if (!elitProds.length) return;
+    $('#filtros').innerHTML = Object.entries(FILTROS).map(([k, [l, f]]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-f="${k}">${l}<span class="count">${elitProds.filter(f).length}</span></button>`).join('');
+    $$('#filtros .chip').forEach(b => b.onclick = () => { filtro = b.dataset.f; mostrar = 150; pintar(); });
+    const l = lista();
+    $('#rows').innerHTML = l.slice(0, mostrar).map(e => {
+      const g = enGscom.get(e.id), igual = !g && e.ean && porEan.get(e.ean);
+      return `<tr><td>${g ? '' : `<input type="checkbox" data-sel="${e.id}" ${sel.has(e.id) ? 'checked' : ''}>`}</td>
+      <td>${e.miniatura || e.imagen ? `<img src="${esc(e.miniatura || e.imagen)}" alt="" loading="lazy" style="width:44px;height:44px;object-fit:contain;border:1px solid var(--line);border-radius:6px;background:#fff">` : ''}</td>
+      <td>${esc(e.nombre)}<div class="small muted">${esc([e.marca, e.codigo_producto && `cód. ${e.codigo_producto}`, e.garantia && `garantía ${e.garantia}${/^\d+$/.test(e.garantia) ? ' meses' : ''}`].filter(Boolean).join(' · '))}</div></td>
+      <td class="small">${esc(e.categoria)}<div class="muted">${esc(e.sub_categoria)}</div></td>
+      <td class="num">${+e.stock_total > 0 ? `<span class="pill ${e.nivel_stock === 'alto' ? 'green' : 'amber'}">${+e.stock_total}</span>` : '<span class="pill red">0</span>'}</td>
+      <td class="num nowrap">${e.costo_ars ? money(e.costo_ars) : '—'}${+e.precio_usd ? `<div class="small muted">USD ${(+e.precio_usd).toLocaleString('es-AR')} + IVA ${+e.iva}%</div>` : ''}</td>
+      <td class="num">${g ? (g.margen != null ? `${+g.margen}%` : '<span class="muted">fijo</span>') : `${margenCat(e)}%`}</td>
+      <td class="num nowrap"><b>${money(g ? g.precio_venta : precioVenta(e))}</b></td>
+      <td class="small">${g ? `<a href="#/productos" class="pill green" title="Ya está en tus productos">✓ agregado</a>` : igual ? `<span class="pill blue" title="Tenés un producto con el mismo código de barras: al agregarlo se vinculan">coincide: ${esc(igual.nombre.slice(0, 24))}${igual.nombre.length > 24 ? '…' : ''}</span>` : ''}</td></tr>`;
+    }).join('') || '<tr><td colspan="9" class="empty">No hay productos con ese filtro.</td></tr>';
+    $('#mas').hidden = l.length <= mostrar;
+    $$('[data-sel]').forEach(cb => cb.onchange = () => { cb.checked ? sel.add(+cb.dataset.sel) : sel.delete(+cb.dataset.sel); pintarSel(); });
+    pintarSel();
+  }
+  const pintarSel = () => { $('#acciones-sel').hidden = !sel.size; $('#nsel').textContent = `${sel.size} seleccionado(s):`; };
+
+  $('#sync').onclick = () => run(async () => {
+    const b = $('#sync'); b.disabled = true; b.textContent = 'Actualizando… (puede tardar un minuto)';
+    try {
+      const r = await store.elitFuncion('sincronizar');
+      toast(`Catálogo actualizado: ${r.total} productos${r.costos_actualizados ? ` · ${r.costos_actualizados} costo(s) de tus productos cambiaron` : ''}`); render();
+    } finally { b.disabled = false; b.textContent = '↻ Actualizar ahora'; }
+  });
+  $('#probar').onclick = () => run(async () => {
+    const r = await store.elitFuncion('probar');
+    modal('Conexión con Elit', `<p style="margin-bottom:.6rem">✅ La conexión funciona.${r.ejemplo ? ` Ejemplo recibido: <b>${esc(r.ejemplo)}</b>` : ''}</p>
+      <p class="small muted">Datos que trae cada producto: ${esc((r.campos_producto || []).join(', '))}</p>`, '<button class="btn primary" data-close>Listo</button>');
+  });
+  $('#margenes').onclick = () => margenesElitModal(nombresCat, cats, margenCatf, categorias, elitProds);
+  if (!elitProds.length) return;
+
+  $('#mas').onclick = () => { mostrar += 150; pintar(); };
+  let t; $('#buscar').oninput = e => { clearTimeout(t); t = setTimeout(() => { texto = e.target.value.trim(); mostrar = 150; pintar(); }, 150); };
+  $('#cat').onchange = e => { cat = e.target.value; mostrar = 150; pintar(); };
+  $('#all').onchange = e => { lista().slice(0, mostrar).filter(x => !enGscom.has(x.id)).forEach(x => e.target.checked ? sel.add(x.id) : sel.delete(x.id)); pintar(); };
+  $('#agregar').onclick = () => {
+    const elegidos = elitProds.filter(e => sel.has(e.id));
+    const vinc = elegidos.filter(e => e.ean && porEan.has(e.ean)), nuevos = elegidos.length - vinc.length;
+    const sinCat = [...new Set(elegidos.filter(e => !(e.ean && porEan.has(e.ean)) && !catCfg(e.categoria).categoria_id).map(e => e.categoria))];
+    const m = modal('Agregar a mis productos', `
+      <p style="margin-bottom:.6rem">Se agregan <b>${nuevos}</b> producto(s) nuevo(s)${vinc.length ? ` y se <b>vinculan ${vinc.length}</b> que ya tenés (mismo código de barras: solo se les carga el costo de Elit, su precio no cambia)` : ''}.</p>
+      <ul class="small" style="margin:0 0 .8rem 1.2rem;line-height:1.7">
+        <li>Proveedor <b>ELIT</b>, costo de Elit y <b>precio por margen automático</b> (el de su categoría; si no tiene, ${margenCatf}%).</li>
+        <li>Stock 0 en el local: en la tienda se ven como <b>"Por encargo"</b>.</li>
+        <li>Cada vez que se actualiza el catálogo, su costo se actualiza solo (y su precio, por el margen).</li></ul>
+      ${sinCat.length ? `<p class="small" style="background:var(--warn-soft);padding:.5rem .8rem;border-radius:8px">Sin categoría de GScom asignada: ${sinCat.map(esc).join(', ')}. Entran sin categoría; podés asignarla antes en "Márgenes por categoría".</p>` : ''}`,
+      `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Agregar ${elegidos.length}</button>`);
+    $('#ok', m.el).onclick = () => run(async () => {
+      const r = await store.elitAgregar([...sel]);
+      m.close(); toast(`${r.creados} agregado(s)${r.vinculados ? ` · ${r.vinculados} vinculado(s)` : ''}${r.ya_estaban ? ` · ${r.ya_estaban} ya estaban` : ''}`); render();
+    });
+  };
+  pintar();
+};
+
+// Margen % y categoría de GScom para cada categoría de Elit (lo usan los productos que se agregan desde Elit)
+function margenesElitModal(nombresCat, cats, margenCatf, categorias, elitProds) {
+  const c = n => cats.find(x => x.categoria === n) || {};
+  const m = modal('Márgenes por categoría de Elit', `
+    <p class="small muted" style="margin-bottom:.8rem">El margen se aplica a los productos que agregues desde Elit (precio = costo + margen, automático). Para cambiar el de productos ya agregados usá <b>Productos → Precios y márgenes</b>.</p>
+    <div class="field" style="max-width:240px"><label>Margen por defecto (categorías sin margen)</label><input class="input" type="number" step="any" min="0" id="m-def" value="${margenCatf}"></div>
+    ${nombresCat.length ? `<table class="tbl"><thead><tr><th>Categoría en Elit</th><th class="num">Productos</th><th style="width:120px">Margen %</th><th style="width:220px">Categoría en GScom</th></tr></thead><tbody>
+      ${nombresCat.map(n => `<tr><td>${esc(n)}</td><td class="num muted">${elitProds.filter(e => e.categoria === n).length}</td>
+        <td><input class="input" type="number" step="any" min="0" data-mg="${esc(n)}" value="${c(n).margen ?? ''}" placeholder="${margenCatf}"></td>
+        <td><select class="input" data-ct="${esc(n)}"><option value="">— Sin categoría —</option>${categorias.map(k => `<option value="${k.id}" ${k.id === c(n).categoria_id ? 'selected' : ''}>${esc(k.nombre)}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table>`
+      : '<p class="small muted">Las categorías aparecen después de bajar el catálogo con "Actualizar ahora".</p>'}`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`, { wide: true });
+  $('#ok', m.el).onclick = () => run(async () => {
+    const def = +$('#m-def', m.el).value;
+    if (!(def >= 0)) return toast('Poné un margen por defecto válido', true);
+    const filas = nombresCat.map(n => {
+      const mg = $(`[data-mg="${CSS.escape(n)}"]`, m.el).value.trim(), ct = $(`[data-ct="${CSS.escape(n)}"]`, m.el).value;
+      return { categoria: n, margen: mg === '' ? null : +mg, categoria_id: ct ? +ct : null };
+    });
+    await store.guardarElitConfig({ margen_defecto: def });
+    await store.guardarElitCategorias(filas);
+    m.close(); toast('Márgenes guardados'); render();
+  });
 }
 
 // =====================================================================

@@ -201,6 +201,55 @@ export const store = {
   },
   escucharSolicitudes() {},
 
+  // Mayorista Elit: en el demo no hay conexión real; "sincronizar" carga un catálogo de ejemplo
+  async elitFuncion(accion) {
+    if (accion === 'probar') return { ok: true, campos_respuesta: ['codigo', 'resultado'], campos_producto: ['id', 'nombre', 'precio'], ejemplo: 'Mouse de ejemplo' };
+    if (accion !== 'sincronizar') throw new Error('Acción desconocida');
+    const ahora = now(), cot = 1545;
+    const ej = [
+      [18636, 'Acces Point Cudy AC1200 Gigabit', 'Conectividad', 'Extensores', 'CUDY', 28.8, 10.5, 337, '6971690792022'],
+      [20101, 'Mouse Logitech M170 Inalámbrico', 'Periféricos', 'Mouses', 'LOGITECH', 9.1, 21, 120, '097855078565'],
+      [20102, 'Teclado Logitech K120 USB', 'Periféricos', 'Teclados', 'LOGITECH', 8.4, 21, 0, '5099206020962'],
+      [20103, 'SSD Kingston A400 480GB', 'Almacenamiento', 'Discos SSD', 'KINGSTON', 27.5, 10.5, 45, '740617263442'],
+      [20104, 'Memoria Kingston Fury 8GB DDR4 3200', 'Memorias', 'DDR4', 'KINGSTON', 19.9, 10.5, 60, '740617318241'],
+      [20105, 'Router TP-Link Archer C6', 'Conectividad', 'Routers', 'TP-LINK', 31.2, 10.5, 15, '6935364088725'],
+      [20106, 'Auricular HyperX Cloud Stinger 2', 'Audio', 'Auriculares', 'HYPERX', 38.0, 21, 8, '196188580912'],
+      [20107, 'Cartucho HP 664 Negro', 'Insumos', 'Cartuchos', 'HP', 14.3, 21, 200, '888793185478'],
+    ];
+    db.elit_productos = ej.map(([id, nombre, categoria, sub_categoria, marca, precio, iva, stock, ean]) => ({ id, nombre, categoria, sub_categoria, marca,
+      precio_usd: precio, iva, impuesto_interno: 0, moneda: 2, markup: 0, cotizacion: cot, costo_ars: Math.round(precio * (1 + iva / 100) * cot * 100) / 100,
+      stock_total: stock, stock_cd: stock, stock_cliente: 0, nivel_stock: stock > 50 ? 'alto' : 'bajo', ean, garantia: '12', link: '', imagen: '', miniatura: '', activo: true, sincronizado_at: ahora }));
+    let n = 0;
+    db.productos.filter(p => p.elit_id).forEach(p => { const e = db.elit_productos.find(x => x.id === p.elit_id); if (e && p.precio_costo !== e.costo_ars) { p.precio_costo = e.costo_ars; aplicarMargen(p); n++; } });
+    db.elit_config = { ...(db.elit_config || { margen_defecto: 30 }), ultima_sync: ahora, ultimo_resultado: { total: ej.length, costos_actualizados: n } };
+    save(); return { ok: true, total: ej.length, costos_actualizados: n };
+  },
+  async elitProductos() { return clone(db.elit_productos || []); },
+  async elitCategorias() { return clone(db.elit_categorias || []); },
+  async guardarElitCategorias(filas) {
+    db.elit_categorias ??= [];
+    filas.forEach(f => { const i = db.elit_categorias.findIndex(x => x.categoria === f.categoria); i >= 0 ? db.elit_categorias[i] = f : db.elit_categorias.push(f); });
+    save();
+  },
+  async elitConfig() { return clone(db.elit_config || { id: 1, margen_defecto: 30, ultima_sync: null }); },
+  async guardarElitConfig(cambios) { db.elit_config = { ...(db.elit_config || { margen_defecto: 30 }), ...cambios }; save(); },
+  async elitAgregar(ids) {
+    const cfg = db.elit_config || { margen_defecto: 30 };
+    let prov = db.proveedores.find(p => p.nombre.trim().toUpperCase() === 'ELIT');
+    if (!prov) prov = insert('proveedores', { nombre: 'ELIT', cuit: '', telefono: '', email: '', notas: '' });
+    let creados = 0, vinculados = 0, ya = 0;
+    for (const e of (db.elit_productos || []).filter(x => ids.includes(x.id))) {
+      if (db.productos.some(p => p.elit_id === e.id)) { ya++; continue; }
+      const c = (db.elit_categorias || []).find(x => x.categoria === e.categoria) || {};
+      const existe = e.ean && db.productos.find(p => p.activo && p.codigo_barras === e.ean);
+      if (existe) { Object.assign(existe, { elit_id: e.id, proveedor_id: existe.proveedor_id ?? prov.id, precio_costo: e.costo_ars }); aplicarMargen(existe); vinculados++; continue; }
+      await this.guardarProducto({ nombre: e.nombre, marca: e.marca, codigo_barras: e.ean || '', categoria_id: c.categoria_id ?? null, proveedor_id: prov.id,
+        precio_costo: e.costo_ars, precio_venta: 0, margen: c.margen ?? cfg.margen_defecto, foto_url: e.imagen, elit_id: e.id, stock_minimo: 0, publicado: true });
+      creados++;
+    }
+    save(); return { creados, vinculados, ya_estaban: ya };
+  },
+
   // Usuarios: en el modo demo no hay usuarios reales
   async usuarios() { return []; },
   async actualizarUsuario() {},

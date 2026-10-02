@@ -119,6 +119,23 @@ export const store = {
       .subscribe();
   },
 
+  // Mayorista Elit: el catálogo se guarda en elit_productos; la conexión con Elit la hace la función "elit"
+  async elitFuncion(accion, extra = {}) {
+    const { data, error } = await sb.functions.invoke('elit', { body: { accion, ...extra } });
+    if (error) {
+      let msg = error.message;
+      try { msg = (await error.context.json()).error || msg; } catch { /* sin detalle */ }
+      throw new Error(/Failed to send|fetch/i.test(msg) ? 'No se pudo conectar con la función "elit" (¿está publicada en Supabase?)' : msg);
+    }
+    return data;
+  },
+  async elitProductos() { return todas(() => sb.from('elit_productos').select('*').eq('activo', true).order('nombre').order('id')); },
+  async elitCategorias() { return q(sb.from('elit_categorias').select('*')); },
+  async guardarElitCategorias(filas) { if (filas.length) await q(sb.from('elit_categorias').upsert(filas)); },
+  async elitConfig() { return q(sb.from('elit_config').select('*').eq('id', 1).maybeSingle()); },
+  async guardarElitConfig(cambios) { await q(sb.from('elit_config').update(cambios).eq('id', 1)); },
+  async elitAgregar(ids) { return q(sb.rpc('elit_agregar', { p_ids: ids })); },
+
   // Usuarios (solo admin)
   async usuarios() { return q(sb.rpc('usuarios_listar')); },
   async actualizarUsuario(id, { activo, rol }) { await q(sb.rpc('usuario_actualizar', { p_id: id, p_activo: !!activo, p_rol: rol })); },
