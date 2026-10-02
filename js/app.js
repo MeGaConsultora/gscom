@@ -971,7 +971,8 @@ ROUTES.elit = async () => {
 
   view().innerHTML = `
   <div class="page-head"><div><a href="#/productos" class="small muted">← Productos</a><h1>Catálogo Elit</h1>
-      <div class="small muted">${cfg?.ultima_sync ? `Actualizado ${fdatetime(cfg.ultima_sync)} · ${elitProds.length} productos${cotiz ? ` · dólar Elit $${(+cotiz).toLocaleString('es-AR')}` : ''}` : 'Todavía no se bajó el catálogo'}</div></div>
+      <div class="small muted">${cfg?.ultima_sync ? `Actualizado ${fdatetime(cfg.ultima_sync)}${cfg.ultimo_resultado?.automatica ? ' (automático)' : ''} · ${elitProds.length} productos${cotiz ? ` · dólar Elit $${(+cotiz).toLocaleString('es-AR')}` : ''} · se actualiza solo todas las noches` : 'Todavía no se bajó el catálogo'}</div>
+      ${cfg?.ultima_sync && Date.now() - new Date(cfg.ultima_sync) > 36 * 3600000 ? `<div class="small" style="color:var(--bad);margin-top:.2rem">⚠ Hace más de un día que no se actualiza: puede que la tarea automática de Supabase (Cron) haya fallado. Tocá "Actualizar ahora" y avisá.</div>` : ''}</div>
     <div class="actions"><button class="btn" id="margenes">Márgenes por categoría</button><button class="btn" id="probar">Probar conexión</button><button class="btn" id="carrito">Ver carrito</button><button class="btn primary" id="sync">↻ Actualizar ahora</button></div></div>
   ${elitProds.length ? `
   <div class="card card-pad" style="margin-bottom:1rem"><div class="row" style="align-items:center">

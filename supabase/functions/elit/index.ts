@@ -11,6 +11,8 @@
 //   carrito_agregar   { items: [{ code, quantity }], pedido_id? }
 //   carrito_confirmar { pedido_id? } → COMPRA REAL (nota de venta en Elit); solo cuando un administrador
 //                       lo confirma en GScom. Queda registrada en elit_compras.
+// Actualización automática: Supabase Cron llama { accion: 'sincronizar' } con el encabezado
+// x-gscom-cron = secreto GSCOM_CRON_SECRET (esa clave solo permite sincronizar).
 // =====================================================================
 import { createClient } from 'npm:@supabase/supabase-js@2';
 
@@ -127,16 +129,21 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   try {
     const url = Deno.env.get('SUPABASE_URL')!;
-    // Solo administradores activos de GScom (se verifica con la sesión de quien llama)
+    const cuerpo: any = await req.json().catch(() => ({}));
+    const { accion } = cuerpo;
     const usuario = createClient(url, Deno.env.get('SUPABASE_ANON_KEY')!, {
       global: { headers: { Authorization: req.headers.get('Authorization') ?? '' } },
     });
-    const { data: esAdmin, error: errAuth } = await usuario.rpc('es_usuario_activo');
-    if (errAuth || !esAdmin) return json({ error: 'Sin permiso' }, 403);
+    // La actualización automática de cada noche (Supabase Cron) se identifica con la clave secreta GSCOM_CRON_SECRET,
+    // y solo puede sincronizar. Todo lo demás: solo administradores activos de GScom (con su sesión).
+    const claveCron = Deno.env.get('GSCOM_CRON_SECRET') || '';
+    const esCron = !!claveCron && req.headers.get('x-gscom-cron') === claveCron;
+    if (esCron && accion !== 'sincronizar') return json({ error: 'Sin permiso' }, 403);
+    if (!esCron) {
+      const { data: esAdmin, error: errAuth } = await usuario.rpc('es_usuario_activo');
+      if (errAuth || !esAdmin) return json({ error: 'Sin permiso' }, 403);
+    }
     const admin = createClient(url, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-
-    const cuerpo: any = await req.json().catch(() => ({}));
-    const { accion } = cuerpo;
 
     if (accion === 'probar') {
       // dos páginas seguidas: cuántos trae cada una y si la segunda es distinta (para verificar la paginación)
@@ -178,7 +185,7 @@ Deno.serve(async (req) => {
       await admin.from('elit_productos').update({ activo: false }).lt('sincronizado_at', ahora);
       const { data: costos, error: errCostos } = await admin.rpc('elit_aplicar_costos');
       if (errCostos) throw new Error(`No se pudieron actualizar los costos: ${errCostos.message}`);
-      const resultado = { total, costos_actualizados: costos ?? 0, origen, ...(aviso ? { aviso } : {}) };
+      const resultado = { total, costos_actualizados: costos ?? 0, origen, automatica: esCron, ...(aviso ? { aviso } : {}) };
       await admin.from('elit_config').update({ ultima_sync: ahora, ultimo_resultado: resultado }).eq('id', 1);
       return json({ ok: true, ...resultado });
     }
