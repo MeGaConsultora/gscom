@@ -220,7 +220,7 @@ export const store = {
       precio_usd: precio, iva, impuesto_interno: 0, moneda: 2, markup: 0, cotizacion: cot, costo_ars: Math.round(precio * (1 + iva / 100) * cot * 100) / 100,
       stock_total: stock, stock_cd: stock, stock_cliente: 0, nivel_stock: stock > 50 ? 'alto' : 'bajo', ean, garantia: '12', link: '', imagen: '', miniatura: '', activo: true, sincronizado_at: ahora }));
     let n = 0;
-    db.productos.filter(p => p.elit_id).forEach(p => { const e = db.elit_productos.find(x => x.id === p.elit_id); if (e && p.precio_costo !== e.costo_ars) { p.precio_costo = e.costo_ars; aplicarMargen(p); n++; } });
+    db.productos.filter(p => p.elit_id && p.elit_sigue_costo).forEach(p => { const e = db.elit_productos.find(x => x.id === p.elit_id); if (e && p.precio_costo !== e.costo_ars) { p.precio_costo = e.costo_ars; aplicarMargen(p); n++; } });
     db.elit_config = { ...(db.elit_config || { margen_defecto: 30 }), ultima_sync: ahora, ultimo_resultado: { total: ej.length, costos_actualizados: n } };
     save(); return { ok: true, total: ej.length, costos_actualizados: n };
   },
@@ -242,9 +242,9 @@ export const store = {
       if (db.productos.some(p => p.elit_id === e.id)) { ya++; continue; }
       const c = (db.elit_categorias || []).find(x => x.categoria === e.categoria) || {};
       const existe = e.ean && db.productos.find(p => p.activo && p.codigo_barras === e.ean);
-      if (existe) { Object.assign(existe, { elit_id: e.id, proveedor_id: existe.proveedor_id ?? prov.id, precio_costo: e.costo_ars }); aplicarMargen(existe); vinculados++; continue; }
+      if (existe) { Object.assign(existe, { elit_id: e.id, elit_sigue_costo: false }); vinculados++; continue; }   // ya lo tenías: solo referencia
       await this.guardarProducto({ nombre: e.nombre, marca: e.marca, codigo_barras: e.ean || '', categoria_id: c.categoria_id ?? null, proveedor_id: prov.id,
-        precio_costo: e.costo_ars, precio_venta: 0, margen: c.margen ?? cfg.margen_defecto, foto_url: e.imagen, elit_id: e.id, stock_minimo: 0, publicado: true });
+        precio_costo: e.costo_ars, precio_venta: 0, margen: c.margen ?? cfg.margen_defecto, foto_url: e.imagen, elit_id: e.id, elit_sigue_costo: true, stock_minimo: 0, publicado: true });
       creados++;
     }
     save(); return { creados, vinculados, ya_estaban: ya };

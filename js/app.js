@@ -821,6 +821,8 @@ async function productoModal(id, opts = {}) {
       <div class="field"><label>Margen %</label><input class="input" name="margen" type="number" step="any" value="${v.margen ?? ''}"></div></div>
     <label class="small" style="display:flex;gap:.4rem;align-items:flex-start;margin:-.3rem 0 .9rem"><input type="checkbox" name="por_margen" ${v.margen != null ? 'checked' : ''} style="margin-top:.15rem">
       <span>Calcular el precio de venta con el margen <span class="muted">— se actualiza solo cuando cambia el costo (por ejemplo, al ingresar una compra)${redondeo > 1 ? `; se redondea hacia arriba a múltiplos de ${money(redondeo)}` : ''}</span></span></label>
+    ${v.elit_id ? `<label class="small" style="display:flex;gap:.4rem;align-items:flex-start;margin:-.5rem 0 .9rem"><input type="checkbox" name="elit_sigue_costo" ${v.elit_sigue_costo ? 'checked' : ''} style="margin-top:.15rem">
+      <span><span class="pill violet">Elit</span> El costo se actualiza solo con el de Elit <span class="muted">— destildalo si este producto se lo comprás a otro proveedor (queda vinculado solo como referencia)</span></span></label>` : ''}
     <div class="row">${id || opts.sinStock ? '' : `<div class="field"><label>Stock inicial</label><input class="input" name="stock" type="number" step="any" value="${v.stock}"></div>`}
       <div class="field"><label>Stock mínimo (alerta)</label><input class="input" name="stock_minimo" type="number" step="any" min="0" value="${v.stock_minimo}"></div></div>
     <label class="small" style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem"><input type="checkbox" name="es_servicio" ${v.es_servicio ? 'checked' : ''}> Es un servicio / mano de obra (no maneja stock)</label>
@@ -873,6 +875,7 @@ async function productoModal(id, opts = {}) {
     const data = { ...(id ? { id } : {}), publicado: f.publicado, destacado: f.destacado, descripcion_web: f.descripcion_web, etiqueta_web: f.etiqueta_web, nombre: f.nombre, marca: f.marca, descripcion: f.descripcion, proveedor_id: f.proveedor_id ? +f.proveedor_id : null, categoria_id: f.categoria_id && f.categoria_id !== '__nueva' ? +f.categoria_id : null,
       precio_costo: +f.precio_costo || 0, precio_venta: +f.precio_venta || 0, margen: f.por_margen ? +f.margen : null, stock_minimo: +f.stock_minimo || 0, es_servicio: f.es_servicio };
     data.codigo_barras = f.codigo_barras;
+    if (v.elit_id) data.elit_sigue_costo = !!f.elit_sigue_costo;
     if (!id) data.stock = +f.stock || 0;
     const r = await store.guardarProducto(data);
     const stockInput = $('#stock-actual', m.el);
@@ -956,11 +959,11 @@ async function imprimirPedidos(pedidos, proveedores) {
 // =====================================================================
 ROUTES.elit = async () => {
   const [elitProds, cats, cfg, productos, categorias] = await Promise.all([store.elitProductos(), store.elitCategorias(), store.elitConfig(), store.productos(), store.categorias()]);
-  const margenCatf = +(cfg?.margen_defecto ?? 30);
+  const margenDef = +(cfg?.margen_defecto ?? 30);
   const enGscom = new Map(productos.filter(p => p.elit_id).map(p => [p.elit_id, p]));
   const porEan = new Map(productos.filter(p => p.codigo_barras).map(p => [p.codigo_barras, p]));
   const catCfg = c => cats.find(x => x.categoria === c) || {};
-  const margenCat = e => catCfg(e.categoria).margen ?? margenCatf;
+  const margenCat = e => catCfg(e.categoria).margen ?? margenDef;
   const nombresCat = [...new Set(elitProds.map(e => e.categoria).filter(Boolean))].sort();
   const sel = new Set();
   let texto = '', cat = '', filtro = 'todos', mostrar = 150;
@@ -1004,7 +1007,9 @@ ROUTES.elit = async () => {
       <td class="num nowrap">${e.costo_ars ? money(e.costo_ars) : '—'}${+e.precio_usd ? `<div class="small muted">USD ${(+e.precio_usd).toLocaleString('es-AR')} + IVA ${+e.iva}%</div>` : ''}</td>
       <td class="num">${g ? (g.margen != null ? `${+g.margen}%` : '<span class="muted">fijo</span>') : `${margenCat(e)}%`}</td>
       <td class="num nowrap"><b>${money(g ? g.precio_venta : precioVenta(e))}</b></td>
-      <td class="small">${g ? `<a href="#/productos" class="pill green" title="Ya está en tus productos">✓ agregado</a>` : igual ? `<span class="pill blue" title="Tenés un producto con el mismo código de barras: al agregarlo se vinculan">coincide: ${esc(igual.nombre.slice(0, 24))}${igual.nombre.length > 24 ? '…' : ''}</span>` : ''}</td></tr>`;
+      <td class="small">${g ? (g.elit_sigue_costo ? `<span class="pill green" title="Ya está en tus productos; su costo sigue al de Elit">✓ agregado</span>`
+          : `<span class="pill blue" title="Es un producto tuyo vinculado como referencia: su costo y precio no los cambia Elit">vinculado · tu costo ${money(g.precio_costo)}</span>`)
+        : igual ? `<span class="pill blue" title="Tenés un producto con el mismo código de barras: al agregarlo queda vinculado como referencia, sin cambiarle nada">coincide: ${esc(igual.nombre.slice(0, 24))}${igual.nombre.length > 24 ? '…' : ''}</span>` : ''}</td></tr>`;
     }).join('') || '<tr><td colspan="9" class="empty">No hay productos con ese filtro.</td></tr>';
     $('#mas').hidden = l.length <= mostrar;
     $$('[data-sel]').forEach(cb => cb.onchange = () => { cb.checked ? sel.add(+cb.dataset.sel) : sel.delete(+cb.dataset.sel); pintarSel(); });
@@ -1029,7 +1034,7 @@ ROUTES.elit = async () => {
       ${r.paginador ? `<p class="small muted mono" style="word-break:break-all">paginador: ${esc(JSON.stringify(r.paginador))}</p>` : ''}
       <p class="small muted" style="margin-top:.4rem">"Actualizar ahora" baja el catálogo completo en un solo archivo (CSV), así que no depende de la paginación.</p>`, '<button class="btn primary" data-close>Listo</button>');
   });
-  $('#margenes').onclick = () => margenesElitModal(nombresCat, cats, margenCatf, categorias, elitProds);
+  $('#margenes').onclick = () => margenesElitModal(nombresCat, cats, margenDef, categorias, elitProds);
   if (!elitProds.length) return;
 
   $('#mas').onclick = () => { mostrar += 150; pintar(); };
@@ -1041,11 +1046,11 @@ ROUTES.elit = async () => {
     const vinc = elegidos.filter(e => e.ean && porEan.has(e.ean)), nuevos = elegidos.length - vinc.length;
     const sinCat = [...new Set(elegidos.filter(e => !(e.ean && porEan.has(e.ean)) && !catCfg(e.categoria).categoria_id).map(e => e.categoria))];
     const m = modal('Agregar a mis productos', `
-      <p style="margin-bottom:.6rem">Se agregan <b>${nuevos}</b> producto(s) nuevo(s)${vinc.length ? ` y se <b>vinculan ${vinc.length}</b> que ya tenés (mismo código de barras: solo se les carga el costo de Elit, su precio no cambia)` : ''}.</p>
+      <p style="margin-bottom:.6rem">Se agregan <b>${nuevos}</b> producto(s) nuevo(s)${vinc.length ? ` y se <b>vinculan ${vinc.length}</b> que ya tenés` : ''}.</p>
       <ul class="small" style="margin:0 0 .8rem 1.2rem;line-height:1.7">
-        <li>Proveedor <b>ELIT</b>, costo de Elit y <b>precio por margen automático</b> (el de su categoría; si no tiene, ${margenCatf}%).</li>
-        <li>Stock 0 en el local: en la tienda se ven como <b>"Por encargo"</b>.</li>
-        <li>Cada vez que se actualiza el catálogo, su costo se actualiza solo (y su precio, por el margen).</li></ul>
+        <li><b>Nuevos:</b> proveedor ELIT, costo de Elit y precio por margen automático (el de su categoría; si no tiene, ${margenDef}%). Stock 0 en el local: en la tienda se ven como "Por encargo". Su costo se actualiza solo con cada actualización del catálogo.</li>
+        ${vinc.length ? '<li><b>Vinculados</b> (ya los tenías, mismo código de barras): quedan como <b>referencia</b> para comparar costo y stock con Elit. <b>No se les cambia nada</b>: ni costo, ni precio, ni proveedor, ni foto.</li>' : ''}
+        <li>En la ficha de cada producto podés activar o desactivar "El costo se actualiza solo con el de Elit".</li></ul>
       ${sinCat.length ? `<p class="small" style="background:var(--warn-soft);padding:.5rem .8rem;border-radius:8px">Sin categoría de GScom asignada: ${sinCat.map(esc).join(', ')}. Entran sin categoría; podés asignarla antes en "Márgenes por categoría".</p>` : ''}`,
       `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Agregar ${elegidos.length}</button>`);
     $('#ok', m.el).onclick = () => run(async () => {
@@ -1057,14 +1062,14 @@ ROUTES.elit = async () => {
 };
 
 // Margen % y categoría de GScom para cada categoría de Elit (lo usan los productos que se agregan desde Elit)
-function margenesElitModal(nombresCat, cats, margenCatf, categorias, elitProds) {
+function margenesElitModal(nombresCat, cats, margenDef, categorias, elitProds) {
   const c = n => cats.find(x => x.categoria === n) || {};
   const m = modal('Márgenes por categoría de Elit', `
     <p class="small muted" style="margin-bottom:.8rem">El margen se aplica a los productos que agregues desde Elit (precio = costo + margen, automático). Para cambiar el de productos ya agregados usá <b>Productos → Precios y márgenes</b>.</p>
-    <div class="field" style="max-width:240px"><label>Margen por defecto (categorías sin margen)</label><input class="input" type="number" step="any" min="0" id="m-def" value="${margenCatf}"></div>
+    <div class="field" style="max-width:240px"><label>Margen por defecto (categorías sin margen)</label><input class="input" type="number" step="any" min="0" id="m-def" value="${margenDef}"></div>
     ${nombresCat.length ? `<table class="tbl"><thead><tr><th>Categoría en Elit</th><th class="num">Productos</th><th style="width:120px">Margen %</th><th style="width:220px">Categoría en GScom</th></tr></thead><tbody>
       ${nombresCat.map(n => `<tr><td>${esc(n)}</td><td class="num muted">${elitProds.filter(e => e.categoria === n).length}</td>
-        <td><input class="input" type="number" step="any" min="0" data-mg="${esc(n)}" value="${c(n).margen ?? ''}" placeholder="${margenCatf}"></td>
+        <td><input class="input" type="number" step="any" min="0" data-mg="${esc(n)}" value="${c(n).margen ?? ''}" placeholder="${margenDef}"></td>
         <td><select class="input" data-ct="${esc(n)}"><option value="">— Sin categoría —</option>${categorias.map(k => `<option value="${k.id}" ${k.id === c(n).categoria_id ? 'selected' : ''}>${esc(k.nombre)}</option>`).join('')}</select></td></tr>`).join('')}</tbody></table>`
       : '<p class="small muted">Las categorías aparecen después de bajar el catálogo con "Actualizar ahora".</p>'}`,
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`, { wide: true });
