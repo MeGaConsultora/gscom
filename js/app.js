@@ -1275,7 +1275,8 @@ async function detalleOrden(id) {
     </div>
     <div class="grid">
       ${cerrada ? '' : `<div class="card card-pad"><h2>Cambiar estado</h2>
-        <div class="field"><select class="input" id="nuevo-estado">${ESTADOS.filter(e => ESTADOS_POR_TIPO[esArmado ? 'armado' : 'reparacion'].includes(e.id) && e.id !== 'entregado').map(e => `<option value="${e.id}" ${e.id === o.estado ? 'selected' : ''}>${e.label}</option>`).join('')}</select></div>
+        <div class="field"><select class="input" id="nuevo-estado">${(esArmado ? FLUJO_ARMADO.filter(s => s !== 'entregado') : ESTADOS.filter(e => ESTADOS_POR_TIPO.reparacion.includes(e.id) && e.id !== 'entregado').map(e => e.id))
+          .map(s => `<option value="${s}" ${s === o.estado ? 'selected' : ''}>${estadoInfo(s).label}</option>`).join('')}</select></div>
         <div class="field"><label>Mensaje para el cliente (lo ve en el seguimiento)</label><textarea class="input" id="coment" placeholder="${esArmado ? 'ej: Ya llegaron los componentes, esta semana lo preparamos.' : 'ej: Presupuesto: cambio de pantalla $85.000. Demora 3 días.'}"></textarea></div>
         <label class="small" style="display:flex;gap:.4rem;align-items:center;margin-bottom:.8rem"><input type="checkbox" id="avisar" checked> Avisar por WhatsApp al guardar</label>
         <button class="btn primary block" id="cambiar">Actualizar estado</button></div>`}
@@ -1487,7 +1488,7 @@ async function imprimirOrden(o, n, url) {
     <div class="c big">${esc(n.nombre)}</div>
     <div class="c">Service técnico<br>${esc(n.direccion)}${n.telefono ? ` · Tel ${esc(n.telefono)}` : ''}${n.whatsapp ? `<br>WhatsApp ${esc(n.whatsapp)}` : ''}</div><hr>
     <div class="c big">${tipoOrden(o).mayus} N° ${o.numero}</div>
-    <div class="c">${duplicado ? 'DUPLICADO — LOCAL' : 'ORIGINAL — CLIENTE'}<br>${esArmado ? 'Encargado' : 'Ingreso'} ${fdatetime(o.fecha_ingreso)}</div><hr>
+    <div class="c">${duplicado ? 'DUPLICADO — LOCAL' : 'ORIGINAL — CLIENTE'}<br>${esArmado ? 'Encargado' : 'Ingreso'}<br>${fdatetime(o.fecha_ingreso)}</div><hr>
     ${fila('Cliente', esc(o.cliente.nombre))}
     ${fila('Teléfono', esc(o.cliente.telefono))}
     ${duplicado ? fila('DNI / CUIT', esc(o.cliente.dni_cuit)) : ''}
