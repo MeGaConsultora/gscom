@@ -96,6 +96,10 @@ export const store = {
   async ajustarPrecios(ids, campo, porcentaje, redondeo, detalle = '', monto = null) {
     return q(sb.rpc('ajustar_precios', { p_ids: ids, p_campo: campo, p_porcentaje: +porcentaje || 0, p_redondeo: +redondeo, p_detalle: detalle, p_monto: monto == null ? null : +monto }));
   },
+  // margen % a un grupo (el precio pasa a calcularse solo); margen null = quitar el margen automático
+  async asignarMargen(ids, margen, detalle = '') {
+    return q(sb.rpc('asignar_margen', { p_ids: ids, p_margen: margen == null ? null : +margen, p_detalle: detalle }));
+  },
   async deshacerAjustePrecios(lote) { return q(sb.rpc('deshacer_ajuste_precios', { p_lote: lote })); },
   async ultimoAjustePrecios() { return q(sb.rpc('ultimo_ajuste_precios')); },
 

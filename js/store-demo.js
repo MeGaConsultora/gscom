@@ -137,11 +137,26 @@ export const store = {
     });
     save(); return { lote, cantidad: afectados.length };
   },
+  // margen % a un grupo (el precio pasa a calcularse solo); margen null = quitar el margen automático
+  async asignarMargen(ids, margen, detalle = '') {
+    if (margen != null && (margen < 0 || margen > 1000)) throw new Error('Margen fuera de rango (0 a 1000%)');
+    const lote = token(), fecha = now();
+    const afectados = ids.map(id => byId('productos', id)).filter(p => p && p.activo && (margen == null ? p.margen != null : +p.precio_costo > 0));
+    db.precios_historial ??= [];
+    afectados.forEach(p => {
+      const h = { lote, fecha, producto_id: p.id, costo_antes: p.precio_costo, venta_antes: p.precio_venta, margen_antes: p.margen ?? null, cambia_margen: true, detalle };
+      p.margen = margen == null ? null : +margen; aplicarMargen(p);
+      db.precios_historial.push({ ...h, costo_despues: p.precio_costo, venta_despues: p.precio_venta, margen_despues: p.margen });
+    });
+    save(); return { lote, cantidad: afectados.length };
+  },
   async deshacerAjustePrecios(lote) {
     let n = 0;
     (db.precios_historial || []).filter(h => h.lote === lote).forEach(h => {
       const p = byId('productos', h.producto_id);
-      if (p && p.precio_costo === h.costo_despues && p.precio_venta === h.venta_despues) { p.precio_costo = h.costo_antes; p.precio_venta = h.venta_antes; n++; }
+      if (p && p.precio_costo === h.costo_despues && p.precio_venta === h.venta_despues && (!h.cambia_margen || (p.margen ?? null) === (h.margen_despues ?? null))) {
+        p.precio_costo = h.costo_antes; p.precio_venta = h.venta_antes; if (h.cambia_margen) p.margen = h.margen_antes; n++;
+      }
     });
     db.precios_historial = (db.precios_historial || []).filter(h => h.lote !== lote); save(); return n;
   },
