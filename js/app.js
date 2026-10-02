@@ -2534,10 +2534,39 @@ async function nuevoPedido() {
 // Las respuestas de Elit se muestran sin asumir nombres exactos de campos.
 // =====================================================================
 const esProveedorElit = nombre => /^\s*elit\s*$/i.test(nombre || '');
-const elitCarritos = d => { const r = d?.resultado ?? d?.carritos ?? d?.data ?? d; return Array.isArray(r) ? r : [r]; };
 const elitDetalle = c => { const x = c?.details ?? c?.detalle ?? c?.detalles ?? c?.productos ?? (Array.isArray(c?.items) ? c.items : []); return Array.isArray(x) ? x : []; };
 const elitImporte = (v, mon) => v == null || v === '' || isNaN(+v) ? '—'
   : `${/usd|^2$|d[oó]lar/i.test(String(mon ?? '')) ? 'USD ' : '$ '}${(+v).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+// La respuesta de "ver carrito" de Elit, llevada a algo simple de mostrar.
+// Formato real (oct/2026): { carrito: { shared: { warehouses, saleConditions, currentExchange }, carts: [{ details: [{ code, name, price, cart }],
+// warehouse, saleCondition, shippingMethods, total: { subtotal, vat, internalTax, perceptions, shippings, surcharge, finalTotal } }] } }.
+// Los precios vienen en dólares; currentExchange es el dólar de Elit.
+function elitCarritosDe(d) {
+  const shared = d?.carrito?.shared ?? {};
+  const cot = +shared.currentExchange || null;
+  const crudos = d?.carrito?.carts ?? d?.resultado ?? d?.carritos ?? d?.data ?? d;
+  return (Array.isArray(crudos) ? crudos : [crudos]).filter(c => elitDetalle(c).length).map(c => {
+    const t = c.total && typeof c.total === 'object' ? c.total : null;
+    const det = elitDetalle(c).map(x => {
+      const qty = +(x.cart ?? x.quantity ?? x.cantidad ?? x.qty ?? 0), precio = x.price ?? x.precio ?? x.precio_unitario ?? x.unit_price;
+      return { code: x.code ?? x.codigo ?? x.id, nombre: x.name ?? x.nombre ?? x.descripcion ?? '', marca: x.brand ?? x.marca ?? '', qty, precio, total: x.total ?? x.subtotal ?? (qty && precio != null ? qty * precio : null), stock: x.stock };
+    });
+    const envio = (c.shippingMethods || []).flatMap(s => s.shippings || []).find(s => s.selected);
+    return {
+      deposito: (shared.warehouses || []).find(w => w.warehouse === c.warehouse)?.name ?? c.warehouse ?? c.deposito ?? null,
+      envio: envio ? `${envio.name}${+envio.cost ? ` (${elitImporte(envio.cost, cot ? 'USD' : '')})` : ''}` : null,
+      condicion: (shared.saleConditions || []).find(s => s.code === c.saleCondition)?.name ?? null,
+      det,
+      subtotal: t ? t.subtotal : c.subtotal,
+      recargo: t ? +t.surcharge?.total || null : null,
+      impuestos: t ? (+t.vat || 0) + (+t.internalTax || 0) + (+t.perceptions?.total || 0) : (c.impuestos ?? c.taxes ?? c.iva),
+      envioCosto: t ? t.shippings?.total : (c.envio ?? c.shipping),
+      total: t ? (t.finalTotal ?? t.total) : c.total,
+      moneda: cot ? 'USD' : (c.moneda ?? c.currency),
+      cot,
+    };
+  });
+}
 
 async function elitEnviarModal(p, productos) {
   const elitProds = await store.elitProductos();
@@ -2572,20 +2601,20 @@ async function elitEnviarModal(p, productos) {
 
 async function elitCarritoModal(pedido = null) {
   const [d, elitProds] = await Promise.all([store.elitFuncion('carrito_ver'), store.elitProductos().catch(() => [])]);
-  const carritos = elitCarritos(d).filter(c => elitDetalle(c).length);
+  const carritos = elitCarritosDe(d);
   const nombreDe = code => elitProds.find(e => e.id === +code)?.nombre || '';
-  const totalDe = c => c.total ?? c.importe_total ?? null;
+  const pesos = (v, c) => c.cot && v != null && !isNaN(+v) ? ` <span class="muted small">≈ ${money(+v * c.cot)}</span>` : '';
   const html = !carritos.length ? '<p>El carrito de Elit está vacío.</p>' : `
-    <p class="small muted" style="margin-bottom:.8rem">Esto es lo que hay <b>ahora</b> en tu carrito de Elit (incluye lo que se haya cargado desde su web), con los precios y totales que calcula Elit.</p>
-    ${carritos.map(c => { const mon = c.moneda ?? c.currency; return `
-      ${c.warehouse ?? c.deposito ? `<h2 style="font-size:.95rem;margin:.4rem 0">Depósito ${esc(c.warehouse ?? c.deposito)}</h2>` : ''}
+    <p class="small muted" style="margin-bottom:.8rem">Esto es lo que hay <b>ahora</b> en tu carrito de Elit (incluye lo que se haya cargado desde su web), con los precios y totales que calcula Elit${carritos[0].cot ? `, en dólares (dólar Elit $${carritos[0].cot.toLocaleString('es-AR')})` : ''}.</p>
+    ${carritos.map(c => `
+      <div class="small" style="margin:.2rem 0 .5rem">${[c.deposito && `<b>Depósito ${esc(c.deposito)}</b>`, c.envio && `Entrega: ${esc(c.envio)}`, c.condicion && `Pago: ${esc(c.condicion)}`].filter(Boolean).join(' · ')}</div>
       <table class="tbl" style="margin-bottom:.6rem"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Total</th></tr></thead><tbody>
-      ${elitDetalle(c).map(x => { const code = x.code ?? x.codigo ?? x.id ?? x.product_id, qty = x.quantity ?? x.cantidad ?? x.qty, pr = x.price ?? x.precio ?? x.precio_unitario ?? x.unit_price;
-        return `<tr><td>${esc(x.nombre ?? x.name ?? x.descripcion ?? x.description ?? x.producto ?? nombreDe(code))}<div class="small muted mono">${esc(code ?? '')}</div></td>
-          <td class="num">${esc(qty ?? '')}</td><td class="num nowrap">${elitImporte(pr, mon)}</td><td class="num nowrap">${elitImporte(x.total ?? x.subtotal ?? (qty && pr ? qty * pr : null), mon)}</td></tr>`; }).join('')}</tbody></table>
-      <table class="tbl small" style="max-width:340px;margin:0 0 1rem auto"><tbody>
-        ${[['Subtotal', c.subtotal], ['Impuestos', c.impuestos ?? c.taxes ?? c.iva], ['Envío', c.envio ?? c.shipping], ['<b>Total</b>', totalDe(c)]].filter(([, v]) => v != null)
-          .map(([l, v]) => `<tr><td>${l}</td><td class="num nowrap">${l.includes('Total') ? `<b>${elitImporte(v, mon)}</b>` : elitImporte(v, mon)}</td></tr>`).join('')}</tbody></table>`; }).join('')}`;
+      ${c.det.map(x => `<tr><td>${esc(x.nombre || nombreDe(x.code))}<div class="small muted mono">${esc(x.code ?? '')}${x.marca ? ` · ${esc(x.marca)}` : ''}</div></td>
+        <td class="num"><b>${x.qty}</b></td><td class="num nowrap">${elitImporte(x.precio, c.moneda)}</td><td class="num nowrap">${elitImporte(x.total, c.moneda)}</td></tr>`).join('')}</tbody></table>
+      <table class="tbl small" style="max-width:380px;margin:0 0 1rem auto"><tbody>
+        ${[['Subtotal', c.subtotal], ['Recargo', c.recargo], ['Impuestos (IVA y otros)', c.impuestos], ['Envío', c.envioCosto]].filter(([, v]) => v != null && v !== '')
+          .map(([l, v]) => `<tr><td>${l}</td><td class="num nowrap">${elitImporte(v, c.moneda)}</td></tr>`).join('')}
+        <tr><td><b>Total</b></td><td class="num nowrap"><b>${elitImporte(c.total, c.moneda)}</b>${pesos(c.total, c)}</td></tr></tbody></table>`).join('')}`;
   const m = modal(pedido ? `Carrito de Elit — pedido N° ${pedido.numero}` : 'Carrito de Elit', `${html}
     <details style="margin-top:.4rem"><summary class="small muted" style="cursor:pointer">Ver la respuesta completa de Elit</summary>
       <pre class="small" style="white-space:pre-wrap;word-break:break-all;max-height:220px;overflow:auto;background:#fafbfc;padding:.6rem;border-radius:8px">${esc(JSON.stringify(d, null, 2))}</pre></details>`,
@@ -2596,8 +2625,9 @@ async function elitCarritoModal(pedido = null) {
     await store.elitFuncion('carrito_vaciar'); m.close(); toast('Carrito de Elit vaciado');
   });
   $('#comprar', m.el).onclick = () => run(async () => {
-    const totales = carritos.map(c => elitImporte(totalDe(c), c.moneda ?? c.currency)).filter(t => t !== '—').join(' + ');
-    if (!confirm(`¿CONFIRMAR LA COMPRA EN ELIT${totales ? ` por ${totales}` : ''}?\n\nEsto genera la nota de venta en Elit: es una compra real y no se puede deshacer desde GScom.`)) return;
+    const totales = carritos.map(c => `${elitImporte(c.total, c.moneda)}${c.cot && c.total != null ? ` (≈ ${money(+c.total * c.cot)})` : ''}`).join(' + ');
+    const detalle = carritos.map(c => [c.deposito && `Depósito ${c.deposito}`, c.envio, c.condicion].filter(Boolean).join(' · ')).filter(Boolean).join('\n');
+    if (!confirm(`¿CONFIRMAR LA COMPRA EN ELIT por ${totales}?\n${detalle ? `\n${detalle}\n` : ''}\nEsto genera la nota de venta en Elit: es una compra real y no se puede deshacer desde GScom.`)) return;
     const b = $('#comprar', m.el); b.disabled = true; b.textContent = 'Confirmando…';
     let r;
     try { r = await store.elitFuncion('carrito_confirmar', { pedido_id: pedido?.id ?? null }); } finally { b.disabled = false; b.textContent = 'Confirmar compra en Elit'; }
@@ -2605,8 +2635,9 @@ async function elitCarritoModal(pedido = null) {
     const notas = r?.notas ?? r?.resultado ?? r; const lista = Array.isArray(notas) ? notas : [notas];
     if (parseHash().name === 'pedidos') await render();
     modal('Compra confirmada en Elit', `<p style="margin-bottom:.6rem">✅ Elit generó ${lista.length > 1 ? `${lista.length} notas de venta` : 'la nota de venta'}:</p>
-      <ul class="small" style="margin:0 0 .8rem 1.2rem">${lista.map(n => `<li>${esc(n?.numero ?? n?.nota ?? n?.id ?? n?.nro ?? JSON.stringify(n))}</li>`).join('')}</ul>
-      <p class="small muted">${pedido ? 'Quedó registrado en el pedido. ' : ''}Cuando llegue la mercadería, cargala con <b>Cargar como compra</b> (desde el pedido) para sumar el stock.</p>`,
+      <ul class="small" style="margin:0 0 .8rem 1.2rem">${lista.map(n => `<li>${esc(n?.numero ?? n?.nota ?? n?.number ?? n?.id ?? n?.nro ?? JSON.stringify(n))}</li>`).join('')}</ul>
+      <p class="small muted">${pedido ? 'Quedó registrado en el pedido. ' : ''}Cuando llegue la mercadería, cargala con <b>Cargar como compra</b> (desde el pedido) para sumar el stock.</p>
+      <details><summary class="small muted" style="cursor:pointer">Ver la respuesta completa de Elit</summary><pre class="small" style="white-space:pre-wrap;word-break:break-all;max-height:200px;overflow:auto">${esc(JSON.stringify(r, null, 2))}</pre></details>`,
       '<button class="btn primary" data-close>Listo</button>');
   });
 }

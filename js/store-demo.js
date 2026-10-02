@@ -206,9 +206,13 @@ export const store = {
     // carrito simulado (el de verdad está en Elit)
     db.elit_carrito ??= [];
     if (accion === 'carrito_ver') {
-      const det = db.elit_carrito.map(c => { const e = (db.elit_productos || []).find(x => x.id === c.code) || {}; return { code: c.code, nombre: e.nombre, quantity: c.quantity, precio: e.precio_usd, total: Math.round(e.precio_usd * c.quantity * 100) / 100 }; });
-      const sub = det.reduce((s, d) => s + d.total, 0);
-      return { codigo: 200, resultado: det.length ? [{ warehouse: 9, items: det.length, details: det, subtotal: sub, impuestos: Math.round(sub * 0.105 * 100) / 100, envio: 0, total: Math.round(sub * 1.105 * 100) / 100, moneda: 'USD' }] : [{ items: 0, details: [] }] };
+      // mismo formato que devuelve Elit (ver elitCarritosDe en app.js); precios en dólares
+      const det = db.elit_carrito.map(c => { const e = (db.elit_productos || []).find(x => x.id === c.code) || {}; return { code: c.code, name: e.nombre, brand: e.marca, price: e.precio_usd, cart: c.quantity, cartTotal: c.quantity, vat: e.iva, stock: e.stock_total }; });
+      const sub = det.reduce((s, d) => s + d.price * d.cart, 0), iva = det.reduce((s, d) => s + d.price * d.cart * d.vat / 100, 0);
+      const shared = { warehouses: [{ warehouse: 9, name: 'Buenos Aires' }, { warehouse: 11, name: 'Santa Fe' }], saleConditions: [{ code: 101, name: 'Transferencia / Dep. Bancario' }], currentExchange: 1545 };
+      return { codigo: 200, carrito: { shared, carts: det.length ? [{ items: det.length, details: det, warehouse: 11, saleCondition: 101,
+        shippingMethods: [{ warehouse: 11, name: 'Santa Fe', shippings: [{ code: 4, name: 'Retira de Deposito', cost: 0, selected: true }] }],
+        total: { subtotal: sub, surcharge: { total: 0 }, net: sub, shippings: { total: 0 }, vat: Math.round(iva * 1000) / 1000, internalTax: 0, perceptions: { total: 0 }, total: sub + iva, finalTotal: Math.round((sub + iva) * 1000) / 1000 } }] : [{ items: 0, details: [] }] } };
     }
     if (accion === 'carrito_vaciar') { db.elit_carrito = []; save(); return { codigo: 200 }; }
     if (accion === 'carrito_agregar') {
