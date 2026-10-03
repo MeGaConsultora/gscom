@@ -1580,8 +1580,13 @@ async function detalleOrden(id) {
   // Cada componente es un ítem de la orden con "componente" = tipo. Se elige de tus productos o del catálogo de Elit
   // (si es de Elit y no lo tenías, se agrega a Productos sin publicarlo en la tienda).
   if (esArmado) {
-    const elitProds = await store.elitProductos().catch(() => []);
+    const [elitProds, elitCats, elitCfg] = await Promise.all([store.elitProductos().catch(() => []), store.elitCategorias().catch(() => []), store.elitConfig().catch(() => null)]);
     const elitPorId = new Map(elitProds.map(e => [e.id, e]));
+    const redondeo = n.redondeo_precios ?? 1;
+    // margen con el que se agregaría un producto de Elit (el de su categoría o el por defecto), igual que elit_agregar()
+    const margenElit = e => +(elitCats.find(c => c.categoria === e.categoria)?.margen ?? elitCfg?.margen_defecto ?? 30);
+    const costoDe = i => +prodDe(i.producto_id)?.precio_costo || 0;
+    const margenDeItem = i => { const c = costoDe(i); return c > 0 ? Math.round((i.precio_unitario / c - 1) * 1000) / 10 : null; };
     const prodDe = pid => productos.find(p => p.id === pid);
     const stockElit = p => p?.elit_id ? +(elitPorId.get(p.elit_id)?.stock_total ?? 0) : null;
     const pillStock = (n, falta) => `<span class="pill ${n <= 0 ? 'red' : n < falta ? 'amber' : 'green'}">${n}</span>`;
@@ -1591,21 +1596,26 @@ async function detalleOrden(id) {
       const precio = comp.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
       const otros = items.filter(i => !i.componente).reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
       $('#armador').innerHTML = `<h2>Armado del equipo <span class="small muted" style="font-weight:400">— componentes de tus productos o del catálogo de Elit</span></h2>
-        <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:150px">Componente</th><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Stock local</th><th class="num">Stock Elit</th><th class="num">Subtotal</th><th></th></tr></thead><tbody>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:130px">Componente</th><th>Producto</th><th class="num">Cant.</th><th class="num">Tu costo</th><th class="num" title="Margen sobre tu costo. 0 = a costo">Margen %</th><th class="num">Precio</th><th class="num">Stock local</th><th class="num">Stock Elit</th><th class="num">Subtotal</th><th></th></tr></thead><tbody>
         ${ARMADO_SLOTS.map(sl => {
           const del = items.map((i, k) => [i, k]).filter(([i]) => i.componente === sl.id);
-          const filas = del.map(([i, k], n) => { const p = prodDe(i.producto_id), se = stockElit(p);
+          const filas = del.map(([i, k], n) => { const p = prodDe(i.producto_id), se = stockElit(p), mg = margenDeItem(i);
             return `<tr>${n === 0 ? `<td rowspan="${del.length}" class="small"><b>${sl.nombre}</b></td>` : ''}
               <td>${esc(i.descripcion)}${p?.elit_id ? ' <span class="pill violet">Elit</span>' : ''}</td>
-              <td class="num" style="width:70px">${cerrada ? i.cantidad : `<input class="input" data-ac="${k}" value="${i.cantidad}">`}</td>
-              <td class="num" style="width:120px">${cerrada ? money(i.precio_unitario) : `<input class="input" data-ap="${k}" value="${i.precio_unitario}">`}</td>
+              <td class="num" style="width:62px">${cerrada ? i.cantidad : `<input class="input" data-ac="${k}" value="${i.cantidad}" style="width:52px">`}</td>
+              <td class="num nowrap muted">${costoDe(i) ? money(costoDe(i)) : '—'}</td>
+              <td class="num" style="width:82px">${mg == null ? '<span class="muted">—</span>' : cerrada ? `${mg}%` : `<input class="input" data-am="${k}" value="${mg}" style="width:66px" title="Margen sobre tu costo. Poné 0 para venderlo a costo">`}</td>
+              <td class="num" style="width:112px">${cerrada ? money(i.precio_unitario) : `<input class="input" data-ap="${k}" value="${i.precio_unitario}" style="width:100px">`}</td>
               <td class="num">${p ? pillStock(+p.stock, +i.cantidad) : '—'}</td><td class="num">${se == null ? '<span class="muted">—</span>' : pillStock(se, +i.cantidad)}</td>
               <td class="num nowrap">${money(i.cantidad * i.precio_unitario)}</td>
               <td class="nowrap">${cerrada ? '' : `<button class="x" data-ad="${k}" title="Quitar">×</button>`}</td></tr>`; }).join('');
           const elegir = cerrada ? '' : `<button class="btn sm" data-elegir="${sl.id}">${del.length ? '+ Otro' : 'Elegir'}</button>`;
-          return filas ? filas + (elegir ? `<tr><td></td><td colspan="7" style="padding-top:0">${elegir}</td></tr>` : '')
-            : `<tr><td class="small"><b>${sl.nombre}</b></td><td colspan="6" class="muted small">— sin elegir —</td><td class="right">${elegir}</td></tr>`;
+          return filas ? filas + (elegir ? `<tr><td></td><td colspan="9" style="padding-top:0">${elegir}</td></tr>` : '')
+            : `<tr><td class="small"><b>${sl.nombre}</b></td><td colspan="8" class="muted small">— sin elegir —</td><td class="right">${elegir}</td></tr>`;
         }).join('')}</tbody></table></div>
+        ${cerrada || !comp.length ? '' : `<div class="small" style="display:flex;align-items:center;gap:.4rem;margin-top:.5rem;flex-wrap:wrap">
+          Margen para todos los componentes: <input class="input" id="ar-mg" type="number" step="any" min="0" style="width:80px" placeholder="%">
+          <button class="btn sm" id="ar-mg-ok">Aplicar</button><span class="muted">· 0 = a costo. También podés cambiar el margen o el precio de cada uno.</span></div>`}
         <div class="row" style="margin-top:.8rem;align-items:flex-start;flex-wrap:wrap">
           <table class="tbl small" style="max-width:380px"><tbody>
             <tr><td>Componentes (precio de venta)</td><td class="num nowrap">${money(precio)}</td></tr>
@@ -1615,12 +1625,24 @@ async function detalleOrden(id) {
             ${o.presupuesto != null ? `<tr><td class="muted">Presupuesto pasado al cliente</td><td class="num nowrap muted">${money(o.presupuesto)}</td></tr>` : ''}</tbody></table>
           ${cerrada ? '' : `<div style="display:flex;gap:.4rem;flex-wrap:wrap;flex:1 1 260px;justify-content:flex-end">
             <button class="btn sm" id="ar-presu" ${precio + otros ? '' : 'disabled'}>Usar como presupuesto</button>
+            <button class="btn sm" id="ar-pdf" ${precio + otros ? '' : 'disabled'} title="Se abre la impresión: elegí &quot;Guardar como PDF&quot; como impresora">Ver / guardar PDF</button>
             ${o.cliente.telefono ? `<button class="btn sm wa" id="ar-wa" ${precio + otros ? '' : 'disabled'}>Presupuesto por WhatsApp</button>` : ''}
             <button class="btn sm primary" id="ar-pedir" ${comp.length ? '' : 'disabled'}>Pedir lo que falta</button></div>`}</div>
         <p class="small muted" style="margin-top:.5rem">La mano de obra (armado, instalación de software) se agrega abajo, en el Detalle final, como concepto libre o servicio. Los componentes se descuentan del stock al entregar el equipo.</p>`;
       if (cerrada) return;
       $$('[data-ac]').forEach(inp => inp.onchange = () => { items[+inp.dataset.ac].cantidad = Math.max(1, +inp.value || 1); saveItems(); });
       $$('[data-ap]').forEach(inp => inp.onchange = () => { items[+inp.dataset.ap].precio_unitario = Math.max(0, +inp.value || 0); saveItems(); });
+      // margen: recalcula el precio desde tu costo (con el redondeo de Ajustes; 0 = a costo, sin redondear)
+      const conMargen = (i, mg) => { const c = costoDe(i); if (c > 0) i.precio_unitario = mg > 0 ? precioPorMargen(c, mg, redondeo) : c; };
+      $$('[data-am]').forEach(inp => inp.onchange = () => { conMargen(items[+inp.dataset.am], Math.max(0, +String(inp.value).replace(',', '.') || 0)); saveItems(); });
+      const mgOk = $('#ar-mg-ok'); if (mgOk) mgOk.onclick = () => {
+        const v = $('#ar-mg').value.trim(); if (v === '') return toast('Escribí un margen (0 = a costo)');
+        const mg = Math.max(0, +v.replace(',', '.') || 0);
+        const sinCosto = comp.filter(i => !costoDe(i)).length;
+        comp.forEach(i => conMargen(i, mg)); saveItems();
+        toast(`Margen ${mg}% aplicado${sinCosto ? ` (${sinCosto} sin costo cargado quedaron igual)` : ''}`);
+      };
+      $('#ar-pdf').onclick = () => imprimirPresupuestoArmado(o, n, items);
       $$('[data-ad]').forEach(b => b.onclick = () => { items.splice(+b.dataset.ad, 1); saveItems(); });
       $$('[data-elegir]').forEach(b => b.onclick = () => elegirComponente(ARMADO_SLOTS.find(s => s.id === b.dataset.elegir)));
       $('#ar-presu').onclick = () => run(async () => {
@@ -1654,17 +1676,19 @@ async function detalleOrden(id) {
         });
         const enGs = new Set(productos.map(p => p.elit_id).filter(Boolean));
         const deElit = elitProds.filter(e => !enGs.has(e.id)).map(e => ({ e, nombre: e.nombre, marca: e.marca, cat: `${e.categoria} ${e.sub_categoria}`, local: null, elit: +e.stock_total,
-          costo: +e.costo_ars, precio: precioPorMargen(+e.costo_ars, 30) }));
+          costo: +e.costo_ars, precio: +e.costo_ars > 0 ? precioPorMargen(+e.costo_ars, margenElit(e), redondeo) : 0 }));
         return [...locales, ...deElit].filter(x => (!tipo || delTipo(x.nombre, x.cat)) && (!conStock || x.local > 0 || x.elit > 0)
             && (!q || matches(q, x.nombre, x.marca, x.cat, x.p?.codigo_barras, x.e?.codigo_producto)))
           .sort((a, b) => ((b.local > 0) - (a.local > 0)) || ((b.elit > 0) - (a.elit > 0)) || a.nombre.localeCompare(b.nombre)).slice(0, 80);
       };
       const pintar = () => {
         const l = candidatos();
-        $('#ec-res', m.el).innerHTML = l.length ? `<div class="tbl-wrap" style="max-height:min(420px, calc(94vh - 300px));overflow:auto"><table class="tbl"><thead><tr><th>Producto</th><th class="num">Stock local</th><th class="num">Stock Elit</th><th class="num">Tu costo</th><th class="num">Precio</th><th></th></tr></thead><tbody>
-          ${l.map((x, k) => `<tr><td>${esc(x.nombre)} ${x.p ? '' : '<span class="pill violet" title="Del catálogo de Elit; al elegirlo se agrega a tus productos (sin publicarlo en la tienda)">Elit</span>'}<div class="small muted">${esc([x.marca, x.cat].filter(Boolean).join(' · '))}</div></td>
+        $('#ec-res', m.el).innerHTML = l.length ? `<div class="tbl-wrap" style="max-height:min(420px, calc(94vh - 300px));overflow:auto"><table class="tbl"><thead><tr><th>Producto</th><th class="num">Stock local</th><th class="num">Stock Elit</th><th class="num">Tu costo</th><th class="num">Margen</th><th class="num">Precio</th><th></th></tr></thead><tbody>
+          ${l.map((x, k) => `<tr><td>${esc(x.nombre)} ${x.p ? (x.p.elit_id ? '<span class="pill violet" title="Ya está en tus productos, vinculado al catálogo de Elit">Elit</span>' : '')
+              : '<span class="pill violet" title="Solo está en el catálogo de Elit; al elegirlo se agrega a tus productos (sin publicarlo en la tienda)">Elit · nuevo</span>'}<div class="small muted">${esc([x.marca, x.cat].filter(Boolean).join(' · '))}</div></td>
             <td class="num">${x.local == null ? '<span class="muted">—</span>' : pillStock(x.local, 1)}</td><td class="num">${x.elit == null ? '<span class="muted">—</span>' : pillStock(x.elit, 1)}</td>
-            <td class="num nowrap muted">${money(x.costo)}</td><td class="num nowrap"><b>${x.p ? money(x.precio) : '<span class="muted small">según margen</span>'}</b></td>
+            <td class="num nowrap muted">${x.costo ? money(x.costo) : '—'}</td><td class="num nowrap muted small">${x.costo > 0 && x.precio > 0 ? `${Math.round((x.precio / x.costo - 1) * 100)}%` : '—'}</td>
+            <td class="num nowrap"><b>${x.precio ? money(x.precio) : '—'}</b></td>
             <td><button class="btn sm primary" data-k="${k}">Elegir</button></td></tr>`).join('')}</tbody></table></div>
           ${l.length === 80 ? '<p class="small muted">Se muestran los primeros 80: escribí algo más específico para achicar la lista.</p>' : ''}`
           : `<p class="muted">No hay productos con ese criterio.${$('#ec-tipo', m.el).checked ? ' Probá destildar "Solo …".' : ''}</p>`;
@@ -1843,6 +1867,33 @@ const ARMADO_SLOTS = [
 // Comprobante de ingreso: original para el cliente (con QR) y duplicado para el local
 // (con contraseña y firma), como dos impresiones separadas para que la ticketera
 // corte cada una — si fueran una sola, la tira sale entera y hay que cortarla a mano.
+// Presupuesto del armado en A4 (para guardarlo como PDF o mandarlo): componentes por tipo, mano de obra y total. Sin costos ni proveedores.
+function imprimirPresupuestoArmado(o, n, items) {
+  const nombreSlot = c => ARMADO_SLOTS.find(s => s.id === c)?.nombre || '';
+  const orden = c => { const k = ARMADO_SLOTS.findIndex(s => s.id === c); return k < 0 ? 99 : k; };
+  const comp = items.filter(i => i.componente).sort((a, b) => orden(a.componente) - orden(b.componente));
+  const otros = items.filter(i => !i.componente);
+  const total = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
+  const fila = i => `<tr><td>${esc(nombreSlot(i.componente))}</td><td>${esc(i.descripcion)}</td><td class="num">${+i.cantidad}</td>
+    <td class="num nowrap">${money(i.precio_unitario)}</td><td class="num nowrap">${money(i.cantidad * i.precio_unitario)}</td></tr>`;
+  const contacto = [n.telefono && `Tel. ${esc(n.telefono)}`, n.whatsapp && `WhatsApp ${esc(n.whatsapp)}`, n.email && esc(n.email)].filter(Boolean).join(' · ');
+  const titulo = document.title;
+  document.title = `Presupuesto ${o.numero} - ${o.cliente.nombre}`;   // nombre sugerido del PDF
+  window.addEventListener('afterprint', function volver() { window.removeEventListener('afterprint', volver); document.title = titulo; });
+  printHTML(`<div class="hoja-pedido">
+    <div class="ped-head"><b style="font-size:13pt">${esc(n.nombre)}</b><br>${esc(n.direccion)}${contacto ? `<br>${contacto}` : ''}</div>
+    <h1>Presupuesto · ${esc(tipoOrden(o).nombre)} N° ${o.numero}</h1>
+    <div class="ped-sub">Cliente: <b>${esc(o.cliente.nombre)}</b> · ${fdate(new Date().toISOString())}</div>
+    ${o.falla_reportada ? `<div class="ped-sub">Pedido: ${esc(o.falla_reportada)}</div>` : ''}
+    <table class="ped-tbl"><thead><tr><th style="width:30mm">Componente</th><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Subtotal</th></tr></thead><tbody>
+      ${comp.map(fila).join('')}
+      ${otros.map(i => fila({ ...i, componente: '' })).join('')}
+      <tr><td colspan="4" style="border-bottom:0;padding-top:3mm;font-size:12pt"><b>TOTAL</b></td><td class="num nowrap" style="border-bottom:0;padding-top:3mm;font-size:12pt"><b>${money(total)}</b></td></tr>
+    </tbody></table>
+    <p style="font-size:8.5pt;color:#444;margin-top:6mm">Precios sujetos a disponibilidad de stock y a variaciones del tipo de cambio.</p>
+  </div>`, PAGINA_A4);
+}
+
 async function imprimirOrden(o, n, url) {
   const esArmado = o.tipo === 'armado';
   const anticipos = await store.anticiposOrden(o.id).catch(() => []);
