@@ -1434,6 +1434,7 @@ async function detalleOrden(id) {
   <div class="page-head"><div><a href="#/service" class="small muted">← Service</a><h1>${tipoOrden(o).nombre} #${o.numero} ${pill(o.estado)}${respuestaPresu(o)}</h1></div>
     <div class="actions"><button class="btn" id="imp">${cerrada ? 'Imprimir comprobante de entrega' : 'Imprimir comprobante'}</button>${cerrada ? '<button class="btn danger" id="anular-entrega">Anular entrega</button>' : '<button class="btn ok" id="entregar">Entregar y cobrar</button>'}</div></div>
   <div class="card card-pad" style="margin-bottom:1rem">${stepper(o.estado, o.tipo)}</div>
+  ${esArmado ? '<div class="card card-pad" id="armador" style="margin-bottom:1rem"></div>' : ''}
   <div class="split">
     <div class="grid">
       <div class="card card-pad"><h2>${esArmado ? 'Cliente' : 'Equipo y cliente'}</h2>
@@ -1572,8 +1573,158 @@ async function detalleOrden(id) {
     $$('[data-desc]').forEach(inp => inp.onchange = () => { if (inp.value.trim()) { items[+inp.dataset.desc].descripcion = inp.value.trim(); saveItems(); } });
     $$('[data-d]').forEach(b => b.onclick = () => { items.splice(+b.dataset.d, 1); saveItems(); });
   };
-  const saveItems = () => run(async () => { await store.guardarItemsOrden(id, items); paintItems(); });
+  let alGuardarItems = () => {};   // el armador se engancha acá para repintarse
+  const saveItems = () => run(async () => { await store.guardarItemsOrden(id, items); paintItems(); alGuardarItems(); });
   pintarPresRef(); paintItems();
+  // ---------- Armador de PC (solo en "Equipo nuevo") ----------
+  // Cada componente es un ítem de la orden con "componente" = tipo. Se elige de tus productos o del catálogo de Elit
+  // (si es de Elit y no lo tenías, se agrega a Productos sin publicarlo en la tienda).
+  if (esArmado) {
+    const elitProds = await store.elitProductos().catch(() => []);
+    const elitPorId = new Map(elitProds.map(e => [e.id, e]));
+    const prodDe = pid => productos.find(p => p.id === pid);
+    const stockElit = p => p?.elit_id ? +(elitPorId.get(p.elit_id)?.stock_total ?? 0) : null;
+    const pillStock = (n, falta) => `<span class="pill ${n <= 0 ? 'red' : n < falta ? 'amber' : 'green'}">${n}</span>`;
+    const pintarArmador = () => {
+      const comp = items.filter(i => i.componente);
+      const costo = comp.reduce((s, i) => s + i.cantidad * (+prodDe(i.producto_id)?.precio_costo || 0), 0);
+      const precio = comp.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
+      const otros = items.filter(i => !i.componente).reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
+      $('#armador').innerHTML = `<h2>Armado del equipo <span class="small muted" style="font-weight:400">— componentes de tus productos o del catálogo de Elit</span></h2>
+        <div class="tbl-wrap"><table class="tbl"><thead><tr><th style="width:150px">Componente</th><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Stock local</th><th class="num">Stock Elit</th><th class="num">Subtotal</th><th></th></tr></thead><tbody>
+        ${ARMADO_SLOTS.map(sl => {
+          const del = items.map((i, k) => [i, k]).filter(([i]) => i.componente === sl.id);
+          const filas = del.map(([i, k], n) => { const p = prodDe(i.producto_id), se = stockElit(p);
+            return `<tr>${n === 0 ? `<td rowspan="${del.length}" class="small"><b>${sl.nombre}</b></td>` : ''}
+              <td>${esc(i.descripcion)}${p?.elit_id ? ' <span class="pill violet">Elit</span>' : ''}</td>
+              <td class="num" style="width:70px">${cerrada ? i.cantidad : `<input class="input" data-ac="${k}" value="${i.cantidad}">`}</td>
+              <td class="num" style="width:120px">${cerrada ? money(i.precio_unitario) : `<input class="input" data-ap="${k}" value="${i.precio_unitario}">`}</td>
+              <td class="num">${p ? pillStock(+p.stock, +i.cantidad) : '—'}</td><td class="num">${se == null ? '<span class="muted">—</span>' : pillStock(se, +i.cantidad)}</td>
+              <td class="num nowrap">${money(i.cantidad * i.precio_unitario)}</td>
+              <td class="nowrap">${cerrada ? '' : `<button class="x" data-ad="${k}" title="Quitar">×</button>`}</td></tr>`; }).join('');
+          const elegir = cerrada ? '' : `<button class="btn sm" data-elegir="${sl.id}">${del.length ? '+ Otro' : 'Elegir'}</button>`;
+          return filas ? filas + (elegir ? `<tr><td></td><td colspan="7" style="padding-top:0">${elegir}</td></tr>` : '')
+            : `<tr><td class="small"><b>${sl.nombre}</b></td><td colspan="6" class="muted small">— sin elegir —</td><td class="right">${elegir}</td></tr>`;
+        }).join('')}</tbody></table></div>
+        <div class="row" style="margin-top:.8rem;align-items:flex-start;flex-wrap:wrap">
+          <table class="tbl small" style="max-width:380px"><tbody>
+            <tr><td>Componentes (precio de venta)</td><td class="num nowrap">${money(precio)}</td></tr>
+            ${otros ? `<tr><td>Mano de obra y otros (Detalle final)</td><td class="num nowrap">${money(otros)}</td></tr>` : ''}
+            <tr><td><b>Total del equipo</b></td><td class="num nowrap"><b>${money(precio + otros)}</b></td></tr>
+            <tr><td class="muted">Tu costo de componentes · ganancia</td><td class="num nowrap muted">${money(costo)} · ${money(precio - costo)}${costo ? ` (${Math.round((precio / costo - 1) * 100)}%)` : ''}</td></tr>
+            ${o.presupuesto != null ? `<tr><td class="muted">Presupuesto pasado al cliente</td><td class="num nowrap muted">${money(o.presupuesto)}</td></tr>` : ''}</tbody></table>
+          ${cerrada ? '' : `<div style="display:flex;gap:.4rem;flex-wrap:wrap;flex:1 1 260px;justify-content:flex-end">
+            <button class="btn sm" id="ar-presu" ${precio + otros ? '' : 'disabled'}>Usar como presupuesto</button>
+            ${o.cliente.telefono ? `<button class="btn sm wa" id="ar-wa" ${precio + otros ? '' : 'disabled'}>Presupuesto por WhatsApp</button>` : ''}
+            <button class="btn sm primary" id="ar-pedir" ${comp.length ? '' : 'disabled'}>Pedir lo que falta</button></div>`}</div>
+        <p class="small muted" style="margin-top:.5rem">La mano de obra (armado, instalación de software) se agrega abajo, en el Detalle final, como concepto libre o servicio. Los componentes se descuentan del stock al entregar el equipo.</p>`;
+      if (cerrada) return;
+      $$('[data-ac]').forEach(inp => inp.onchange = () => { items[+inp.dataset.ac].cantidad = Math.max(1, +inp.value || 1); saveItems(); });
+      $$('[data-ap]').forEach(inp => inp.onchange = () => { items[+inp.dataset.ap].precio_unitario = Math.max(0, +inp.value || 0); saveItems(); });
+      $$('[data-ad]').forEach(b => b.onclick = () => { items.splice(+b.dataset.ad, 1); saveItems(); });
+      $$('[data-elegir]').forEach(b => b.onclick = () => elegirComponente(ARMADO_SLOTS.find(s => s.id === b.dataset.elegir)));
+      $('#ar-presu').onclick = () => run(async () => {
+        const total = totalItems();
+        await store.actualizarOrden(id, { presupuesto: total, presupuesto_aprobado: null }); o.presupuesto = total;
+        toast(`Presupuesto: ${money(total)}`); pintarArmador();
+      });
+      const arWa = $('#ar-wa'); if (arWa) arWa.onclick = () => {
+        const nombreSlot = c => ARMADO_SLOTS.find(s => s.id === c)?.nombre;
+        const lineas = items.map(i => `• ${i.componente ? `${nombreSlot(i.componente)}: ` : ''}${+i.cantidad !== 1 ? `${i.cantidad} × ` : ''}${i.descripcion} — ${money(i.cantidad * i.precio_unitario)}`);
+        const texto = `Hola ${primerNombre(o.cliente)}! Te pasamos el presupuesto de tu equipo (${tipoOrden(o).nombre} #${o.numero}):\n\n${lineas.join('\n')}\n\n*Total: ${money(totalItems())}*\n\nPodés seguirlo acá: ${url}`;
+        window.open(waLink(o.cliente.telefono, texto), '_blank', 'noopener');
+      };
+      $('#ar-pedir').onclick = () => run(() => pedirFaltantes());
+    };
+
+    // Elegir un componente: busca en tus productos y en el catálogo de Elit (los de Elit que no tenés se agregan al elegirlos)
+    const elegirComponente = sl => {
+      const m = modal(`Elegir: ${sl.nombre}`, `
+        <div class="row" style="align-items:center;margin-bottom:.6rem">
+          <div class="search" style="flex:3"><input class="input" id="ec-q" placeholder="Buscar por nombre, marca o código"></div>
+          <label class="small" style="display:flex;gap:.35rem;align-items:center;flex:0 0 auto"><input type="checkbox" id="ec-tipo" checked> Solo ${esc(sl.nombre.toLowerCase())}</label>
+          <label class="small" style="display:flex;gap:.35rem;align-items:center;flex:0 0 auto"><input type="checkbox" id="ec-stock"> Con stock</label></div>
+        <div id="ec-res"></div>`, '<button class="btn" data-close>Cerrar</button>', { wide: true });
+      const delTipo = (...t) => { const s = norm(t.join(' ')); return sl.claves.some(k => s.includes(k)); };
+      const candidatos = () => {
+        const q = $('#ec-q', m.el).value.trim(), tipo = $('#ec-tipo', m.el).checked, conStock = $('#ec-stock', m.el).checked;
+        const locales = productos.filter(p => !p.es_servicio && p.activo !== false).map(p => {
+          const e = p.elit_id ? elitPorId.get(p.elit_id) : null;
+          return { p, e, nombre: p.nombre, marca: p.marca, cat: cats.find(c => c.id === p.categoria_id)?.nombre || '', local: +p.stock, elit: e ? +e.stock_total : null, costo: +p.precio_costo, precio: +p.precio_venta };
+        });
+        const enGs = new Set(productos.map(p => p.elit_id).filter(Boolean));
+        const deElit = elitProds.filter(e => !enGs.has(e.id)).map(e => ({ e, nombre: e.nombre, marca: e.marca, cat: `${e.categoria} ${e.sub_categoria}`, local: null, elit: +e.stock_total,
+          costo: +e.costo_ars, precio: precioPorMargen(+e.costo_ars, 30) }));
+        return [...locales, ...deElit].filter(x => (!tipo || delTipo(x.nombre, x.cat)) && (!conStock || x.local > 0 || x.elit > 0)
+            && (!q || matches(q, x.nombre, x.marca, x.cat, x.p?.codigo_barras, x.e?.codigo_producto)))
+          .sort((a, b) => ((b.local > 0) - (a.local > 0)) || ((b.elit > 0) - (a.elit > 0)) || a.nombre.localeCompare(b.nombre)).slice(0, 80);
+      };
+      const pintar = () => {
+        const l = candidatos();
+        $('#ec-res', m.el).innerHTML = l.length ? `<div class="tbl-wrap" style="max-height:min(420px, calc(94vh - 300px));overflow:auto"><table class="tbl"><thead><tr><th>Producto</th><th class="num">Stock local</th><th class="num">Stock Elit</th><th class="num">Tu costo</th><th class="num">Precio</th><th></th></tr></thead><tbody>
+          ${l.map((x, k) => `<tr><td>${esc(x.nombre)} ${x.p ? '' : '<span class="pill violet" title="Del catálogo de Elit; al elegirlo se agrega a tus productos (sin publicarlo en la tienda)">Elit</span>'}<div class="small muted">${esc([x.marca, x.cat].filter(Boolean).join(' · '))}</div></td>
+            <td class="num">${x.local == null ? '<span class="muted">—</span>' : pillStock(x.local, 1)}</td><td class="num">${x.elit == null ? '<span class="muted">—</span>' : pillStock(x.elit, 1)}</td>
+            <td class="num nowrap muted">${money(x.costo)}</td><td class="num nowrap"><b>${x.p ? money(x.precio) : '<span class="muted small">según margen</span>'}</b></td>
+            <td><button class="btn sm primary" data-k="${k}">Elegir</button></td></tr>`).join('')}</tbody></table></div>
+          ${l.length === 80 ? '<p class="small muted">Se muestran los primeros 80: escribí algo más específico para achicar la lista.</p>' : ''}`
+          : `<p class="muted">No hay productos con ese criterio.${$('#ec-tipo', m.el).checked ? ' Probá destildar "Solo …".' : ''}</p>`;
+        $$('[data-k]', m.el).forEach(b => b.onclick = () => run(async () => {
+          const x = l[+b.dataset.k];
+          let p = x.p;
+          if (!p) {   // de Elit y no lo tenías: se agrega a Productos (sin publicar)
+            b.disabled = true; b.textContent = 'Agregando…';
+            await store.elitAgregar([x.e.id], false);
+            p = (await store.productos()).find(y => y.elit_id === x.e.id);
+            if (!p) throw new Error('No se pudo agregar el producto de Elit');
+            productos.push(p);
+          }
+          items.push({ producto_id: p.id, descripcion: p.nombre, cantidad: 1, precio_unitario: +p.precio_venta, componente: sl.id });
+          m.close(); saveItems();
+        }));
+      };
+      let t; $('#ec-q', m.el).oninput = () => { clearTimeout(t); t = setTimeout(pintar, 150); };
+      $('#ec-tipo', m.el).onchange = pintar; $('#ec-stock', m.el).onchange = pintar;
+      pintar(); setTimeout(() => $('#ec-q', m.el).focus(), 40);
+    };
+
+    // Pedir lo que falta: lo que no alcanza con el stock del local va a un pedido por proveedor (Elit si es de Elit y tiene stock)
+    const pedirFaltantes = async () => {
+      const [proveedores, cfgElit] = await Promise.all([store.proveedores(), store.elitConfig().catch(() => null)]);
+      const provElit = cfgElit?.proveedor_id ?? proveedores.find(p => esProveedorElit(p.nombre))?.id ?? null;
+      const necesita = new Map();
+      items.filter(i => i.producto_id && i.componente).forEach(i => necesita.set(i.producto_id, (necesita.get(i.producto_id) || 0) + +i.cantidad));
+      const filas = [...necesita].map(([pid, cant]) => { const p = prodDe(pid), falta = Math.max(cant - Math.max(+p.stock, 0), 0), se = stockElit(p);
+        return { p, cant, falta, prov: p.elit_id && se > 0 && provElit ? provElit : (p.proveedor_id ?? null) }; }).filter(f => f.falta > 0);
+      if (!filas.length) return toast('Tenés stock de todos los componentes: no hace falta pedir nada');
+      const opc = sel => `<option value="">— Sin proveedor —</option>${proveedores.map(p => `<option value="${p.id}" ${p.id === sel ? 'selected' : ''}>${esc(p.nombre)}</option>`).join('')}`;
+      const m = modal('Pedir lo que falta para el armado', `
+        <p class="small muted" style="margin-bottom:.6rem">Se arma un pedido por proveedor con lo que no alcanza con tu stock. Los pedidos a <b>ELIT</b> después se mandan al carrito de Elit desde Pedidos.</p>
+        <table class="tbl"><thead><tr><th>Producto</th><th class="num">Necesita</th><th class="num">Tenés</th><th class="num">Falta</th><th style="width:200px">Pedir a</th></tr></thead><tbody>
+          ${filas.map((f, k) => `<tr><td>${esc(f.p.nombre)}${f.p.elit_id ? ` <span class="small muted">· Elit tiene ${stockElit(f.p)}</span>` : ''}</td><td class="num">${f.cant}</td><td class="num">${Math.max(+f.p.stock, 0)}</td><td class="num"><b>${f.falta}</b></td>
+            <td><select class="input" data-pv="${k}">${opc(f.prov)}</select></td></tr>`).join('')}</tbody></table>
+        <p class="small muted" style="margin-top:.6rem">Ojo: el stock del local no queda apartado para este armado; si se vende antes, al entregar puede faltar.</p>`,
+        `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Crear pedido(s)</button>`, { wide: true });
+      $('#ok', m.el).onclick = () => run(async () => {
+        filas.forEach((f, k) => { const v = $(`[data-pv="${k}"]`, m.el).value; f.prov = v ? +v : null; });
+        const grupos = new Map();
+        filas.forEach(f => { const g = grupos.get(f.prov) || []; g.push(f); grupos.set(f.prov, g); });
+        const creados = [];
+        for (const [prov, fs] of grupos) {
+          const pid = await store.crearPedido({ proveedor_id: prov, notas: `Para ${tipoOrden(o).nombre.toLowerCase()} #${o.numero} · ${o.cliente.nombre}`,
+            items: fs.map(f => ({ producto_id: f.p.id, descripcion: f.p.nombre, codigo: f.p.codigo_barras || '', cantidad: f.falta })) });
+          creados.push([prov, pid]);
+        }
+        m.close();
+        const nombreProv = pid => proveedores.find(p => p.id === pid)?.nombre || 'sin proveedor';
+        const peds = await Promise.all(creados.map(([, pid]) => store.pedido(pid)));
+        modal('Pedidos creados', `<p style="margin-bottom:.6rem">Se crearon ${peds.length} pedido(s):</p><ul class="small" style="margin-left:1.2rem">
+          ${peds.map((p, k) => `<li><a href="#/pedidos/${p.id}" data-close>Pedido N° ${p.numero}</a> · ${esc(nombreProv(creados[k][0]))} (${p.items.length} producto(s))</li>`).join('')}</ul>
+          <p class="small muted" style="margin-top:.6rem">Los de ELIT se mandan al carrito con "🛒 Enviar al carrito de Elit" dentro del pedido.</p>`, '<button class="btn primary" data-close>Listo</button>');
+      });
+    };
+    alGuardarItems = pintarArmador;
+    pintarArmador();
+  }
   if (!cerrada) {   // agregar ítems solo mientras la orden está abierta
   // concepto libre (sin producto): ej. un trabajo que no está cargado como servicio estándar
   const agregarLibre = () => {
@@ -1672,6 +1823,22 @@ async function detalleOrden(id) {
     $('#p', m.el).onclick = () => { m.close(); imprimirOrden(o, n, url); };
   }
 }
+
+// Armador de PC: tipos de componente. claves filtran los productos de cada tipo (nombre o categoría, sin tildes)
+const ARMADO_SLOTS = [
+  { id: 'cpu', nombre: 'Procesador', claves: ['procesador', 'cpu', 'ryzen', 'core i', 'intel core', 'athlon', 'pentium', 'celeron'] },
+  { id: 'mother', nombre: 'Motherboard', claves: ['mother', 'placa madre', 'motherboard', 'mainboard'] },
+  { id: 'ram', nombre: 'Memoria RAM', claves: ['memoria', 'ram', 'ddr'] },
+  { id: 'disco', nombre: 'Almacenamiento', claves: ['ssd', 'disco', 'nvme', 'm.2', 'hdd', 'almacenamiento'] },
+  { id: 'gpu', nombre: 'Placa de video', claves: ['placa de video', 'video', 'gpu', 'geforce', 'radeon', 'rtx', 'gtx'] },
+  { id: 'fuente', nombre: 'Fuente', claves: ['fuente', 'psu'] },
+  { id: 'gabinete', nombre: 'Gabinete', claves: ['gabinete', 'case', 'chasis'] },
+  { id: 'cooler', nombre: 'Refrigeración', claves: ['cooler', 'refrigeracion', 'disipador', 'water', 'ventilador', 'pasta termica'] },
+  { id: 'monitor', nombre: 'Monitor', claves: ['monitor'] },
+  { id: 'perifericos', nombre: 'Teclado, mouse y otros', claves: ['teclado', 'mouse', 'combo', 'auricular', 'parlante', 'webcam', 'pad'] },
+  { id: 'software', nombre: 'Software y licencias', claves: ['windows', 'office', 'licencia', 'antivirus', 'software'] },
+  { id: 'otros', nombre: 'Otros', claves: [''] },
+];
 
 // Comprobante de ingreso: original para el cliente (con QR) y duplicado para el local
 // (con contraseña y firma), como dos impresiones separadas para que la ticketera

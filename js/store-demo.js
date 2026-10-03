@@ -256,7 +256,7 @@ export const store = {
   },
   async elitConfig() { return clone(db.elit_config || { id: 1, margen_defecto: 30, ultima_sync: null }); },
   async guardarElitConfig(cambios) { db.elit_config = { ...(db.elit_config || { margen_defecto: 30 }), ...cambios }; save(); },
-  async elitAgregar(ids) {
+  async elitAgregar(ids, publicar = true) {
     const cfg = db.elit_config || { margen_defecto: 30 };
     let prov = db.proveedores.find(p => p.nombre.trim().toUpperCase() === 'ELIT');
     if (!prov) prov = insert('proveedores', { nombre: 'ELIT', cuit: '', telefono: '', email: '', notas: '' });
@@ -267,7 +267,7 @@ export const store = {
       const existe = e.ean && db.productos.find(p => p.activo && p.codigo_barras === e.ean);
       if (existe) { Object.assign(existe, { elit_id: e.id, elit_sigue_costo: false }); vinculados++; continue; }   // ya lo tenías: solo referencia
       await this.guardarProducto({ nombre: e.nombre, marca: e.marca, codigo_barras: e.ean || '', categoria_id: c.categoria_id ?? null, proveedor_id: prov.id,
-        precio_costo: e.costo_ars, precio_venta: 0, margen: c.margen ?? cfg.margen_defecto, foto_url: e.imagen, elit_id: e.id, elit_sigue_costo: true, stock_minimo: 0, publicado: true });
+        precio_costo: e.costo_ars, precio_venta: 0, margen: c.margen ?? cfg.margen_defecto, foto_url: e.imagen, elit_id: e.id, elit_sigue_costo: true, stock_minimo: 0, publicado: publicar });
       creados++;
     }
     save(); return { creados, vinculados, ya_estaban: ya };
@@ -606,7 +606,7 @@ export const store = {
   },
   async guardarItemsOrden(id, items) {
     db.orden_items = db.orden_items.filter(i => i.orden_id !== +id);
-    items.forEach(i => insert('orden_items', { orden_id: +id, producto_id: i.producto_id || null, descripcion: i.descripcion, cantidad: +i.cantidad, precio_unitario: +i.precio_unitario }));
+    items.forEach(i => insert('orden_items', { orden_id: +id, producto_id: i.producto_id || null, descripcion: i.descripcion, cantidad: +i.cantidad, precio_unitario: +i.precio_unitario, componente: i.componente || '' }));
     save();
   },
   async anticiposOrden(ordenId) { return clone(db.cc_movimientos.filter(m => m.orden_id === +ordenId && m.tipo === 'pago')); },

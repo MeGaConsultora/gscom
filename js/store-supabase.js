@@ -134,7 +134,8 @@ export const store = {
   async guardarElitCategorias(filas) { if (filas.length) await q(sb.from('elit_categorias').upsert(filas)); },
   async elitConfig() { return q(sb.from('elit_config').select('*').eq('id', 1).maybeSingle()); },
   async guardarElitConfig(cambios) { await q(sb.from('elit_config').update(cambios).eq('id', 1)); },
-  async elitAgregar(ids) { return q(sb.rpc('elit_agregar', { p_ids: ids })); },
+  // publicar: false = se agrega a Productos sin mostrarlo en la tienda (ej: un componente usado en un armado)
+  async elitAgregar(ids, publicar = true) { return q(sb.rpc('elit_agregar', { p_ids: ids, p_publicar: publicar })); },
 
   // Usuarios (solo admin)
   async usuarios() { return q(sb.rpc('usuarios_listar')); },
@@ -259,7 +260,7 @@ export const store = {
   async guardarItemsOrden(id, items) {
     await q(sb.from('orden_items').delete().eq('orden_id', id));
     if (items.length) await q(sb.from('orden_items').insert(items.map(i => ({
-      orden_id: id, producto_id: i.producto_id || null, descripcion: i.descripcion, cantidad: +i.cantidad, precio_unitario: +i.precio_unitario,
+      orden_id: id, producto_id: i.producto_id || null, descripcion: i.descripcion, cantidad: +i.cantidad, precio_unitario: +i.precio_unitario, componente: i.componente || '',
     }))));
   },
   // pagado: cuánto paga ahora (lo que falta queda en su cuenta corriente); si no viene, paga todo
