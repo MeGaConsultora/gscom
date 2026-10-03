@@ -3740,9 +3740,19 @@ ROUTES.ajustes = async () => {
   </div>
   ${store.modo !== 'demo' ? `<div class="card card-pad" style="margin-top:1rem"><h2>Usuarios</h2>
     <p class="small muted" style="margin-bottom:.8rem"><b>Administrador</b>: todo el sistema. <b>Tienda</b>: solo la pestaña Tienda (fotos, descripciones, destacados, aviso y textos); no ve costos, caja, clientes ni cuentas.</p>
-    <div id="usuarios" class="small muted">Cargando…</div></div>` : ''}
+    <div id="usuarios" class="small muted">Cargando…</div></div>
+  <div class="card card-pad" style="margin-top:1rem"><h2>Esta computadora</h2>
+    <p class="small muted" style="margin-bottom:.8rem">Se guarda solo en este navegador: cada PC puede tener su propio tiempo (por ejemplo, 1 hora en el local y "Nunca" en tu casa).</p>
+    <div class="field" style="max-width:320px"><label>Cerrar la sesión tras un tiempo sin uso</label><select class="input" id="inactividad">
+      ${INACTIVIDAD_OPC.map(([v, l]) => `<option value="${v}" ${v === minutosInactividad() ? 'selected' : ''}>${l}</option>`).join('')}</select></div>
+    <p class="small muted">Un minuto antes avisa. Si estabas cargando una venta, se recupera al volver a entrar.</p></div>` : ''}
   </div>`;
   if ($('#usuarios')) pintarUsuarios();
+  if ($('#inactividad')) $('#inactividad').onchange = e => {
+    try { localStorage.setItem(INACT_KEY, e.target.value); } catch {}
+    marcarActividad(true);
+    toast(+e.target.value ? `En esta computadora la sesión se cierra tras ${INACTIVIDAD_OPC.find(([v]) => v === +e.target.value)[1].toLowerCase()} sin uso` : 'En esta computadora la sesión no se cierra sola');
+  };
   $('#guardar').onclick = () => run(async () => { const f = formData(view()); f.garantia_dias = +f.garantia_dias || 0; f.redondeo_precios = +f.redondeo_precios || 0; await store.guardarNegocio(f); toast('Datos guardados'); });
   if ($('#reset')) $('#reset').onclick = () => { if (confirm('¿Borrar todo lo cargado y volver a los datos de ejemplo?')) { resetDemo(); cart = carritoVacio(); prodSel.clear(); toast('Datos restablecidos'); go('#/inicio'); } };
 };
@@ -3767,6 +3777,58 @@ async function pintarUsuarios() {
 }
 
 // =====================================================================
+// Cierre de sesión por inactividad (solo con Supabase)
+// El tiempo es por computadora (localStorage). La última actividad se comparte
+// entre las pestañas de GScom del mismo navegador: usar una mantiene viva la otra.
+// =====================================================================
+const INACT_KEY = 'gscom_inactividad_min', ACT_KEY = 'gscom_ultima_actividad', VENTA_KEY = 'gscom_venta_pendiente', CIERRE_KEY = 'gscom_cierre_inactividad';
+const INACTIVIDAD_OPC = [[15, '15 minutos'], [30, '30 minutos'], [60, '1 hora'], [120, '2 horas'], [240, '4 horas'], [0, 'Nunca']];
+const minutosInactividad = () => { try { const v = localStorage.getItem(INACT_KEY); return v == null ? 60 : +v; } catch { return 60; } };
+const ultimaActividad = () => { try { return +localStorage.getItem(ACT_KEY) || 0; } catch { return 0; } };
+const sesionVencida = () => { const min = minutosInactividad(), ult = ultimaActividad(); return !!min && !!ult && Date.now() - ult > min * 60000; };
+let marcaActividad = 0, avisoInactividad = null, usuarioSesion = '';
+function marcarActividad(forzar = false) {
+  const t = Date.now();
+  if (!forzar && !avisoInactividad && t - marcaActividad < 5000) return;   // no escribir en cada movimiento del mouse
+  marcaActividad = t;
+  try { localStorage.setItem(ACT_KEY, String(t)); } catch {}
+  if (avisoInactividad) { avisoInactividad.remove(); avisoInactividad = null; }
+}
+async function cerrarPorInactividad() {
+  if (avisoInactividad) { avisoInactividad.remove(); avisoInactividad = null; }
+  try {   // la venta en curso se guarda para retomarla al volver a entrar (solo la recupera el mismo usuario)
+    if (cart.items.length) localStorage.setItem(VENTA_KEY, JSON.stringify({ usuario: usuarioSesion, cart }));
+    localStorage.removeItem(ACT_KEY);
+    sessionStorage.setItem(CIERRE_KEY, '1');
+  } catch {}
+  await store.logout().catch(() => {});
+  location.reload();
+}
+let vigilando = false;
+function vigilarInactividad() {
+  if (vigilando) return; vigilando = true;
+  ['pointerdown', 'pointermove', 'keydown', 'wheel', 'touchstart'].forEach(ev => window.addEventListener(ev, () => marcarActividad(), { passive: true, capture: true }));
+  marcarActividad(true);
+  setInterval(() => {
+    const min = minutosInactividad();
+    if (!min) return;
+    const resta = (ultimaActividad() || Date.now()) + min * 60000 - Date.now();
+    if (resta <= 0) return cerrarPorInactividad();
+    if (resta > 60000) return;
+    if (!avisoInactividad) {
+      avisoInactividad = document.createElement('div');
+      avisoInactividad.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,.45);display:grid;place-items:center;padding:16px';
+      avisoInactividad.innerHTML = `<div class="card card-pad" style="max-width:360px;text-align:center"><h2>¿Seguís ahí?</h2>
+        <p style="margin:.6rem 0 1rem">Por inactividad, la sesión se cierra en <b id="inact-seg"></b> segundos.</p>
+        <button class="btn primary" id="inact-seguir">Seguir conectado</button></div>`;
+      document.body.appendChild(avisoInactividad);
+      $('#inact-seguir', avisoInactividad).onclick = () => marcarActividad(true);
+    }
+    $('#inact-seg', avisoInactividad).textContent = Math.ceil(resta / 1000);
+  }, 1000);
+}
+
+// =====================================================================
 // Login (solo con Supabase)
 // =====================================================================
 function pantallaLogin(mensaje = '') {
@@ -3786,7 +3848,7 @@ function pantallaLogin(mensaje = '') {
     const f = formData($('#login'));
     const btn = $('#login button'); btn.disabled = true; btn.textContent = 'Ingresando…';
     const ok = await run(async () => { await store.login(f.email, f.password); return true; });
-    if (ok) iniciar(); else { btn.disabled = false; btn.textContent = 'Ingresar'; }
+    if (ok) { marcarActividad(true); iniciar(); } else { btn.disabled = false; btn.textContent = 'Ingresar'; }
   };
 }
 
@@ -3801,8 +3863,14 @@ async function iniciar() {
     $('#demo-badge').hidden = false;
     ROL = (await store.perfil()).rol;
   } else {
-    const perfil = await store.perfil().catch(() => null);
-    if (!perfil) return pantallaLogin();
+    let perfil = await store.perfil().catch(() => null);
+    // quedó abierta (PC suspendida, navegador cerrado) más tiempo que el permitido sin uso: se cierra
+    if (perfil && sesionVencida()) { await store.logout().catch(() => {}); try { sessionStorage.setItem(CIERRE_KEY, '1'); localStorage.removeItem(ACT_KEY); } catch {} perfil = null; }
+    if (!perfil) {
+      let porInactividad = false;
+      try { porInactividad = !!sessionStorage.getItem(CIERRE_KEY); sessionStorage.removeItem(CIERRE_KEY); } catch {}
+      return pantallaLogin(porInactividad ? 'La sesión se cerró por inactividad. Volvé a ingresar.' : '');
+    }
     if (!perfil.activo) {
       await store.logout();
       return pantallaLogin(`El usuario ${perfil.email} todavía no está activado. Pedile a un administrador que lo active.`);
@@ -3811,6 +3879,13 @@ async function iniciar() {
     u.hidden = false; u.textContent = `${(perfil.nombre || perfil.email).split(' ')[0]} · Salir`;
     u.onclick = async () => { if (confirm('¿Cerrar sesión?')) { await store.logout(); location.reload(); } };
     ROL = perfil.rol || 'admin';
+    usuarioSesion = perfil.email || '';
+    vigilarInactividad();
+    try {   // venta que quedó a medias cuando se cerró la sesión por inactividad
+      const v = JSON.parse(localStorage.getItem(VENTA_KEY) || 'null');
+      localStorage.removeItem(VENTA_KEY);
+      if (v && v.usuario === usuarioSesion && v.cart?.items?.length && !cart.items.length) { cart = v.cart; setTimeout(() => toast('Se recuperó la venta que estabas cargando (en Vender)'), 600); }
+    } catch {}
   }
   pintarNav();
   $('nav.tabs').hidden = false;
