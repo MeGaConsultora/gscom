@@ -35,6 +35,32 @@ const redondearPrecio = (v, m) => +m > 0 ? Math.ceil(Math.round(v * 100) / 100 /
 const precioPorMargen = (costo, margen, redondeo = 1) => redondearPrecio(costo * (1 + margen / 100), redondeo);
 const margenDe = p => +p.precio_costo > 0 && +p.precio_venta > 0 ? (p.precio_venta / p.precio_costo - 1) * 100 : null;
 
+// Ordenar tablas tocando el encabezado: los <th data-orden="clave"> se vuelven clickeables
+// (otro clic en la misma columna invierte el sentido). orden = { col, dir: 'asc' | 'desc' }
+function ordenarPor(lista, orden, claves) {
+  const f = orden.col && claves[orden.col];
+  if (!f) return lista;
+  const d = orden.dir === 'desc' ? -1 : 1, vacio = v => v == null || v === '' || Number.isNaN(v);
+  return [...lista].sort((a, b) => {
+    const x = f(a), y = f(b);
+    if (vacio(x) || vacio(y)) return vacio(x) - vacio(y);   // los vacíos siempre al final
+    return d * (typeof x === 'string' ? x.localeCompare(y, 'es', { numeric: true, sensitivity: 'base' }) : x - y);
+  });
+}
+function encabezadosOrdenables(raiz, orden, alCambiar) {
+  $$('th[data-orden]', raiz).forEach(th => {
+    const activa = orden.col === th.dataset.orden;
+    th.style.cursor = 'pointer'; th.style.userSelect = 'none'; th.style.whiteSpace = 'nowrap';
+    th.title = activa ? 'Tocá para invertir el orden' : 'Ordenar por esta columna';
+    th.querySelector('.orden-flecha')?.remove();
+    th.insertAdjacentHTML('beforeend', `<span class="orden-flecha" style="opacity:${activa ? 1 : .3}"> ${activa && orden.dir === 'desc' ? '▼' : activa ? '▲' : '↕'}</span>`);
+    th.onclick = () => {
+      if (activa) orden.dir = orden.dir === 'asc' ? 'desc' : 'asc'; else { orden.col = th.dataset.orden; orden.dir = 'asc'; }
+      alCambiar();
+    };
+  });
+}
+
 // Búsqueda de productos: por nombre, marca, categoría, descripción o código.
 // Orden: código exacto → nombre que empieza con lo buscado → nombre que lo contiene → resto;
 // con stockPrimero, dentro de cada grupo van primero los que tienen stock.
@@ -982,8 +1008,8 @@ ROUTES.elit = async () => {
   <div class="chips" id="filtros"></div>
   <div class="actions" id="acciones-sel" hidden style="margin-bottom:.8rem;align-items:center"><span class="small" id="nsel"></span><button class="btn sm primary" id="agregar">Agregar a mis productos</button>
     <button class="btn sm" id="sel-todos" hidden></button><button class="btn sm" id="sel-ninguno">Quitar selección</button></div>
-  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" id="all"></th><th style="width:52px"></th><th>Producto</th><th>Categoría</th><th class="num">Stock Elit</th>
-    <th class="num">Tu costo</th><th class="num">Margen</th><th class="num">Precio de venta</th><th>En GScom</th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th style="width:32px"><input type="checkbox" id="all"></th><th style="width:52px"></th><th data-orden="nombre">Producto</th><th data-orden="cat">Categoría</th><th class="num" data-orden="stock">Stock Elit</th>
+    <th class="num" data-orden="costo">Tu costo</th><th class="num" data-orden="margen">Margen</th><th class="num" data-orden="precio">Precio de venta</th><th data-orden="engs">En GScom</th></tr></thead><tbody id="rows"></tbody></table></div>
   <div style="text-align:center;margin:1rem 0"><button class="btn" id="mas" hidden>Mostrar más</button></div>`
   : `<div class="card card-pad"><h2>Primeros pasos</h2><ol class="small" style="margin:.5rem 0 0 1.2rem;line-height:1.8">
       <li>Tocá <b>Probar conexión</b> para verificar que la función de Supabase y tus credenciales de Elit funcionan.</li>
@@ -993,10 +1019,16 @@ ROUTES.elit = async () => {
   const precioVenta = e => e.costo_ars > 0 ? precioPorMargen(+e.costo_ars, margenCat(e), 1) : null;
   const FILTROS = { todos: ['Todos', () => true], stock: ['Con stock en Elit', e => +e.stock_total > 0], agregados: ['Ya en mis productos', e => enGscom.has(e.id)],
     nuevos: ['No agregados', e => !enGscom.has(e.id)], coinciden: ['Coinciden con uno mío (EAN)', e => !enGscom.has(e.id) && e.ean && porEan.has(e.ean)] };
-  const lista = () => elitProds.filter(e => FILTROS[filtro][1](e) && (!cat || e.categoria === cat)
-    && (String(e.id) === texto || String(e.codigo_producto) === texto || mismoCodigo(e.ean, texto) || matches(texto, e.nombre, e.marca, e.codigo_alfa, e.sub_categoria)));
+  const orden = { col: '', dir: 'asc' };
+  const margenFila = e => { const g = enGscom.get(e.id); return g ? (g.margen != null ? +g.margen : null) : +margenCat(e); };
+  const ORDEN = { nombre: e => e.nombre || '', cat: e => `${e.categoria || ''} ${e.sub_categoria || ''}`, stock: e => +e.stock_total || 0, costo: e => +e.costo_ars || null,
+    margen: margenFila, precio: e => { const g = enGscom.get(e.id); return +(g ? g.precio_venta : precioVenta(e)) || null; },
+    engs: e => { const g = enGscom.get(e.id); return g ? (g.elit_sigue_costo ? 0 : 1) : e.ean && porEan.has(e.ean) ? 2 : 3; } };
+  const lista = () => ordenarPor(elitProds.filter(e => FILTROS[filtro][1](e) && (!cat || e.categoria === cat)
+    && (String(e.id) === texto || String(e.codigo_producto) === texto || mismoCodigo(e.ean, texto) || matches(texto, e.nombre, e.marca, e.codigo_alfa, e.sub_categoria))), orden, ORDEN);
   function pintar() {
     if (!elitProds.length) return;
+    encabezadosOrdenables(view(), orden, () => { mostrar = 150; pintar(); });
     $('#filtros').innerHTML = Object.entries(FILTROS).map(([k, [l, f]]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-f="${k}">${l}<span class="count">${elitProds.filter(f).length}</span></button>`).join('');
     $$('#filtros .chip').forEach(b => b.onclick = () => { filtro = b.dataset.f; mostrar = 150; pintar(); });
     const l = lista();
@@ -1677,13 +1709,18 @@ async function detalleOrden(id) {
         const enGs = new Set(productos.map(p => p.elit_id).filter(Boolean));
         const deElit = elitProds.filter(e => !enGs.has(e.id)).map(e => ({ e, nombre: e.nombre, marca: e.marca, cat: `${e.categoria} ${e.sub_categoria}`, local: null, elit: +e.stock_total,
           costo: +e.costo_ars, precio: +e.costo_ars > 0 ? precioPorMargen(+e.costo_ars, margenElit(e), redondeo) : 0 }));
-        return [...locales, ...deElit].filter(x => (!tipo || delTipo(x.nombre, x.cat)) && (!conStock || x.local > 0 || x.elit > 0)
+        const l = [...locales, ...deElit].filter(x => (!tipo || delTipo(x.nombre, x.cat)) && (!conStock || x.local > 0 || x.elit > 0)
             && (!q || matches(q, x.nombre, x.marca, x.cat, x.p?.codigo_barras, x.e?.codigo_producto)))
-          .sort((a, b) => ((b.local > 0) - (a.local > 0)) || ((b.elit > 0) - (a.elit > 0)) || a.nombre.localeCompare(b.nombre)).slice(0, 80);
+          .sort((a, b) => ((b.local > 0) - (a.local > 0)) || ((b.elit > 0) - (a.elit > 0)) || a.nombre.localeCompare(b.nombre));
+        return ordenarPor(l, orden, ORDEN).slice(0, 80);
       };
+      // sin columna elegida: primero lo que tenés en stock, después lo que tiene Elit
+      const orden = { col: '', dir: 'asc' };
+      const ORDEN = { nombre: x => x.nombre || '', local: x => x.local, elit: x => x.elit, costo: x => x.costo || null,
+        margen: x => x.costo > 0 && x.precio > 0 ? x.precio / x.costo : null, precio: x => x.precio || null };
       const pintar = () => {
         const l = candidatos();
-        $('#ec-res', m.el).innerHTML = l.length ? `<div class="tbl-wrap" style="max-height:min(420px, calc(94vh - 300px));overflow:auto"><table class="tbl"><thead><tr><th>Producto</th><th class="num">Stock local</th><th class="num">Stock Elit</th><th class="num">Tu costo</th><th class="num">Margen</th><th class="num">Precio</th><th></th></tr></thead><tbody>
+        $('#ec-res', m.el).innerHTML = l.length ? `<div class="tbl-wrap" style="max-height:min(420px, calc(94vh - 300px));overflow:auto"><table class="tbl"><thead><tr><th data-orden="nombre">Producto</th><th class="num" data-orden="local">Stock local</th><th class="num" data-orden="elit">Stock Elit</th><th class="num" data-orden="costo">Tu costo</th><th class="num" data-orden="margen">Margen</th><th class="num" data-orden="precio">Precio</th><th></th></tr></thead><tbody>
           ${l.map((x, k) => `<tr><td>${esc(x.nombre)} ${x.p ? (x.p.elit_id ? '<span class="pill violet" title="Ya está en tus productos, vinculado al catálogo de Elit">Elit</span>' : '')
               : '<span class="pill violet" title="Solo está en el catálogo de Elit; al elegirlo se agrega a tus productos (sin publicarlo en la tienda)">Elit · nuevo</span>'}<div class="small muted">${esc([x.marca, x.cat].filter(Boolean).join(' · '))}</div></td>
             <td class="num">${x.local == null ? '<span class="muted">—</span>' : pillStock(x.local, 1)}</td><td class="num">${x.elit == null ? '<span class="muted">—</span>' : pillStock(x.elit, 1)}</td>
@@ -1692,6 +1729,7 @@ async function detalleOrden(id) {
             <td><button class="btn sm primary" data-k="${k}">Elegir</button></td></tr>`).join('')}</tbody></table></div>
           ${l.length === 80 ? '<p class="small muted">Se muestran los primeros 80: escribí algo más específico para achicar la lista.</p>' : ''}`
           : `<p class="muted">No hay productos con ese criterio.${$('#ec-tipo', m.el).checked ? ' Probá destildar "Solo …".' : ''}</p>`;
+        encabezadosOrdenables(m.el, orden, pintar);
         $$('[data-k]', m.el).forEach(b => b.onclick = () => run(async () => {
           const x = l[+b.dataset.k];
           let p = x.p;
