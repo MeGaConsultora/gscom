@@ -135,6 +135,8 @@ export const store = {
   async elitConfig() { return q(sb.from('elit_config').select('*').eq('id', 1).maybeSingle()); },
   async guardarElitConfig(cambios) { await q(sb.from('elit_config').update(cambios).eq('id', 1)); },
   // publicar: false = se agrega a Productos sin mostrarlo en la tienda (ej: un componente usado en un armado)
+  // Fotos desde los catálogos de proveedores (hoy Elit): solo a productos sin foto. aplicar=false solo cuenta
+  async completarFotosProveedores(aplicar = false) { return q(sb.rpc('completar_fotos_proveedores', { p_aplicar: aplicar })); },
   async elitAgregar(ids, publicar = true) { return q(sb.rpc('elit_agregar', { p_ids: ids, p_publicar: publicar })); },
 
   // Usuarios (solo admin)

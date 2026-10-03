@@ -256,6 +256,18 @@ export const store = {
   },
   async elitConfig() { return clone(db.elit_config || { id: 1, margen_defecto: 30, ultima_sync: null }); },
   async guardarElitConfig(cambios) { db.elit_config = { ...(db.elit_config || { margen_defecto: 30 }), ...cambios }; save(); },
+  async completarFotosProveedores(aplicar = false) {
+    const limpio = s => String(s || '').trim();
+    const cands = db.productos.filter(p => p.activo && !p.foto_url).map(p => {
+      const ok = e => e.activo && limpio(e.imagen);
+      const e = (db.elit_productos || []).find(x => ok(x) && x.id === p.elit_id) || (limpio(p.codigo_barras) && (db.elit_productos || []).find(x => ok(x) && limpio(x.ean) === limpio(p.codigo_barras)));
+      return e ? [p, e.imagen] : null;
+    }).filter(Boolean);
+    const por_origen = cands.length ? { Elit: cands.length } : {};
+    if (!aplicar) return { encontradas: cands.length, por_origen };
+    cands.forEach(([p, img]) => { p.foto_url = img; }); save();
+    return { completadas: cands.length, por_origen };
+  },
   async elitAgregar(ids, publicar = true) {
     const cfg = db.elit_config || { margen_defecto: 30 };
     let prov = db.proveedores.find(p => p.nombre.trim().toUpperCase() === 'ELIT');

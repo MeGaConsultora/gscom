@@ -3548,11 +3548,26 @@ ROUTES.tienda = async ({ q }) => {
   const datos = await store.tiendaAdmin();
   view().innerHTML = `
   <div class="page-head"><div><h1>Tienda online</h1><div class="small muted">Lo que ven los clientes en la tienda</div></div>
-    <div class="actions"><button class="btn" id="compartir">Compartir link / QR</button><a class="btn" href="tienda.html" target="_blank" rel="noopener">Ver tienda ↗</a></div></div>
+    <div class="actions">${soloTienda() ? '' : '<button class="btn" id="fotos-prov" title="Pone la foto del catálogo del proveedor a los productos que no tienen foto. No reemplaza las que ya tienen">📷 Completar fotos desde proveedores</button>'}<button class="btn" id="compartir">Compartir link / QR</button><a class="btn" href="tienda.html" target="_blank" rel="noopener">Ver tienda ↗</a></div></div>
   <div class="chips"><button class="chip ${vista === 'productos' ? 'active' : ''}" data-v="">Productos</button><button class="chip ${vista === 'config' ? 'active' : ''}" data-v="config">Aviso, textos y categorías</button></div>
   <div id="tienda-cuerpo"></div>`;
   $$('[data-v]').forEach(b => b.onclick = () => go(b.dataset.v ? '#/tienda?v=config' : '#/tienda'));
   $('#compartir').onclick = compartirTienda;
+  const fp = $('#fotos-prov');
+  if (fp) fp.onclick = () => run(async () => {
+    const r = await store.completarFotosProveedores(false);
+    const origen = Object.entries(r.por_origen || {}).map(([k, v]) => `${k}: ${v}`).join(' · ');
+    if (!r.encontradas) return toast('No hay fotos para completar: los productos sin foto no figuran (o no tienen foto) en los catálogos de tus proveedores');
+    const m = modal('Completar fotos desde proveedores', `
+      <p>Se encontró foto para <b>${r.encontradas}</b> producto(s) que hoy no tienen${origen ? ` (${esc(origen)})` : ''}.</p>
+      <p class="small muted" style="margin-top:.6rem">Se buscan por vínculo con el catálogo del proveedor o por código de barras. <b>Las fotos que ya cargaste no se tocan.</b>
+      Las imágenes quedan enlazadas al sitio del proveedor; si alguna deja de existir, subí una tuya desde acá. De ahora en más esto también se hace solo con cada actualización nocturna del catálogo.</p>`,
+      `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Completar ${r.encontradas} foto(s)</button>`);
+    $('#ok', m.el).onclick = () => run(async () => {
+      const x = await store.completarFotosProveedores(true);
+      m.close(); toast(`${x.completadas} foto(s) completadas`); render();
+    });
+  });
   (vista === 'config' ? tiendaConfig : tiendaProductos)(datos);
 };
 
