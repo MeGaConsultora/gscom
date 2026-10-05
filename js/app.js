@@ -2136,6 +2136,7 @@ function editarMovCajaModal(mv) {
 // =====================================================================
 // FICHERO (cuentas corrientes de clientes)
 // =====================================================================
+let ordenFichero = { col: '', dir: 'asc' };   // se conserva al entrar y volver de una cuenta
 ROUTES.fichero = async ({ id }) => {
   if (id) return cuentaCliente(+id);
   const saldos = await store.ccSaldos();
@@ -2151,10 +2152,13 @@ ROUTES.fichero = async ({ id }) => {
     <div class="card kpi"><div class="label">Saldos a favor del cliente</div><div class="value">${money(-aFavor.reduce((s, d) => s + +d.saldo, 0))}</div><div class="sub">${aFavor.length} cliente(s)</div></div>
   </div>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar cliente"></div></div>
-  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Cliente</th><th>Teléfono</th><th>Debe desde</th><th>Último movimiento</th><th class="num">Saldo</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th data-orden="nombre">Cliente</th><th data-orden="tel">Teléfono</th><th data-orden="desde">Debe desde</th><th data-orden="ultimo">Último movimiento</th><th class="num" data-orden="saldo">Saldo</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>
   <p class="small muted" style="margin-top:.8rem">Incluye a quienes deben, tienen saldo a favor, o están marcados como "Cliente de cuenta corriente" aunque estén al día. Las ventas y los services entregados con forma de pago "Cuenta corriente" se cargan acá automáticamente.</p>`;
   const paint = t => {
-    const l = [...deudores, ...aFavor, ...alDia].filter(d => matches(t, d.nombre, d.telefono));
+    const fecha = f => f ? new Date(f).getTime() : null;
+    const l = ordenarPor([...deudores, ...aFavor, ...alDia].filter(d => matches(t, d.nombre, d.telefono)), ordenFichero, {
+      nombre: d => d.nombre || '', tel: d => d.telefono || '', desde: d => d.saldo > 0.009 ? fecha(d.deuda_desde) : null, ultimo: d => fecha(d.ultimo_movimiento), saldo: d => +d.saldo });
+    encabezadosOrdenables(view(), ordenFichero, () => paint($('#buscar').value));
     $('#rows').innerHTML = l.map(d => `<tr class="click" data-href="#/fichero/${d.cliente_id}"><td><b>${esc(d.nombre)}</b></td><td>${esc(d.telefono)}</td>
       <td>${d.saldo > 0.009 ? `${fdate(d.deuda_desde)} <span class="small muted">(${daysSince(d.deuda_desde)} d)</span>` : '—'}</td><td>${fdate(d.ultimo_movimiento)}</td>
       <td class="num"><b style="color:${d.saldo > 0.009 ? 'var(--bad)' : d.saldo < -0.009 ? 'var(--ok)' : 'inherit'}">${money(d.saldo)}</b></td>
