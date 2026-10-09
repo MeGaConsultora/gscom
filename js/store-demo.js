@@ -622,6 +622,22 @@ export const store = {
     save();
   },
   async anticiposOrden(ordenId) { return clone(db.cc_movimientos.filter(m => m.orden_id === +ordenId && m.tipo === 'pago')); },
+  // Presupuestos del armador guardados tal cual se generaron (la más nueva primero)
+  async presupuestosOrden(ordenId) {
+    return clone((db.orden_presupuestos || []).filter(p => p.orden_id === +ordenId).sort((a, b) => b.version - a.version));
+  },
+  async guardarPresupuestoOrden(ordenId, { items, total, foto_url = '' }) {
+    db.orden_presupuestos = db.orden_presupuestos || [];
+    const previos = await this.presupuestosOrden(ordenId), ultimo = previos[0];
+    if (ultimo && +ultimo.total === +total && (ultimo.foto_url || '') === foto_url && JSON.stringify(ultimo.items) === JSON.stringify(items)) return ultimo;
+    const r = insert('orden_presupuestos', { orden_id: +ordenId, version: (ultimo?.version || 0) + 1, fecha: now(), items: clone(items), total: +total, foto_url });
+    save(); return clone(r);
+  },
+  async subirFotoOrden(ordenId, blob) {
+    const url = await new Promise((ok, mal) => { const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = mal; r.readAsDataURL(blob); });
+    byId('ordenes_servicio', ordenId).foto_url = url; save(); return url;
+  },
+  async quitarFotoOrden(ordenId) { byId('ordenes_servicio', ordenId).foto_url = ''; save(); },
   async registrarAnticipoOrden(id, { monto, forma_pago, nota = '' }) {
     if (!(+monto > 0)) throw new Error('El monto del anticipo tiene que ser mayor a cero');
     if (forma_pago === CC) throw new Error('Un anticipo es plata ya cobrada: elegí cómo lo pagó (efectivo, transferencia, etc.)');

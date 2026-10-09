@@ -272,6 +272,29 @@ export const store = {
   async anticiposOrden(ordenId) {
     return q(sb.from('cc_movimientos').select('*').eq('orden_id', ordenId).eq('tipo', 'pago').order('fecha'));
   },
+  // Presupuestos del armador guardados tal cual se generaron (la más nueva primero)
+  async presupuestosOrden(ordenId) {
+    return q(sb.from('orden_presupuestos').select('*').eq('orden_id', ordenId).order('version', { ascending: false }));
+  },
+  // Guarda una copia congelada; si es idéntica a la última (mismos ítems, total y foto) devuelve esa en vez de duplicarla
+  async guardarPresupuestoOrden(ordenId, { items, total, foto_url = '' }) {
+    const previos = await this.presupuestosOrden(ordenId);
+    const ultimo = previos[0];
+    // (jsonb no conserva el orden de las claves: se compara con claves ordenadas)
+    const canon = x => JSON.stringify(x, (k, v) => v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => a < b ? -1 : 1)) : v);
+    if (ultimo && +ultimo.total === +total && (ultimo.foto_url || '') === foto_url && canon(ultimo.items) === canon(items)) return ultimo;
+    return q(sb.from('orden_presupuestos').insert({ orden_id: ordenId, version: (ultimo?.version || 0) + 1, items, total, foto_url }).select().single());
+  },
+  // Foto del equipo de la orden (ya achicada a JPEG). No borra la anterior: puede estar en presupuestos guardados.
+  async subirFotoOrden(ordenId, blob) {
+    const ruta = `ordenes/${ordenId}-${Date.now()}.jpg`;
+    const { error } = await sb.storage.from('productos').upload(ruta, blob, { contentType: 'image/jpeg', upsert: true });
+    if (error) throw new Error(`No se pudo subir la foto: ${error.message}`);
+    const url = sb.storage.from('productos').getPublicUrl(ruta).data.publicUrl;
+    await q(sb.from('ordenes_servicio').update({ foto_url: url }).eq('id', ordenId));
+    return url;
+  },
+  async quitarFotoOrden(ordenId) { await q(sb.from('ordenes_servicio').update({ foto_url: '' }).eq('id', ordenId)); },
   async registrarAnticipoOrden(id, { monto, forma_pago, nota = '' }) {
     return q(sb.rpc('registrar_anticipo_orden', { p_orden_id: id, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }));
   },

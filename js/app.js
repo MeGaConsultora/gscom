@@ -812,7 +812,7 @@ function deshacerAjuste(aj, sinPreguntar = false) {
 const FOTO_HTML = `<div style="display:flex;gap:1rem;align-items:center"><div id="foto-prev"></div>
   <div><input type="file" accept="image/*" id="foto-file" hidden><button class="btn sm" id="foto-subir">Subir / cambiar foto</button> <button class="btn sm danger" id="foto-quitar">Quitar foto</button>
   <div class="small muted" style="margin-top:.3rem">Desde el celular podés sacarla con la cámara. Se achica sola antes de subirse.</div></div></div>`;
-function controlFoto(el, id, foto = '', alCambiar = () => {}) {
+function controlFoto(el, id, foto = '', alCambiar = () => {}, acc = { subir: (i, b, ant) => store.subirFotoProducto(i, b, ant), quitar: (i, ant) => store.quitarFotoProducto(i, ant) }) {
   const pintarFoto = () => {
     $('#foto-prev', el).innerHTML = foto ? `<img src="${esc(foto)}" alt="" style="width:96px;height:96px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px">`
       : '<div style="width:96px;height:96px;border:1px dashed var(--line);border-radius:8px;display:grid;place-items:center" class="small muted">Sin foto</div>';
@@ -823,9 +823,9 @@ function controlFoto(el, id, foto = '', alCambiar = () => {}) {
   $('#foto-file', el).onchange = ev => run(async () => {
     const archivo = ev.target.files[0]; if (!archivo) return;
     $('#foto-prev', el).innerHTML = '<div class="small muted" style="width:96px">Subiendo…</div>';
-    try { foto = await store.subirFotoProducto(id, await achicarImagen(archivo), foto); alCambiar(foto); toast('Foto cargada'); } finally { pintarFoto(); ev.target.value = ''; }
+    try { foto = await acc.subir(id, await achicarImagen(archivo), foto); alCambiar(foto); toast('Foto cargada'); } finally { pintarFoto(); ev.target.value = ''; }
   });
-  $('#foto-quitar', el).onclick = () => run(async () => { if (!confirm('¿Quitar la foto?')) return; await store.quitarFotoProducto(id, foto); foto = ''; alCambiar(''); pintarFoto(); });
+  $('#foto-quitar', el).onclick = () => run(async () => { if (!confirm('¿Quitar la foto?')) return; await acc.quitar(id, foto); foto = ''; alCambiar(''); pintarFoto(); });
 }
 
 // opts.prefill: datos iniciales · opts.onSaved(producto): en vez de refrescar la pantalla · opts.sinStock: ocultar "Stock inicial"
@@ -1612,7 +1612,22 @@ async function detalleOrden(id) {
   // Cada componente es un ítem de la orden con "componente" = tipo. Se elige de tus productos o del catálogo de Elit
   // (si es de Elit y no lo tenías, se agrega a Productos sin publicarlo en la tienda).
   if (esArmado) {
-    const [elitProds, elitCats, elitCfg] = await Promise.all([store.elitProductos().catch(() => []), store.elitCategorias().catch(() => []), store.elitConfig().catch(() => null)]);
+    const [elitProds, elitCats, elitCfg, presupuestos] = await Promise.all([store.elitProductos().catch(() => []), store.elitCategorias().catch(() => []), store.elitConfig().catch(() => null),
+      store.presupuestosOrden(id).catch(() => [])]);
+    let presups = presupuestos;   // copias guardadas de los presupuestos generados (la más nueva primero)
+    // Guarda una copia congelada de lo que se está por generar (si es igual a la última, no duplica)
+    const generarPresupuesto = async () => {
+      const lista = items.map(i => ({ componente: i.componente || '', descripcion: i.descripcion, cantidad: +i.cantidad, precio_unitario: +i.precio_unitario }));
+      const p = await store.guardarPresupuestoOrden(id, { items: lista, total: totalItems(), foto_url: o.foto_url || '' });
+      presups = await store.presupuestosOrden(id);
+      return p;
+    };
+    const lineasWA = p => {
+      const nombreSlot = c => ARMADO_SLOTS.find(s => s.id === c)?.nombre;
+      return p.items.map(i => `• ${i.componente ? `${nombreSlot(i.componente)}: ` : ''}${+i.cantidad !== 1 ? `${i.cantidad} × ` : ''}${i.descripcion} — ${money(i.cantidad * i.precio_unitario)}`).join('\n');
+    };
+    const enviarWA = p => window.open(waLink(o.cliente.telefono,
+      `Hola ${primerNombre(o.cliente)}! Te pasamos el presupuesto de tu equipo (${tipoOrden(o).nombre} #${o.numero}${p.version > 1 ? `, versión ${p.version}` : ''}):\n\n${lineasWA(p)}\n\n*Total: ${money(p.total)}*\n\nPodés seguirlo acá: ${url}`), '_blank', 'noopener');
     const elitPorId = new Map(elitProds.map(e => [e.id, e]));
     const redondeo = n.redondeo_precios ?? 1;
     // margen con el que se agregaría un producto de Elit (el de su categoría o el por defecto), igual que elit_agregar()
@@ -1660,7 +1675,24 @@ async function detalleOrden(id) {
             <button class="btn sm" id="ar-pdf" ${precio + otros ? '' : 'disabled'} title="Se abre la impresión: elegí &quot;Guardar como PDF&quot; como impresora">Ver / guardar PDF</button>
             ${o.cliente.telefono ? `<button class="btn sm wa" id="ar-wa" ${precio + otros ? '' : 'disabled'}>Presupuesto por WhatsApp</button>` : ''}
             <button class="btn sm primary" id="ar-pedir" ${comp.length ? '' : 'disabled'}>Pedir lo que falta</button></div>`}</div>
+        <div style="display:flex;gap:1.5rem;flex-wrap:wrap;margin-top:1rem;padding-top:.8rem;border-top:1px solid var(--line)">
+          <div><div class="small muted" style="margin-bottom:.4rem"><b>Foto del equipo</b> · sale en el presupuesto en PDF</div><div id="ar-foto"></div></div>
+          <div style="flex:1 1 300px"><div class="small muted" style="margin-bottom:.4rem"><b>Presupuestos guardados</b> · se guarda uno cada vez que generás un PDF, lo mandás por WhatsApp o lo usás como presupuesto</div><div id="ar-versiones"></div></div></div>
         <p class="small muted" style="margin-top:.5rem">La mano de obra (armado, instalación de software) se agrega abajo, en el Detalle final, como concepto libre o servicio. Los componentes se descuentan del stock al entregar el equipo.</p>`;
+      // Foto del equipo (se sube al momento; una vez entregada la orden solo se ve)
+      if (cerrada) $('#ar-foto').innerHTML = o.foto_url ? `<img src="${esc(o.foto_url)}" alt="" style="width:96px;height:96px;object-fit:contain;background:#fff;border:1px solid var(--line);border-radius:8px">` : '<span class="small muted">Sin foto</span>';
+      else {
+        $('#ar-foto').innerHTML = FOTO_HTML;
+        controlFoto($('#ar-foto'), id, o.foto_url || '', url => { o.foto_url = url; },
+          { subir: (i, b) => store.subirFotoOrden(i, b), quitar: i => store.quitarFotoOrden(i) });
+      }
+      // Copias guardadas: se reimprimen / reenvían exactamente como salieron
+      $('#ar-versiones').innerHTML = presups.length ? `<table class="tbl small"><tbody>${presups.map(p => `<tr><td><b>v${p.version}</b></td><td class="nowrap">${fdatetime(p.fecha)}</td>
+        <td class="num nowrap">${money(p.total)}</td><td class="right nowrap"><button class="btn sm" data-pv-pdf="${p.version}">PDF</button>
+        ${o.cliente.telefono ? ` <button class="btn sm wa" data-pv-wa="${p.version}">WhatsApp</button>` : ''}</td></tr>`).join('')}</tbody></table>`
+        : '<span class="small muted">Todavía no se generó ningún presupuesto.</span>';
+      $$('[data-pv-pdf]').forEach(b => b.onclick = () => run(() => imprimirPresupuestoArmado(o, n, presups.find(p => p.version === +b.dataset.pvPdf))));
+      $$('[data-pv-wa]').forEach(b => b.onclick = () => enviarWA(presups.find(p => p.version === +b.dataset.pvWa)));
       if (cerrada) return;
       $$('[data-ac]').forEach(inp => inp.onchange = () => { items[+inp.dataset.ac].cantidad = Math.max(1, +inp.value || 1); saveItems(); });
       $$('[data-ap]').forEach(inp => inp.onchange = () => { items[+inp.dataset.ap].precio_unitario = Math.max(0, +inp.value || 0); saveItems(); });
@@ -1674,20 +1706,15 @@ async function detalleOrden(id) {
         comp.forEach(i => conMargen(i, mg)); saveItems();
         toast(`Margen ${mg}% aplicado${sinCosto ? ` (${sinCosto} sin costo cargado quedaron igual)` : ''}`);
       };
-      $('#ar-pdf').onclick = () => imprimirPresupuestoArmado(o, n, items);
+      $('#ar-pdf').onclick = () => run(async () => { const p = await generarPresupuesto(); pintarArmador(); await imprimirPresupuestoArmado(o, n, p); });
       $$('[data-ad]').forEach(b => b.onclick = () => { items.splice(+b.dataset.ad, 1); saveItems(); });
       $$('[data-elegir]').forEach(b => b.onclick = () => elegirComponente(ARMADO_SLOTS.find(s => s.id === b.dataset.elegir)));
       $('#ar-presu').onclick = () => run(async () => {
-        const total = totalItems();
-        await store.actualizarOrden(id, { presupuesto: total, presupuesto_aprobado: null }); o.presupuesto = total;
-        toast(`Presupuesto: ${money(total)}`); pintarArmador();
+        const p = await generarPresupuesto();
+        await store.actualizarOrden(id, { presupuesto: p.total, presupuesto_aprobado: null }); o.presupuesto = p.total;
+        toast(`Presupuesto: ${money(p.total)} (guardado como v${p.version})`); pintarArmador();
       });
-      const arWa = $('#ar-wa'); if (arWa) arWa.onclick = () => {
-        const nombreSlot = c => ARMADO_SLOTS.find(s => s.id === c)?.nombre;
-        const lineas = items.map(i => `• ${i.componente ? `${nombreSlot(i.componente)}: ` : ''}${+i.cantidad !== 1 ? `${i.cantidad} × ` : ''}${i.descripcion} — ${money(i.cantidad * i.precio_unitario)}`);
-        const texto = `Hola ${primerNombre(o.cliente)}! Te pasamos el presupuesto de tu equipo (${tipoOrden(o).nombre} #${o.numero}):\n\n${lineas.join('\n')}\n\n*Total: ${money(totalItems())}*\n\nPodés seguirlo acá: ${url}`;
-        window.open(waLink(o.cliente.telefono, texto), '_blank', 'noopener');
-      };
+      const arWa = $('#ar-wa'); if (arWa) arWa.onclick = () => run(async () => { const p = await generarPresupuesto(); pintarArmador(); enviarWA(p); });
       $('#ar-pedir').onclick = () => run(() => pedirFaltantes());
     };
 
@@ -1906,22 +1933,27 @@ const ARMADO_SLOTS = [
 // (con contraseña y firma), como dos impresiones separadas para que la ticketera
 // corte cada una — si fueran una sola, la tira sale entera y hay que cortarla a mano.
 // Presupuesto del armado en A4 (para guardarlo como PDF o mandarlo): componentes por tipo, mano de obra y total. Sin costos ni proveedores.
-function imprimirPresupuestoArmado(o, n, items) {
+// Imprime una copia guardada (pres = { version, fecha, items, total, foto_url }), tal cual se generó.
+async function imprimirPresupuestoArmado(o, n, pres) {
+  const { items, total } = pres;
   const nombreSlot = c => ARMADO_SLOTS.find(s => s.id === c)?.nombre || '';
   const orden = c => { const k = ARMADO_SLOTS.findIndex(s => s.id === c); return k < 0 ? 99 : k; };
   const comp = items.filter(i => i.componente).sort((a, b) => orden(a.componente) - orden(b.componente));
   const otros = items.filter(i => !i.componente);
-  const total = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
+  // la foto tiene que estar cargada antes de abrir la impresión (si no, sale en blanco); máx. 4 s
+  if (pres.foto_url) await new Promise(ok => { const im = new Image(); im.onload = im.onerror = ok; im.src = pres.foto_url; setTimeout(ok, 4000); });
   const fila = i => `<tr><td>${esc(nombreSlot(i.componente))}</td><td>${esc(i.descripcion)}</td><td class="num">${+i.cantidad}</td>
     <td class="num nowrap">${money(i.precio_unitario)}</td><td class="num nowrap">${money(i.cantidad * i.precio_unitario)}</td></tr>`;
   const contacto = [n.telefono && `Tel. ${esc(n.telefono)}`, n.whatsapp && `WhatsApp ${esc(n.whatsapp)}`, n.email && esc(n.email)].filter(Boolean).join(' · ');
   const titulo = document.title;
-  document.title = `Presupuesto ${o.numero} - ${o.cliente.nombre}`;   // nombre sugerido del PDF
+  document.title = `Presupuesto ${o.numero}${pres.version > 1 ? ` v${pres.version}` : ''} - ${o.cliente.nombre}`;   // nombre sugerido del PDF
   window.addEventListener('afterprint', function volver() { window.removeEventListener('afterprint', volver); document.title = titulo; });
   printHTML(`<div class="hoja-pedido">
-    <div class="ped-head"><b style="font-size:13pt">${esc(n.nombre)}</b><br>${esc(n.direccion)}${contacto ? `<br>${contacto}` : ''}</div>
-    <h1>Presupuesto · ${esc(tipoOrden(o).nombre)} N° ${o.numero}</h1>
-    <div class="ped-sub">Cliente: <b>${esc(o.cliente.nombre)}</b> · ${fdate(new Date().toISOString())}</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:6mm">
+      <div class="ped-head"><b style="font-size:13pt">${esc(n.nombre)}</b><br>${esc(n.direccion)}${contacto ? `<br>${contacto}` : ''}</div>
+      ${pres.foto_url ? `<img src="${esc(pres.foto_url)}" alt="" style="max-width:65mm;max-height:48mm;object-fit:contain;border:1px solid #ccc;border-radius:2mm">` : ''}</div>
+    <h1>Presupuesto · ${esc(tipoOrden(o).nombre)} N° ${o.numero}${pres.version > 1 ? ` (v${pres.version})` : ''}</h1>
+    <div class="ped-sub">Cliente: <b>${esc(o.cliente.nombre)}</b> · ${fdate(pres.fecha)}</div>
     ${o.falla_reportada ? `<div class="ped-sub">Pedido: ${esc(o.falla_reportada)}</div>` : ''}
     <table class="ped-tbl"><thead><tr><th style="width:30mm">Componente</th><th>Producto</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Subtotal</th></tr></thead><tbody>
       ${comp.map(fila).join('')}
