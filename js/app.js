@@ -1335,7 +1335,7 @@ async function fichaCliente(id) {
       ${eventos.length ? `<div class="timeline">${eventos.map(e => `<div class="tl-item ${e.tipo}"><div class="when">${fdatetime(e.fecha)}</div>${e.html}</div>`).join('')}</div>` : '<div class="empty">Sin movimientos todavía.</div>'}
     </div>
     <div class="grid">
-      <div class="card card-pad"><h2>Datos <button class="btn sm" id="editar">Editar</button></h2>
+      <div class="card card-pad"><h2>Datos <button class="btn sm" id="editar">Editar</button> <button class="btn sm danger" id="eliminar" title="Solo si nunca tuvo ventas, service, encargos ni cuenta corriente">Eliminar</button></h2>
         <dl class="kv"><dt>Teléfono</dt><dd>${esc(c.telefono) || '—'} ${c.telefono ? `<a class="small" target="_blank" rel="noopener" href="${waLink(c.telefono, `Hola ${primerNombre(c)}, te escribimos de GScom.`)}">WhatsApp</a>` : ''}</dd>
         <dt>DNI / CUIT</dt><dd>${esc(c.dni_cuit) || '—'}</dd><dt>Email</dt><dd>${esc(c.email) || '—'}</dd><dt>Dirección</dt><dd>${esc(c.direccion) || '—'}</dd>
         <dt>Condición IVA</dt><dd>${esc(c.condicion_iva) || CONDICIONES_IVA[0]}</dd>
@@ -1349,6 +1349,10 @@ async function fichaCliente(id) {
     </div>
   </div>`;
   $('#editar').onclick = () => clienteModal(c);
+  $('#eliminar').onclick = () => run(async () => {
+    if (!confirm(`¿Eliminar a ${c.nombre}?\n\nSolo se puede si nunca tuvo ventas, service, encargos ni movimientos de cuenta corriente (sirve para un cliente cargado por error).${equipos.length ? `\nSe borran también sus ${equipos.length} equipo(s) cargado(s).` : ''}\n\nNo se puede deshacer.`)) return;
+    await store.eliminarCliente(c.id); toast('Cliente eliminado'); go('#/clientes');
+  });
   $('#add-eq').onclick = () => equipoModal(c.id);
   $('#orden').onclick = () => nuevaOrdenModal(c.id);
   $$('[data-venta]').forEach(a => a.onclick = e => { e.preventDefault(); ventaModal(+a.dataset.venta); });

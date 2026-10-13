@@ -163,6 +163,8 @@ export const store = {
     return id ? q(sb.from('clientes').update(datos).eq('id', id).select().single())
               : q(sb.from('clientes').insert(datos).select().single());
   },
+  // Solo si nunca tuvo ventas, service, encargos ni cuenta corriente (si no, la base avisa qué tiene)
+  async eliminarCliente(id) { await q(sb.rpc('eliminar_cliente', { p_id: id })); },
   async equipos(clienteId) { return q(sb.from('equipos').select('*').eq('cliente_id', clienteId).order('created_at')); },
   async guardarEquipo(e) {
     const { id, ...datos } = e;

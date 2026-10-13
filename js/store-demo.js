@@ -323,6 +323,19 @@ export const store = {
     const r = insert('clientes', { apellido: '', nombres: '', dni_cuit: '', telefono: '', email: '', direccion: '', notas: '', condicion_iva: 'Consumidor Final', cuenta_corriente: false, created_at: now(), ...c });
     save(); return clone(r);
   },
+  async eliminarCliente(id) {
+    const c = byId('clientes', id); if (!c) throw new Error('El cliente no existe');
+    const tiene = [
+      [db.ventas.filter(v => v.cliente_id === c.id).length, 'venta(s)'],
+      [db.ordenes_servicio.filter(o => o.cliente_id === c.id).length, 'orden(es) de service'],
+      [(db.encargos || []).filter(e => e.cliente_id === c.id).length, 'encargo(s)/reserva(s)'],
+      [db.cc_movimientos.filter(m => m.cliente_id === c.id).length, 'movimiento(s) de cuenta corriente'],
+    ].filter(([n]) => n > 0).map(([n, t]) => `${n} ${t}`);
+    if (tiene.length) throw new Error(`No se puede eliminar a ${c.nombre}: tiene ${tiene.join(', ')} registrados. Un cliente con historial no se borra para no perder esos datos.`);
+    db.equipos = db.equipos.filter(e => e.cliente_id !== c.id);
+    db.clientes = db.clientes.filter(x => x.id !== c.id);
+    save();
+  },
   async equipos(clienteId) { return clone(db.equipos.filter(e => e.cliente_id === +clienteId)); },
   async guardarEquipo(e) {
     if (e.id) { Object.assign(byId('equipos', e.id), e); save(); return clone(byId('equipos', e.id)); }
