@@ -1268,6 +1268,62 @@ ROUTES.clientes = async ({ id }) => {
   paint('');
 };
 
+// ---------- Clientes parecidos: para no cargar al mismo cliente dos veces ----------
+const soloDigitos = s => String(s ?? '').replace(/\D/g, '');
+const palabrasNombre = (...partes) => norm(partes.join(' ')).replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+function distanciaTexto(a, b) {   // letras que hay que cambiar, agregar o sacar para pasar de una a otra
+  if (a === b) return 0;
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const cur = [i];
+    for (let j = 1; j <= b.length; j++) cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+    prev = cur;
+  }
+  return prev[b.length];
+}
+// Mismo DNI/CUIT, mismo teléfono (por los últimos 7 dígitos, el número local: no importa el 0, el 15 ni el código de área) o
+// nombre igual / con una letra de diferencia (también con apellido y nombre invertidos).
+function clientesParecidos(clientes, { apellido, nombres, telefono, dni_cuit }, excluirId = null) {
+  const dni = soloDigitos(dni_cuit), tel = soloDigitos(telefono).slice(-7);
+  const pal = palabrasNombre(apellido, nombres), a = pal.join(' '), b = [...pal].sort().join(' ');
+  const tolerancia = a.length >= 12 ? 2 : 1;
+  const res = [];
+  for (const c of clientes) {
+    if (c.id === excluirId) continue;
+    const motivos = [];
+    if (dni.length >= 6 && soloDigitos(c.dni_cuit) === dni) motivos.push('mismo DNI / CUIT');
+    if (tel.length === 7 && soloDigitos(c.telefono).slice(-7) === tel) motivos.push('mismo teléfono');
+    if (a.length >= 4) {   // con nombres muy cortos habría falsos avisos
+      const cp = palabrasNombre(c.nombre), d = Math.min(distanciaTexto(a, cp.join(' ')), distanciaTexto(b, [...cp].sort().join(' ')));
+      if (d === 0) motivos.push('mismo nombre'); else if (d <= tolerancia) motivos.push('nombre muy parecido');
+    }
+    if (motivos.length) res.push({ c, motivos });
+  }
+  return res.sort((x, y) => y.motivos.length - x.motivos.length);
+}
+// Muestra los parecidos y devuelve { usar: cliente } | 'crear' | null (volver). Si no hay ninguno, devuelve 'crear' sin preguntar.
+async function revisarClientesParecidos(datos, excluirId = null) {
+  const similares = clientesParecidos(await store.clientes(), datos, excluirId);
+  if (!similares.length) return 'crear';
+  const nuevo = excluirId == null;
+  return new Promise(ok => {
+    let listo = false;
+    const m = modal('¿Ya está cargado este cliente?', `
+      <p class="small muted" style="margin-bottom:.6rem">Hay clientes con datos parecidos. Si es la misma persona, conviene usar el que ya existe para no partir su historial en dos.</p>
+      ${similares.map((s, k) => `<div class="card card-pad" style="margin-bottom:.5rem;display:flex;gap:.8rem;align-items:center;justify-content:space-between;flex-wrap:wrap">
+        <div><b>${esc(s.c.nombre)}</b>${s.c.telefono ? ` · ${esc(s.c.telefono)}` : ''}${s.c.dni_cuit ? ` · ${esc(s.c.dni_cuit)}` : ''}
+          <div style="margin-top:.25rem">${s.motivos.map(t => `<span class="pill amber">${t}</span>`).join(' ')} <a class="small" href="#/clientes/${s.c.id}" target="_blank" rel="noopener">ver ficha</a></div></div>
+        ${nuevo ? `<button class="btn sm primary" data-usar="${k}">Usar este</button>` : ''}</div>`).join('')}`,
+      `<button class="btn" data-volver>Volver</button><button class="btn" data-seguir>${nuevo ? 'Crear igual' : 'Guardar igual'}</button>`);
+    const fin = v => { if (listo) return; listo = true; m.close(); ok(v); };
+    $$('[data-usar]', m.el).forEach(b => b.onclick = () => fin({ usar: similares[+b.dataset.usar].c }));
+    $('[data-seguir]', m.el).onclick = () => fin('crear');
+    $('[data-volver]', m.el).onclick = () => fin(null);
+    // cerrarlo con la X, Escape o un clic afuera también es "volver"
+    new MutationObserver((_, ob) => { if (!document.body.contains(m.el)) { ob.disconnect(); fin(null); } }).observe(document.body, { childList: true });
+  });
+}
+
 function clienteModal(c, onSaved) {
   const v = c || { apellido: '', nombres: '', telefono: '', dni_cuit: '', email: '', direccion: '', notas: '', condicion_iva: CONDICIONES_IVA[0] };
   const m = modal(c ? 'Editar cliente' : 'Nuevo cliente', `
@@ -1284,6 +1340,12 @@ function clienteModal(c, onSaved) {
   $('#ok', m.el).onclick = () => run(async () => {
     const f = formData(m.el);
     if (!f.apellido) return toast('El apellido (o razón social) es obligatorio', true);
+    // Cliente nuevo, o editado cambiando nombre / DNI / teléfono: avisa si ya hay uno parecido
+    const cambioDatos = !c || palabrasNombre(f.apellido, f.nombres).join(' ') !== palabrasNombre(c.nombre).join(' ')
+      || soloDigitos(f.dni_cuit) !== soloDigitos(c.dni_cuit) || soloDigitos(f.telefono) !== soloDigitos(c.telefono);
+    const dec = cambioDatos ? await revisarClientesParecidos(f, c?.id ?? null) : 'crear';
+    if (dec === null) return;
+    if (dec !== 'crear') { m.close(); toast('Se usó el cliente que ya estaba cargado'); return onSaved ? onSaved(dec.usar) : go(`#/clientes/${dec.usar.id}`); }
     const r = await store.guardarCliente({ ...(c ? { id: c.id } : {}), ...f });
     m.close(); toast('Cliente guardado'); onSaved ? onSaved(r) : render();
   });
@@ -1426,7 +1488,12 @@ async function nuevaOrdenModal(clienteId = null, tipo = 'reparacion') {
     if (f.cliente_id === '__nuevo' && !f.c_apellido) return toast('Completá el apellido del cliente nuevo', true);
     if (!f.falla_reportada) return toast(esArmado ? 'Describí las especificaciones' : 'Describí la falla reportada', true);
     let cid = +f.cliente_id;
-    if (f.cliente_id === '__nuevo') cid = (await store.guardarCliente({ apellido: f.c_apellido, nombres: f.c_nombres, telefono: f.c_telefono, dni_cuit: f.c_dni_cuit })).id;
+    if (f.cliente_id === '__nuevo') {
+      const datos = { apellido: f.c_apellido, nombres: f.c_nombres, telefono: f.c_telefono, dni_cuit: f.c_dni_cuit };
+      const dec = await revisarClientesParecidos(datos);   // si ya está cargado, se puede usar ese en vez de duplicarlo
+      if (dec === null) return;
+      cid = dec === 'crear' ? (await store.guardarCliente(datos)).id : dec.usar.id;
+    }
     let eid = null;
     if (!esArmado) {
       eid = +f.equipo_id;
@@ -2475,7 +2542,10 @@ async function cargoManualModal(clienteId = null) {
   if (cliSel) cliSel.onchange = () => {
     if (cliSel.value !== '__nuevo') return;
     cliSel.value = '';
-    clienteModal(null, c => { const o = new Option(c.nombre, c.id, true, true); cliSel.add(o, cliSel.options.length - 1); });
+    clienteModal(null, c => {
+      const ya = [...cliSel.options].find(o => o.value === String(c.id));   // si era uno que ya estaba cargado, no se repite
+      if (ya) cliSel.value = ya.value; else cliSel.add(new Option(c.nombre, c.id, true, true), cliSel.options.length - 1);
+    });
   };
   $('#ok', m.el).onclick = () => run(async () => {
     const cid = clienteId || +$('#cli', m.el).value, monto = +$('#monto', m.el).value, concepto = $('#concepto', m.el).value.trim();
@@ -3387,10 +3457,12 @@ async function nuevoEncargoModal() {
   const selCli = $('[name=cliente_id]', m.el);
   selCli.onchange = () => { $('#contacto', m.el).hidden = !!selCli.value; pintarAnt(); };
   $('#nuevo-cli', m.el).onclick = () => clienteModal(null, nc => {
-    clientes.push(nc);
-    const opt = document.createElement('option');
-    opt.value = nc.id; opt.textContent = nc.nombre + (nc.telefono ? ' — ' + nc.telefono : '');
-    selCli.appendChild(opt);
+    if (![...selCli.options].some(o => o.value === String(nc.id))) {   // si era uno que ya estaba cargado, no se repite
+      clientes.push(nc);
+      const opt = document.createElement('option');
+      opt.value = nc.id; opt.textContent = nc.nombre + (nc.telefono ? ' — ' + nc.telefono : '');
+      selCli.appendChild(opt);
+    }
     selCli.value = nc.id;
     selCli.dispatchEvent(new Event('change', { bubbles: true }));
   });
