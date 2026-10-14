@@ -1997,13 +1997,14 @@ async function detalleOrden(id) {
   if (ent) ent.onclick = () => {
     const tItems = totalItems();
     const sugerido = tItems || o.presupuesto || 0;
-    let forma = 'Efectivo', pagaEditado = false;
+    let forma = 'Efectivo', pagaEditado = false, comb = null;   // comb: [{ forma, monto, auto }] si paga con más de un medio
     const m = modal(`Entregar ${tipoOrden(o).nombre.toLowerCase()} #${o.numero}`, `
       <div class="field"><label>Total del trabajo</label><input class="input" type="number" step="any" min="0" id="tot" value="${sugerido}"></div>
       <p class="small muted" style="margin:-.4rem 0 .8rem">${tItems ? 'Sugerido: total del detalle final.' : o.presupuesto ? 'Sugerido: presupuesto.' : esArmado ? 'Cargá el total del trabajo.' : 'Poné 0 si no se cobra (garantía, sin reparación).'}</p>
       <table class="tbl small" style="margin-bottom:.8rem"><tbody id="cuentas-ent"></tbody></table>
       <div class="row" style="align-items:flex-end"><div class="field" style="flex:0 0 170px"><label>Paga ahora</label><input class="input" type="number" step="any" min="0" id="paga"></div>
-        <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div></div>
+        <div class="field"><label>Forma de pago</label><div class="pay-opts" id="ent-chips">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div>
+          <div id="ent-comb"></div><button class="linkbtn small" id="ent-combinar" style="margin-top:.4rem;padding:0">＋ Combinar dos medios de pago</button></div></div>
       <div class="small" style="margin:-.3rem 0 .9rem" id="saldo-restante"></div>
       <div class="field"><label>Mensaje final para el cliente (opcional)</label><input class="input" id="msg" placeholder="ej: Garantía de ${n.garantia_dias} días sobre el trabajo realizado."></div>
       <div class="field" id="nota-interna-box" hidden><label>Motivo interno de la entrega sin cobrar <span class="muted">(el cliente no lo ve)</span></label>
@@ -2018,7 +2019,11 @@ async function detalleOrden(id) {
     // Total − pagos a cuenta = saldo; de ese saldo, lo que no paga ahora queda en su cuenta corriente
     const cuentas = () => {
       const tot = +$('#tot', m.el).value || 0, saldo = Math.max(tot - anticipadoTotal, 0);
-      if (!pagaEditado) $('#paga', m.el).value = saldo;
+      if (comb) {   // con pago combinado, "Paga ahora" es la suma de los medios; el último se completa solo hasta el saldo (si no lo tocaste)
+        const ult = comb[comb.length - 1];
+        if (ult.auto) ult.monto = Math.max(Math.round((saldo - comb.slice(0, -1).reduce((s, p) => s + (+p.monto || 0), 0)) * 100) / 100, 0);
+        $('#paga', m.el).value = Math.round(comb.reduce((s, p) => s + (+p.monto || 0), 0) * 100) / 100;
+      } else if (!pagaEditado) $('#paga', m.el).value = saldo;
       const paga = Math.min(Math.max(+$('#paga', m.el).value || 0, 0), saldo);
       return { tot, saldo, paga, queda: saldo - paga };
     };
@@ -2027,26 +2032,53 @@ async function detalleOrden(id) {
       $('#cuentas-ent', m.el).innerHTML = `<tr><td>Total del trabajo</td><td class="num">${money(tot)}</td></tr>
         ${anticipadoTotal ? `<tr><td>Pagos a cuenta (anticipos)</td><td class="num">−${money(Math.min(anticipadoTotal, tot))}</td></tr>` : ''}
         <tr><td><b>Saldo</b></td><td class="num"><b>${money(saldo)}</b></td></tr>`;
-      $('#paga', m.el).disabled = !saldo;
+      $('#paga', m.el).disabled = !saldo || !!comb;
+      pintarComb();
       $('#saldo-restante', m.el).innerHTML = !saldo ? '<span class="muted">Nada más que cobrar.</span>'
         : +$('#paga', m.el).value > saldo + 0.009 ? `<span style="color:var(--bad)">No puede pagar más que el saldo (${money(saldo)}).</span>`
-        : queda > 0.009 ? `Paga ${money(paga)} ahora${paga ? ` (${forma.toLowerCase()})` : ''} y <b>quedan ${money(queda)} como deuda en su cuenta corriente</b> (Fichero).`
-        : `Paga el saldo completo ahora (${forma.toLowerCase()}).`;
+        : queda > 0.009 ? `Paga ${money(paga)} ahora${paga ? ` (${textoFormas().toLowerCase()})` : ''} y <b>quedan ${money(queda)} como deuda en su cuenta corriente</b> (Fichero).`
+        : `Paga el saldo completo ahora (${textoFormas().toLowerCase()}).`;
       $('#nota-interna-box', m.el).hidden = tot !== 0;
     };
+    const textoFormas = () => comb ? comb.map(p => p.forma).join(' + ') : forma;
+    function pintarComb() {
+      $('#ent-chips', m.el).hidden = !!comb; $('#ent-combinar', m.el).hidden = !!comb;
+      const box = $('#ent-comb', m.el);
+      if (!comb) { box.innerHTML = ''; return; }
+      if (box.contains(document.activeElement)) {   // mientras escribe un monto no se repinta: solo se actualiza el que se completa solo
+        comb.forEach((p, k) => { const i = $('[data-em="' + k + '"]', box); if (p.auto && i && i !== document.activeElement) i.value = p.monto; }); return;
+      }
+      box.innerHTML = comb.map((p, k) => `<div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.4rem">
+          <select class="input" data-ef="${k}" style="flex:1">${FORMAS_PAGO.map(f => `<option ${f === p.forma ? 'selected' : ''}>${f}</option>`).join('')}</select>
+          <input class="input" data-em="${k}" value="${p.monto ?? ''}" inputmode="decimal" placeholder="Monto" style="width:120px;text-align:right">
+          <button class="x" data-eq="${k}" title="Quitar este medio">×</button></div>`).join('')
+        + (comb.length < 3 ? '<button class="linkbtn small" id="ent-mas" style="padding:0">＋ Otro medio</button>' : '');
+      $$('[data-ef]', box).forEach(s => s.onchange = () => { comb[+s.dataset.ef].forma = s.value; pintarSaldo(); });
+      $$('[data-em]', box).forEach(inp => {
+        inp.onfocus = () => inp.select();
+        inp.oninput = () => { const p = comb[+inp.dataset.em]; p.monto = Math.max(0, +String(inp.value).replace(',', '.') || 0); p.auto = false; pintarSaldo(); };
+        inp.onchange = () => { inp.blur(); pintarSaldo(); };
+      });
+      $$('[data-eq]', box).forEach(b => b.onclick = () => { comb.splice(+b.dataset.eq, 1); if (comb.length < 2) { forma = comb[0]?.forma || forma; comb = null; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x.dataset.f === forma)); } pintarSaldo(); });
+      const mas = $('#ent-mas', box);
+      if (mas) mas.onclick = () => { comb.push({ forma: FORMAS_PAGO.find(f => !comb.some(p => p.forma === f)) || 'Efectivo', monto: 0, auto: true }); pintarSaldo(); };
+    }
+    $('#ent-combinar', m.el).onclick = () => { comb = [{ forma, monto: '', auto: false }, { forma: forma === 'Efectivo' ? 'Transferencia' : 'Efectivo', monto: 0, auto: true }]; pintarSaldo(); $('[data-em="0"]', m.el)?.focus(); };
     $('#tot', m.el).oninput = pintarSaldo;
     $('#paga', m.el).oninput = () => { pagaEditado = true; pintarSaldo(); };
-    $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarSaldo(); });
+    $$('#ent-chips .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarSaldo(); });
     pintarSaldo();
     $('#ok', m.el).onclick = () => run(async () => {
       const { tot, saldo, paga, queda } = cuentas();
       if (+$('#paga', m.el).value > saldo + 0.009) return toast(`No puede pagar más que el saldo (${money(saldo)})`, true);
+      const pagos = comb ? comb.filter(p => +p.monto > 0).map(p => ({ forma_pago: p.forma, monto: +p.monto })) : null;
+      if (pagos && new Set(pagos.map(p => p.forma_pago)).size < pagos.length) return toast('Elegiste dos veces el mismo medio de pago', true);
       if (queda > 0.009 && !confirm(`Quedan ${money(queda)} como deuda en la cuenta corriente de ${o.cliente.nombre}. ¿Confirmar la entrega?`)) return;
-      await store.entregarOrden(id, { total: tot, forma_pago: paga > 0 ? forma : CUENTA_CORRIENTE, pagado: paga,
+      await store.entregarOrden(id, { total: tot, forma_pago: paga > 0 ? textoFormas() : CUENTA_CORRIENTE, pagado: paga, pagos: pagos?.length ? pagos : null,
         comentario: $('#msg', m.el).value.trim(), notaInterna: $('#nota-interna', m.el).value.trim() });
       m.close(); render();
       const r = modal(esArmado ? 'Equipo nuevo entregado' : 'Reparación entregada', `<div class="empty" style="padding:1rem"><div class="total-box">${money(tot)}</div>
-          <div class="muted">${paga ? `Pagó ${money(paga)} (${esc(forma)})` : saldo ? 'No pagó al retirar' : 'Sin saldo a cobrar'}${queda > 0.009 ? ` · quedan ${money(queda)} en su cuenta corriente` : ''}</div></div>`,
+          <div class="muted">${paga ? `Pagó ${money(paga)} (${esc(comb ? comb.filter(p => +p.monto > 0).map(p => `${p.forma} ${money(p.monto)}`).join(' + ') : forma)})` : saldo ? 'No pagó al retirar' : 'Sin saldo a cobrar'}${queda > 0.009 ? ` · quedan ${money(queda)} en su cuenta corriente` : ''}</div></div>`,
         `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="imp2">Imprimir comprobante</button>`);
       $('#imp2', r.el).onclick = () => run(() => imprimirEntregaOrden(id, n));
     });
@@ -2175,7 +2207,7 @@ async function imprimirEntregaOrden(id, n) {
     <hr><table><tr><td class="big">TOTAL</td><td class="big" style="text-align:right">${money(total)}</td></tr></table>
     <table>
       ${anticipado ? `<tr><td>Pagos a cuenta</td><td style="text-align:right">-${money(Math.min(anticipado, total))}</td></tr>` : ''}
-      ${restante > 0 ? `<tr><td>Pagado al retirar${pagado ? ` (${esc(o.forma_pago_entrega)})` : ''}</td><td style="text-align:right">${money(pagado)}</td></tr>` : '<tr><td colspan="2">Nada más a cobrar</td></tr>'}
+      ${restante > 0 ? `<tr><td>Pagado al retirar${pagado && !o.pagos_entrega?.length ? ` (${esc(o.forma_pago_entrega)})` : ''}</td><td style="text-align:right">${money(pagado)}</td></tr>${(o.pagos_entrega || []).map(p => `<tr><td>&nbsp;&nbsp;${esc(p.forma_pago)}</td><td style="text-align:right">${money(p.monto)}</td></tr>`).join('')}` : '<tr><td colspan="2">Nada más a cobrar</td></tr>'}
       ${queda > 0.009 ? `<tr><td class="big">SALDO</td><td class="big" style="text-align:right">${money(queda)}</td></tr>` : ''}
     </table>${queda > 0.009 ? '<div>Queda en su cuenta corriente.</div>' : ''}<hr>
     ${comentario ? `<div>${esc(comentario)}</div><hr>` : ''}

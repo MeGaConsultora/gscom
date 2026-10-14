@@ -706,19 +706,27 @@ export const store = {
     save();
   },
   // pagado: cuánto paga ahora (lo que falta queda en su cuenta corriente); si no viene, paga todo
-  async entregarOrden(id, { total, forma_pago, comentario = '', notaInterna = '', pagado = null }) {
+  async entregarOrden(id, { total, forma_pago, comentario = '', notaInterna = '', pagado = null, pagos = null }) {
     const o = byId('ordenes_servicio', id);
     if (o.estado === 'entregado') throw new Error('La orden ya fue entregada');
     if (pagado != null && pagado < 0) throw new Error('El monto pagado no puede ser negativo');
     db.orden_items.filter(i => i.orden_id === o.id && i.producto_id).forEach(i => movStock(i.producto_id, -i.cantidad, 'service', { orden_id: o.id, nota: `Orden #${o.numero}` }));
     const anticipos = -db.cc_movimientos.filter(m => m.orden_id === o.id && m.tipo === 'pago' && !m.anulado).reduce((s, m) => s + m.monto, 0);
     const restante = Math.max(+total - anticipos, 0);
+    if (pagos?.length) {   // pago combinado (igual que entregar_orden en la base)
+      if (pagos.some(p => !p.forma_pago || p.forma_pago === CC || !(+p.monto > 0))) throw new Error('Cada medio de pago tiene que tener su forma (no cuenta corriente) y un monto mayor a 0');
+      const suma = pagos.reduce((s, p) => s + +p.monto, 0);
+      if (suma > restante + 0.01) throw new Error(`Los medios de pago suman ${suma} y el saldo a cobrar es ${restante}`);
+      if (pagos.length === 1) { forma_pago = pagos[0].forma_pago; pagado = suma; pagos = null; }
+      else { forma_pago = pagos.map(p => p.forma_pago).join(' + '); pagado = suma; pagos = pagos.map(p => ({ forma_pago: p.forma_pago, monto: +p.monto })); }
+    } else pagos = null;
     const pagadoAhora = forma_pago === CC ? 0 : Math.min(pagado == null ? restante : +pagado, restante);
     if (anticipos > 0) insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'cargo', monto: anticipos, concepto: `Service orden #${o.numero} (aplica anticipo)`, forma_pago: '', orden_id: o.id, anulado: false });
-    if (pagadoAhora > 0) insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Service orden #${o.numero}`, monto: pagadoAhora, forma_pago, orden_id: o.id });
+    if (pagos) pagos.forEach(p => insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Service orden #${o.numero}`, monto: p.monto, forma_pago: p.forma_pago, orden_id: o.id }));
+    else if (pagadoAhora > 0) insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Service orden #${o.numero}`, monto: pagadoAhora, forma_pago, orden_id: o.id });
     if (restante - pagadoAhora > 0) insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'cargo', monto: restante - pagadoAhora,
       concepto: `Service orden #${o.numero}${pagadoAhora > 0 ? ' (saldo)' : ''}`, forma_pago: '', orden_id: o.id, anulado: false });
-    o.total_cobrado = +total; o.forma_pago_entrega = forma_pago; o.pagado_entrega = pagadoAhora;
+    o.total_cobrado = +total; o.forma_pago_entrega = forma_pago; o.pagado_entrega = pagadoAhora; o.pagos_entrega = pagos;
     if (notaInterna.trim()) o.notas_internas = o.notas_internas ? `${o.notas_internas}\n${notaInterna.trim()}` : notaInterna.trim();
     await this.cambiarEstadoOrden(id, 'entregado', comentario);
   },
@@ -731,10 +739,11 @@ export const store = {
     const pagadoAhora = o.pagado_entrega ?? (o.forma_pago_entrega === CC ? 0 : restante);
     if (+o.total_cobrado > 0) {
       if (anticipos > 0) insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'ajuste', monto: -anticipos, concepto: `Anulación entrega orden #${o.numero}`, forma_pago: '', orden_id: o.id, anulado: false });
-      if (pagadoAhora > 0) insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Anulación cobro service orden #${o.numero}`, monto: pagadoAhora, forma_pago: o.forma_pago_entrega || 'Efectivo', orden_id: o.id });
+      if (o.pagos_entrega) o.pagos_entrega.forEach(p => insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Anulación cobro service orden #${o.numero}`, monto: p.monto, forma_pago: p.forma_pago, orden_id: o.id }));
+      else if (pagadoAhora > 0) insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Anulación cobro service orden #${o.numero}`, monto: pagadoAhora, forma_pago: o.forma_pago_entrega || 'Efectivo', orden_id: o.id });
       if (restante - pagadoAhora > 0) insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'ajuste', monto: -(restante - pagadoAhora), concepto: `Anulación entrega orden #${o.numero}`, forma_pago: '', orden_id: o.id, anulado: false });
     }
-    Object.assign(o, { total_cobrado: null, fecha_entrega: null, forma_pago_entrega: '', pagado_entrega: null });
+    Object.assign(o, { total_cobrado: null, fecha_entrega: null, forma_pago_entrega: '', pagado_entrega: null, pagos_entrega: null });
     await this.cambiarEstadoOrden(id, 'listo', 'Se anuló la entrega registrada por error.');
   },
 
