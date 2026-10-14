@@ -146,6 +146,8 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .scan-input { font-size: 1.15rem; padding: .8rem 1rem .8rem 2.3rem !important; }
 .cart-line { display: grid; grid-template-columns: minmax(0,1fr) 92px 110px 28px; gap: .6rem; align-items: center; padding: .6rem 0; border-bottom: 1px solid var(--line); }
 .cart-line .name { font-weight: 500; }
+.cart-line .precio-linea { width: 96px; padding: .2rem .45rem; font-size: .85rem; height: auto; }
+.linkbtn { border: 0; background: none; color: var(--accent); cursor: pointer; padding: 0 .2rem; font-size: .95rem; }
 .qty { display: flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .qty button { border: 0; background: #f5f6f8; width: 28px; height: 30px; cursor: pointer; }
 .qty input { width: 36px; border: 0; text-align: center; outline: none; }

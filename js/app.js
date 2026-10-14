@@ -381,11 +381,14 @@ ROUTES.vender = async ({ q }) => {
           <button class="btn" id="nuevo-cli" style="flex:0 0 auto" title="Nuevo cliente">+</button></div></div>
       <div class="field"><label>Forma de pago</label><div class="pay-opts" id="pagos">
         ${FORMAS_COBRO.map(f => `<button class="chip" data-f="${f}">${f}</button>`).join('')}</div></div>
-      <div class="field"><label>Descuento ($)</label><input class="input" id="desc" type="number" min="0" step="any" value="${cart.descuento || ''}" placeholder="0"></div>
+      <div class="field"><label>Descuento</label>
+        <div style="display:flex;gap:.4rem;align-items:center"><input class="input" id="desc" type="number" min="0" step="any" value="${cart.descValor || ''}" placeholder="0" style="flex:1">
+          <div class="pay-opts" id="desc-modo" style="flex:0 0 auto;flex-wrap:nowrap"><button class="chip" data-dm="monto" title="Descuento en pesos">$</button><button class="chip" data-dm="pct" title="Descuento en % sobre el subtotal">%</button></div></div></div>
       <div class="field"><label>Observaciones <span class="muted">(interno, no sale en el comprobante)</span></label>
         <input class="input" id="obs" value="${esc(cart.notas)}" placeholder="ej: Retiró Juan Pérez · Paga el viernes"></div>
       <hr style="border:0;border-top:1px solid var(--line);margin:.6rem 0 1rem">
       <div class="row small muted"><span>Subtotal</span><span class="right" id="subt"></span></div>
+      <div class="row small muted" id="desc-fila" hidden><span id="desc-lbl">Descuento</span><span class="right" id="desc-monto"></span></div>
       <div class="row" style="align-items:baseline;margin:.3rem 0 1rem"><span>Total</span><span class="right total-box" id="tot"></span></div>
       <button class="btn ok lg block" id="cobrar">${cart.editId ? 'Guardar cambios' : 'Cobrar'}</button>
     </div>
@@ -397,13 +400,18 @@ ROUTES.vender = async ({ q }) => {
   const paintPago = () => $$('#pagos .chip').forEach(b => b.classList.toggle('active', b.dataset.f === cart.forma_pago));
   $$('#pagos .chip').forEach(b => b.onclick = () => { cart.forma_pago = b.dataset.f; paintPago(); });
   paintPago();
-  $('#desc').oninput = e => { cart.descuento = +e.target.value || 0; paintCart(); };
+  // descuento: en pesos o en % del subtotal (a la base va siempre el monto en pesos)
+  cart.descModo ??= 'monto'; cart.descValor ??= cart.descuento || 0;
+  const paintDescModo = () => $$('#desc-modo .chip').forEach(b => b.classList.toggle('active', b.dataset.dm === cart.descModo));
+  $$('#desc-modo .chip').forEach(b => b.onclick = () => { cart.descModo = b.dataset.dm; paintDescModo(); paintCart(); $('#desc').focus(); });
+  paintDescModo();
+  $('#desc').oninput = e => { cart.descValor = Math.max(0, +String(e.target.value).replace(',', '.') || 0); paintCart(); };
   $('#obs').oninput = e => cart.notas = e.target.value;
 
   function add(p) {
     const line = cart.items.find(i => i.producto_id === p.id);
     if (line) line.cantidad++;
-    else cart.items.push({ producto_id: p.id, descripcion: p.nombre, cantidad: 1, precio_unitario: p.precio_venta, stock: p.stock, es_servicio: p.es_servicio });
+    else cart.items.push({ producto_id: p.id, descripcion: p.nombre, cantidad: 1, precio_unitario: +p.precio_venta, precio_lista: +p.precio_venta, stock: p.stock, es_servicio: p.es_servicio });
     scan.value = ''; sug.hidden = true; paintCart(); scan.focus();
   }
   let results = [], sel = 0;
@@ -434,12 +442,14 @@ ROUTES.vender = async ({ q }) => {
   };
   scan.onblur = () => setTimeout(() => sug.hidden = true, 150);
 
+  const listaDe = i => i.precio_lista != null ? +i.precio_lista : i.producto_id ? (+productos.find(p => p.id === i.producto_id)?.precio_venta || null) : null;
   function paintCart() {
     const box = $('#cart');
     if (!cart.items.length) box.innerHTML = '<div class="empty">Todavía no agregaste productos.</div>';
     else box.innerHTML = cart.items.map((i, n) => `
       <div class="cart-line"><div><div class="name">${esc(i.descripcion)}</div>
-        <div class="small muted">${money(i.precio_unitario)} c/u${!i.es_servicio && i.producto_id && i.cantidad > disponibleDe(i) ? ` · <span style="color:var(--bad)">disponible: ${Math.max(disponibleDe(i), 0)}${reservadoOtros(i.producto_id) ? ` (${reservadoOtros(i.producto_id)} reservado/s para otros clientes)` : ''}</span>` : ''}</div></div>
+        <div class="small muted" style="display:flex;align-items:center;gap:.3rem;flex-wrap:wrap"><input class="input precio-linea" data-pu="${n}" value="${+i.precio_unitario}" inputmode="decimal" title="Precio para esta venta (no cambia el del producto). También podés escribir un % de descuento, ej: 10%"> c/u${
+          listaDe(i) != null && Math.abs(listaDe(i) - i.precio_unitario) > 0.004 ? ` · <s>${money(listaDe(i))}</s> <span style="color:${i.precio_unitario < listaDe(i) ? 'var(--ok)' : 'var(--warn)'}">${i.precio_unitario < listaDe(i) ? '−' : '+'}${Math.abs(Math.round((i.precio_unitario / listaDe(i) - 1) * 1000) / 10)}%</span> <button class="linkbtn" data-rest="${n}" title="Volver al precio del producto">↺</button>` : ''}${!i.es_servicio && i.producto_id && i.cantidad > disponibleDe(i) ? ` · <span style="color:var(--bad)">disponible: ${Math.max(disponibleDe(i), 0)}${reservadoOtros(i.producto_id) ? ` (${reservadoOtros(i.producto_id)} reservado/s para otros clientes)` : ''}</span>` : ''}</div></div>
         <div class="qty"><button data-m="${n}">−</button><input value="${i.cantidad}" data-q="${n}" inputmode="decimal"><button data-p="${n}">+</button></div>
         <div class="right"><b>${money(i.cantidad * i.precio_unitario)}</b></div>
         <button class="x" data-del="${n}" title="Quitar">×</button></div>`).join('');
@@ -447,8 +457,24 @@ ROUTES.vender = async ({ q }) => {
     $$('[data-p]', box).forEach(b => b.onclick = () => { cart.items[+b.dataset.p].cantidad++; paintCart(); });
     $$('[data-q]', box).forEach(inp => inp.onchange = () => { cart.items[+inp.dataset.q].cantidad = Math.max(0.01, +inp.value.replace(',', '.') || 1); paintCart(); });
     $$('[data-del]', box).forEach(b => b.onclick = () => { cart.items.splice(+b.dataset.del, 1); paintCart(); });
+    // precio de la línea: un monto, o "10%" = 10 % menos que el precio del producto (solo para esta venta)
+    $$('[data-pu]', box).forEach(inp => {
+      inp.onfocus = () => inp.select();
+      inp.onkeydown = e => { if (e.key === 'Enter') { e.preventDefault(); inp.blur(); } };
+      inp.onchange = () => {
+        const i = cart.items[+inp.dataset.pu], v = String(inp.value).trim().replace(',', '.'), base = listaDe(i) ?? i.precio_unitario;
+        if (/%$/.test(v)) { const pct = Math.abs(parseFloat(v)); if (pct >= 0 && pct < 100) i.precio_unitario = Math.round(base * (1 - pct / 100) * 100) / 100; }
+        else if (v !== '' && +v >= 0) i.precio_unitario = +v;
+        paintCart();
+      };
+    });
+    $$('[data-rest]', box).forEach(b => b.onclick = () => { const i = cart.items[+b.dataset.rest]; i.precio_unitario = listaDe(i); paintCart(); });
     const subtotal = cart.items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
+    cart.descuento = cart.descModo === 'pct' ? Math.round(subtotal * Math.min(cart.descValor, 100)) / 100 : Math.min(cart.descValor, subtotal);
     $('#subt').textContent = money(subtotal);
+    $('#desc-fila').hidden = !cart.descuento;
+    $('#desc-lbl').textContent = cart.descModo === 'pct' ? `Descuento (${cart.descValor}%)` : 'Descuento';
+    $('#desc-monto').textContent = `−${money(cart.descuento)}`;
     $('#tot').textContent = money(subtotal - cart.descuento);
     $('#cobrar').disabled = !cart.items.length;
   }
