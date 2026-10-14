@@ -380,7 +380,9 @@ ROUTES.vender = async ({ q }) => {
           ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.dni_cuit ? ' — ' + esc(c.dni_cuit) : ''}</option>`).join('')}</select>
           <button class="btn" id="nuevo-cli" style="flex:0 0 auto" title="Nuevo cliente">+</button></div></div>
       <div class="field"><label>Forma de pago</label><div class="pay-opts" id="pagos">
-        ${FORMAS_COBRO.map(f => `<button class="chip" data-f="${f}">${f}</button>`).join('')}</div></div>
+        ${FORMAS_COBRO.map(f => `<button class="chip" data-f="${f}">${f}</button>`).join('')}</div>
+        <div id="pagos-comb"></div>
+        <button class="linkbtn small" id="combinar" style="margin-top:.45rem;padding:0">＋ Combinar dos medios de pago</button></div>
       <div class="field"><label>Descuento</label>
         <div style="display:flex;gap:.4rem;align-items:center"><input class="input" id="desc" type="number" min="0" step="any" value="${cart.descValor || ''}" placeholder="0" style="flex:1">
           <div class="pay-opts" id="desc-modo" style="flex:0 0 auto;flex-wrap:nowrap"><button class="chip" data-dm="monto" title="Descuento en pesos">$</button><button class="chip" data-dm="pct" title="Descuento en % sobre el subtotal">%</button></div></div></div>
@@ -400,6 +402,41 @@ ROUTES.vender = async ({ q }) => {
   const paintPago = () => $$('#pagos .chip').forEach(b => b.classList.toggle('active', b.dataset.f === cart.forma_pago));
   $$('#pagos .chip').forEach(b => b.onclick = () => { cart.forma_pago = b.dataset.f; paintPago(); });
   paintPago();
+  // Pago combinado: cart.pagos = [{ forma, monto }]; el último se completa solo con lo que falta para el total
+  const restoPagos = total => Math.round((total - cart.pagos.slice(0, -1).reduce((s, p) => s + (+p.monto || 0), 0)) * 100) / 100;
+  function pintarPagos(total) {
+    const comb = !!cart.pagos;
+    $('#pagos').hidden = comb; $('#combinar').hidden = comb;
+    const box = $('#pagos-comb');
+    if (!comb) { box.innerHTML = ''; return; }
+    const resto = restoPagos(total), ult = cart.pagos.length - 1;
+    const opc = sel => FORMAS_COBRO.map(f => `<option ${f === sel ? 'selected' : ''}>${f}</option>`).join('');
+    box.innerHTML = `${cart.pagos.map((p, k) => `<div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.4rem">
+        <select class="input" data-pf="${k}" style="flex:1">${opc(p.forma)}</select>
+        ${k === ult ? `<div class="input" style="width:120px;text-align:right;background:#f5f6f8;color:${resto > 0 ? 'inherit' : 'var(--bad)'}" title="Se completa solo con lo que falta">${money(resto)}</div>`
+          : `<input class="input" data-pm="${k}" value="${p.monto ?? ''}" inputmode="decimal" placeholder="Monto" style="width:120px;text-align:right">`}
+        <button class="x" data-pq="${k}" title="Quitar este medio">×</button></div>`).join('')}
+      <div class="small" style="display:flex;justify-content:space-between;gap:.5rem">
+        ${cart.pagos.length < 3 ? '<button class="linkbtn" id="pago-mas" style="padding:0;white-space:nowrap">＋ Otro medio</button>' : '<span></span>'}
+        <span class="${resto > 0 ? 'muted' : ''}" style="${resto > 0 ? '' : 'color:var(--bad)'}">${resto > 0 ? 'El último medio se completa con lo que falta' : 'Los montos superan el total'}</span></div>`;
+    $$('[data-pf]', box).forEach(s => s.onchange = () => { cart.pagos[+s.dataset.pf].forma = s.value; });
+    $$('[data-pm]', box).forEach(inp => {
+      inp.onfocus = () => inp.select();
+      inp.onchange = () => { cart.pagos[+inp.dataset.pm].monto = Math.max(0, +String(inp.value).replace(',', '.') || 0); paintCart(); };
+    });
+    $$('[data-pq]', box).forEach(b => b.onclick = () => {
+      cart.pagos.splice(+b.dataset.pq, 1);
+      if (cart.pagos.length < 2) { cart.forma_pago = cart.pagos[0]?.forma || cart.forma_pago; cart.pagos = null; paintPago(); }
+      paintCart();
+    });
+    const mas = $('#pago-mas', box);
+    if (mas) mas.onclick = () => { cart.pagos.splice(ult, 0, { forma: FORMAS_COBRO.find(f => !cart.pagos.some(p => p.forma === f)) || 'Efectivo', monto: '' }); paintCart(); };
+  }
+  $('#combinar').onclick = () => {
+    const otra = FORMAS_COBRO.find(f => f !== cart.forma_pago) || 'Efectivo';
+    cart.pagos = [{ forma: cart.forma_pago, monto: '' }, { forma: cart.forma_pago === 'Efectivo' ? 'Débito' : otra === 'Efectivo' ? 'Efectivo' : otra }];
+    paintCart(); $('[data-pm="0"]')?.focus();
+  };
   // descuento: en pesos o en % del subtotal (a la base va siempre el monto en pesos)
   cart.descModo ??= 'monto'; cart.descValor ??= cart.descuento || 0;
   const paintDescModo = () => $$('#desc-modo .chip').forEach(b => b.classList.toggle('active', b.dataset.dm === cart.descModo));
@@ -476,6 +513,7 @@ ROUTES.vender = async ({ q }) => {
     $('#desc-lbl').textContent = cart.descModo === 'pct' ? `Descuento (${cart.descValor}%)` : 'Descuento';
     $('#desc-monto').textContent = `−${money(cart.descuento)}`;
     $('#tot').textContent = money(subtotal - cart.descuento);
+    pintarPagos(subtotal - cart.descuento);
     $('#cobrar').disabled = !cart.items.length;
   }
   paintCart();
@@ -503,7 +541,16 @@ ROUTES.vender = async ({ q }) => {
   };
   $('#nuevo-cli').onclick = () => clienteModal(null, c => { cart.cliente_id = String(c.id); render(); });
   $('#cobrar').onclick = () => run(async () => {
-    if (cart.forma_pago === CUENTA_CORRIENTE && !cart.cliente_id) return toast('Para vender a cuenta corriente elegí el cliente', true);
+    // pago combinado: las partes con monto (el último medio lleva lo que falta)
+    let pagos = null;
+    if (cart.pagos) {
+      const total = cart.items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0) - (+cart.descuento || 0);
+      pagos = cart.pagos.map((p, k) => ({ forma_pago: p.forma, monto: k === cart.pagos.length - 1 ? restoPagos(total) : +p.monto || 0 }));
+      if (pagos.some(p => !(p.monto > 0))) return toast('Completá el monto de cada medio de pago (y que no superen el total)', true);
+      if (new Set(pagos.map(p => p.forma_pago)).size < pagos.length) return toast('Elegiste dos veces el mismo medio de pago', true);
+      if (pagos.some(p => p.forma_pago === CUENTA_CORRIENTE) && !cart.cliente_id) return toast('Para dejar una parte a cuenta corriente elegí el cliente', true);
+    } else if (cart.forma_pago === CUENTA_CORRIENTE && !cart.cliente_id) return toast('Para vender a cuenta corriente elegí el cliente', true);
+    const formaPago = pagos ? pagos.map(p => p.forma_pago).join(' + ') : cart.forma_pago;
     const sinStock = cart.items.filter(i => i.producto_id && !i.es_servicio && i.cantidad > disponibleDe(i));
     if (sinStock.length && !confirm(`Hay ${sinStock.length} producto(s) sin stock disponible suficiente según el sistema (contando lo reservado para otros clientes). ¿Registrar la venta igual?`)) return;
     if (cart.editId) {
@@ -516,23 +563,26 @@ ROUTES.vender = async ({ q }) => {
         o.total != null && Math.abs(o.total - nuevoTotal) > 0.009 ? `• Total: ${money(o.total)} → ${money(nuevoTotal)}` : '',
       ].filter(Boolean);
       if (cambios.length && !confirm(`Vas a MODIFICAR la venta #${cart.editNumero} (no es una venta nueva):\n\n${cambios.join('\n')}\n\n¿Confirmás?`)) return;
-      await store.editarVenta(cart.editId, { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago, notas: (cart.notas || '').trim() });
+      await store.editarVenta(cart.editId, { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: formaPago, pagos, notas: (cart.notas || '').trim() });
       cart = carritoVacio();
       toast('Venta actualizada'); go('#/caja'); return;
     }
-    const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: cart.forma_pago, notas: (cart.notas || '').trim() });
+    const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: formaPago, pagos, notas: (cart.notas || '').trim() });
     // Si la venta salió de un encargo, queda entregado y se aplica (cancela) el anticipo ya cobrado
     if (cart.encargoId) {
       await store.actualizarEncargo(cart.encargoId, { estado: 'entregado', fecha_entrega: new Date().toISOString() }).catch(() => toast('La venta se registró, pero no se pudo marcar el encargo como entregado', true));
       await store.aplicarAnticipoEncargo(cart.encargoId, v.id).catch(() => toast('La venta se registró, pero no se pudo aplicar el anticipo', true));
     }
     cart = carritoVacio();
-    const m = modal(`Venta #${v.numero} registrada`, `<div class="empty" style="padding:1rem"><div class="total-box">${money(v.total)}</div><div class="muted">${esc(v.forma_pago)}</div></div>`,
+    const m = modal(`Venta #${v.numero} registrada`, `<div class="empty" style="padding:1rem"><div class="total-box">${money(v.total)}</div><div class="muted">${esc(textoPago(v))}</div></div>`,
       `<button class="btn" id="imp">Imprimir comprobante</button><button class="btn primary" data-close>Nueva venta</button>`);
     $('#imp', m.el).onclick = () => imprimirVenta(v.id);
     m.el.addEventListener('click', e => { if (e.target.closest('[data-close]')) render(); });
   });
 };
+
+// "Efectivo $ 10.000 + Débito $ 5.000" en las ventas con pago combinado
+const textoPago = v => v.pagos?.length ? v.pagos.map(p => `${p.forma_pago} ${money(p.monto)}`).join(' + ') : v.forma_pago;
 
 async function imprimirVenta(id) {
   const [v, n] = await Promise.all([store.venta(id), store.negocio()]);
@@ -542,7 +592,7 @@ async function imprimirVenta(id) {
     <table>${v.items.map(i => `<tr><td colspan="2">${esc(i.descripcion)}</td></tr><tr><td>${i.cantidad} x ${money(i.precio_unitario)}</td><td style="text-align:right">${money(i.subtotal)}</td></tr>`).join('')}</table><hr>
     ${v.descuento ? `<table><tr><td>Subtotal</td><td style="text-align:right">${money(v.subtotal)}</td></tr><tr><td>Descuento</td><td style="text-align:right">-${money(v.descuento)}</td></tr></table>` : ''}
     <table><tr><td class="big">TOTAL</td><td class="big" style="text-align:right">${money(v.total)}</td></tr></table>
-    <div>Pago: ${esc(v.forma_pago)}</div>${v.anulada ? '<div class="c big">*** ANULADA ***</div>' : ''}<hr>
+    <div>Pago: ${esc(textoPago(v))}</div>${v.anulada ? '<div class="c big">*** ANULADA ***</div>' : ''}<hr>
     <div class="c">Documento no válido como factura.<br>¡Gracias por su compra!</div></div>`, PAGINA_TICKET);
 }
 
@@ -550,7 +600,7 @@ async function ventaModal(id) {
   const v = await store.venta(id);
   const m = modal(`Venta #${v.numero}`, `
     <dl class="kv" style="margin-bottom:1rem"><dt>Fecha</dt><dd>${fdatetime(v.fecha)}</dd><dt>Cliente</dt><dd>${v.cliente ? `<a href="#/clientes/${v.cliente.id}" data-close>${esc(v.cliente.nombre)}</a>` : 'Consumidor final'}</dd>
-    <dt>Forma de pago</dt><dd>${esc(v.forma_pago)}</dd>${v.anulada ? '<dt>Estado</dt><dd><span class="pill red">Anulada</span></dd>' : ''}
+    <dt>Forma de pago</dt><dd>${esc(textoPago(v))}</dd>${v.anulada ? '<dt>Estado</dt><dd><span class="pill red">Anulada</span></dd>' : ''}
     ${v.notas ? `<dt>Observaciones</dt><dd>📝 ${esc(v.notas)}</dd>` : ''}</dl>
     <table class="tbl"><thead><tr><th>Ítem</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Subtotal</th></tr></thead><tbody>
     ${v.items.map(i => `<tr><td>${esc(i.descripcion)}</td><td class="num">${i.cantidad}</td><td class="num">${money(i.precio_unitario)}</td><td class="num">${money(i.subtotal)}</td></tr>`).join('')}
@@ -570,7 +620,8 @@ async function ventaModal(id) {
     if (cart.items.length && !confirm('Tenés una venta en curso sin terminar en "Vender". ¿Descartarla para editar esta?')) return;
     const productos = await store.productos();
     cart = {
-      editId: v.id, editNumero: v.numero, cliente_id: v.cliente_id ? String(v.cliente_id) : '', descuento: +v.descuento || 0, forma_pago: v.forma_pago, notas: v.notas || '',
+      editId: v.id, editNumero: v.numero, cliente_id: v.cliente_id ? String(v.cliente_id) : '', descuento: +v.descuento || 0, forma_pago: v.pagos?.length ? v.pagos[0].forma_pago : v.forma_pago, notas: v.notas || '',
+      pagos: v.pagos?.length ? v.pagos.map(p => ({ forma: p.forma_pago, monto: +p.monto })) : null,
       orig: { cliente_id: v.cliente_id, clienteNombre: v.cliente?.nombre || '', total: +v.total },
       items: v.items.map(i => {
         const p = i.producto_id ? productos.find(x => x.id === i.producto_id) : null;
@@ -3682,7 +3733,8 @@ ROUTES.reportes = async ({ q }) => {
   const total = vs.reduce((s, v) => s + v.total, 0);
   const costo = detalle.reduce((s, i) => s + i.cantidad * (productos.find(p => p.id === i.producto_id)?.precio_costo || 0), 0);
   const top = Object.values(detalle.reduce((acc, i) => { const k = i.descripcion; acc[k] ??= { nombre: k, cant: 0, total: 0 }; acc[k].cant += i.cantidad; acc[k].total += i.subtotal; return acc; }, {})).sort((a, b) => b.total - a.total).slice(0, 10);
-  const porPago = FORMAS_PAGO.map(f => [f, vs.filter(v => v.forma_pago === f).reduce((s, v) => s + v.total, 0)]);
+  const partes = vs.flatMap(v => v.pagos?.length ? v.pagos.map(p => [p.forma_pago, +p.monto]) : [[v.forma_pago, +v.total]]);
+  const porPago = FORMAS_COBRO.map(f => [f, partes.filter(([g]) => g === f).reduce((s, [, m]) => s + m, 0)]);
   const maxPago = Math.max(1, ...porPago.map(x => x[1]));
   const ingresadas = ordenes.filter(o => new Date(o.fecha_ingreso) >= desde);
   const entregadas = ordenes.filter(o => o.fecha_entrega && new Date(o.fecha_entrega) >= desde);

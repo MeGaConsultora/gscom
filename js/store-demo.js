@@ -31,6 +31,26 @@ function load() {
   try { localStorage.setItem(DEMO_KEY, JSON.stringify(d)); } catch (e) {}  // así la página de seguimiento ve los mismos datos
   return d;
 }
+// Ventas con más de un medio de pago (igual que normalizar_pagos_venta / aplicar_pagos_venta en la base)
+function normalizarPagos(pagos, forma_pago, total, cliente_id) {
+  if (Array.isArray(pagos) && pagos.length) {
+    if (pagos.some(p => !p.forma_pago || !(+p.monto > 0))) throw new Error('Cada medio de pago tiene que tener su forma y un monto mayor a 0');
+    const suma = pagos.reduce((s, p) => s + +p.monto, 0);
+    if (Math.abs(suma - total) > 0.01) throw new Error(`Los medios de pago suman ${suma} y el total es ${total}`);
+    if (!cliente_id && pagos.some(p => p.forma_pago === CC)) throw new Error('Para dejar una parte a cuenta corriente hay que elegir el cliente');
+    if (pagos.length > 1) return { pagos: pagos.map(p => ({ forma_pago: p.forma_pago, monto: Math.round(+p.monto * 100) / 100 })), forma_pago: pagos.map(p => p.forma_pago).join(' + ') };
+    forma_pago = pagos[0].forma_pago;
+  }
+  if (forma_pago === CC && !cliente_id) throw new Error('Para vender a cuenta corriente hay que elegir el cliente');
+  return { pagos: null, forma_pago };
+}
+function aplicarPagosVenta(v, signo, concepto) {
+  for (const p of v.pagos || [{ forma_pago: v.forma_pago, monto: v.total }]) {
+    if (!p.monto) continue;
+    if (p.forma_pago === CC) insert('cc_movimientos', { cliente_id: v.cliente_id, fecha: now(), tipo: signo > 0 ? 'cargo' : 'ajuste', monto: signo * p.monto, concepto, forma_pago: '', venta_id: v.id, anulado: false });
+    else insert('caja_movimientos', { fecha: now(), tipo: signo > 0 ? 'ingreso' : 'egreso', concepto, monto: p.monto, forma_pago: p.forma_pago, venta_id: v.id });
+  }
+}
 function save() { try { localStorage.setItem(DEMO_KEY, JSON.stringify(db)); } catch (e) {} }
 const now = () => new Date().toISOString();
 const clone = x => JSON.parse(JSON.stringify(x));
@@ -356,20 +376,19 @@ export const store = {
     const ok = new Set(db.ventas.filter(v => !v.anulada && v.fecha >= desdeISO).map(v => v.id));
     return clone(db.venta_items.filter(i => ok.has(i.venta_id)));
   },
-  async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '' }) {
+  async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '', pagos = null }) {
     if (!items.length) throw new Error('La venta no tiene ítems');
-    if (forma_pago === CC && !cliente_id) throw new Error('Para vender a cuenta corriente hay que elegir el cliente');
     const subtotal = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
+    ({ pagos, forma_pago } = normalizarPagos(pagos, forma_pago, subtotal - (+descuento || 0), cliente_id));
     db.seq.venta_numero = (db.seq.venta_numero || 0) + 1;
     const v = insert('ventas', { numero: db.seq.venta_numero, fecha: now(), cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0,
-      total: subtotal - (+descuento || 0), forma_pago, notas, anulada: false });
+      total: subtotal - (+descuento || 0), forma_pago, pagos, notas, anulada: false });
     for (const i of items) {
       insert('venta_items', { venta_id: v.id, producto_id: i.producto_id || null, descripcion: i.descripcion, cantidad: i.cantidad,
         precio_unitario: i.precio_unitario, subtotal: i.cantidad * i.precio_unitario });
       if (i.producto_id) movStock(i.producto_id, -i.cantidad, 'venta', { venta_id: v.id });
     }
-    if (forma_pago === CC) insert('cc_movimientos', { cliente_id: v.cliente_id, fecha: now(), tipo: 'cargo', monto: v.total, concepto: `Venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
-    else insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Venta #${v.numero}`, monto: v.total, forma_pago, venta_id: v.id });
+    aplicarPagosVenta(v, 1, `Venta #${v.numero}`);
     save(); return clone(v);
   },
   async anularVenta(id) {
@@ -377,23 +396,22 @@ export const store = {
     if (v.anulada) throw new Error('La venta ya estaba anulada');
     v.anulada = true;
     db.venta_items.filter(i => i.venta_id === v.id && i.producto_id).forEach(i => movStock(i.producto_id, i.cantidad, 'anulacion', { venta_id: v.id, nota: `Anulación venta #${v.numero}` }));
-    if (v.forma_pago === CC) insert('cc_movimientos', { cliente_id: v.cliente_id, fecha: now(), tipo: 'ajuste', monto: -v.total, concepto: `Anulación venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
-    else insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Anulación venta #${v.numero}`, monto: v.total, forma_pago: v.forma_pago, venta_id: v.id });
+    aplicarPagosVenta(v, -1, `Anulación venta #${v.numero}`);
     save();
   },
-  async editarVenta(id, { cliente_id, items, descuento = 0, forma_pago, notas }) {
+  async editarVenta(id, { cliente_id, items, descuento = 0, forma_pago, notas, pagos = null }) {
     const v = byId('ventas', id);
     if (!v) throw new Error('Venta no encontrada');
     if (v.anulada) throw new Error('La venta está anulada: no se puede editar');
     if (!items.length) throw new Error('La venta no tiene ítems');
-    if (forma_pago === CC && !cliente_id) throw new Error('Para vender a cuenta corriente hay que elegir el cliente');
 
     // Igual que editar_venta en la base: solo se corrige lo que cambió
     const subtotal = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
     const total = subtotal - (+descuento || 0);
+    ({ pagos, forma_pago } = normalizarPagos(pagos, forma_pago, total, cliente_id));
     const firma = l => JSON.stringify(l.map(i => [i.producto_id || null, i.descripcion, +i.cantidad, +i.precio_unitario]).sort());
     const itemsIguales = firma(db.venta_items.filter(i => i.venta_id === v.id)) === firma(items);
-    const plataIgual = total === v.total && forma_pago === v.forma_pago && (cliente_id || null) === (v.cliente_id || null);
+    const plataIgual = total === v.total && forma_pago === v.forma_pago && (cliente_id || null) === (v.cliente_id || null) && JSON.stringify(pagos ?? null) === JSON.stringify(v.pagos ?? null);
 
     if (!itemsIguales) {
       db.venta_items.filter(i => i.venta_id === v.id && i.producto_id).forEach(i => movStock(i.producto_id, i.cantidad, 'ajuste', { venta_id: v.id, nota: `Corrección de venta #${v.numero}` }));
@@ -404,13 +422,12 @@ export const store = {
         if (i.producto_id) movStock(i.producto_id, -i.cantidad, 'venta', { venta_id: v.id, nota: `Venta #${v.numero} (editada)` });
       }
     }
+    const antes = { ...v };
+    Object.assign(v, { cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0, total, forma_pago, pagos, notas: notas ?? v.notas });
     if (!plataIgual) {
-      if (v.forma_pago === CC) insert('cc_movimientos', { cliente_id: v.cliente_id, fecha: now(), tipo: 'ajuste', monto: -v.total, concepto: `Corrección de venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
-      else insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Corrección de venta #${v.numero}`, monto: v.total, forma_pago: v.forma_pago, venta_id: v.id });
-      if (forma_pago === CC) insert('cc_movimientos', { cliente_id: cliente_id || null, fecha: now(), tipo: 'cargo', monto: total, concepto: `Venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
-      else insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Venta #${v.numero}`, monto: total, forma_pago, venta_id: v.id });
+      aplicarPagosVenta(antes, -1, `Corrección de venta #${v.numero}`);
+      aplicarPagosVenta(v, 1, `Venta #${v.numero}`);
     }
-    Object.assign(v, { cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0, total, forma_pago, notas: notas ?? v.notas });
     save();
   },
   async eliminarMovimientoCaja(id) {

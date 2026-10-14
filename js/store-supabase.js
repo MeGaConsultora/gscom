@@ -182,11 +182,11 @@ export const store = {
   // Ventas
   async ventas() { return todas(() => sb.from('ventas').select('*').order('fecha', { ascending: false }).order('id', { ascending: false }), 5000); },
   async venta(id) { return q(sb.from('ventas').select('*, items:venta_items(*), cliente:clientes(*)').eq('id', id).single()); },
-  async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '' }) {
+  async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '', pagos = null }) {
     const id = await q(sb.rpc('registrar_venta', {
       p_cliente_id: cliente_id || null,
       p_items: items.map(({ producto_id, descripcion, cantidad, precio_unitario }) => ({ producto_id, descripcion, cantidad, precio_unitario })),
-      p_descuento: +descuento || 0, p_forma_pago: forma_pago, p_notas: notas,
+      p_descuento: +descuento || 0, p_forma_pago: forma_pago, p_notas: notas, p_pagos: pagos,
     }));
     return q(sb.from('ventas').select('*').eq('id', id).single());
   },
@@ -195,11 +195,11 @@ export const store = {
       .gte('venta.fecha', desdeISO).eq('venta.anulada', false).order('id'), 20000);
   },
   async anularVenta(id) { await q(sb.rpc('anular_venta', { p_venta_id: id })); },
-  async editarVenta(id, { cliente_id, items, descuento = 0, forma_pago, notas = '' }) {
+  async editarVenta(id, { cliente_id, items, descuento = 0, forma_pago, notas = '', pagos = null }) {
     await q(sb.rpc('editar_venta', {
       p_venta_id: id, p_cliente_id: cliente_id || null,
       p_items: items.map(({ producto_id, descripcion, cantidad, precio_unitario }) => ({ producto_id, descripcion, cantidad, precio_unitario })),
-      p_descuento: +descuento || 0, p_forma_pago: forma_pago, p_notas: notas,
+      p_descuento: +descuento || 0, p_forma_pago: forma_pago, p_notas: notas, p_pagos: pagos,
     }));
   },
 
