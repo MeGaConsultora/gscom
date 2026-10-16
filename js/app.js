@@ -176,7 +176,7 @@ function waLink(telefono, texto) {
 // =====================================================================
 const NAV = [
   ['inicio', 'Inicio'], ['vender', 'Vender'], ['service', 'Service'], ['productos', 'Productos'], ['compras', 'Compras'], ['pedidos', 'Pedidos'],
-  ['encargos', 'Encargos'], ['clientes', 'Clientes'], ['proveedores', 'Proveedores'], ['fichero', 'Fichero'], ['caja', 'Caja'],
+  ['encargos', 'Encargos'], ['clientes', 'Clientes'], ['proveedores', 'Proveedores'], ['fichero', 'Fichero'], ['facturas', 'Facturas'], ['caja', 'Caja'],
   ['reportes', 'Reportes'], ['tienda', 'Tienda'], ['ajustes', 'Ajustes'],
 ];
 // Rol del usuario: 'admin' (todo) o 'tienda' (solo la pestaña Tienda; la base no le deja ver nada más)
@@ -221,6 +221,9 @@ async function actualizarContador() {
   const n = await store.solicitudesWeb().then(l => l.length).catch(() => 0);
   const e = $('nav.tabs a[data-r=encargos]');
   if (e) e.innerHTML = `Encargos${n ? ` <span class="badge" title="Solicitudes de la tienda para revisar">${n}</span>` : ''}`;
+  // Ventas con la factura pendiente de emitir
+  const f = $('nav.tabs a[data-r=facturas]');
+  if (f) { const p = await store.facturasPendientes().catch(() => 0); f.innerHTML = `Facturas${p ? ` <span class="badge" style="background:var(--warn)" title="Ventas con la factura pendiente de emitir">${p}</span>` : ''}`; }
 }
 
 // Entró una solicitud desde la tienda: aviso con sonido. Si el cliente la cancela, el aviso desaparece.
@@ -315,6 +318,14 @@ ROUTES.inicio = async () => {
     ${llegaron.map(e => `<div class="row small" style="align-items:center;padding:.35rem 0;border-top:1px solid var(--line)">
       <span><b>${e.tipo === 'reserva' ? 'Reserva' : 'Encargo'} N° ${e.numero}</b> · ${esc(quienEncarga(e))} · ${+e.cantidad !== 1 ? `${+e.cantidad} × ` : ''}${esc(e.descripcion)}</span>
       <span class="right">${reservaVencida(e) ? '<span class="pill red">reserva vencida</span> ' : ''}${e.fecha_aviso ? '<span class="pill gray">avisado</span>' : '<span class="pill amber">sin avisar</span>'}</span></div>`).join('')}</div>` : ''}
+  ${(() => {
+    // ventas y entregas de service con la factura pendiente (de cada una: su monto y su fecha)
+    const fp = [...ventas.filter(v => v.facturacion === 'pendiente' && !v.anulada).map(v => ({ monto: +v.total, fecha: v.fecha })),
+      ...ordenes.filter(o => o.facturacion === 'pendiente' && o.estado === 'entregado').map(o => ({ monto: +o.total_cobrado || 0, fecha: o.fecha_entrega || o.fecha_ingreso }))];
+    return fp.length ? `<div class="card card-pad" style="margin-bottom:1rem;border-left:4px solid var(--warn)">
+      <h2>Facturas pendientes de emitir <span class="badge" style="background:var(--warn)">${fp.length}</span> <a class="small" href="#/facturas">Ver →</a></h2>
+      <div class="small muted">${money(fp.reduce((s, x) => s + x.monto, 0))} en ventas y servicios que todavía no tienen su factura${fp.some(x => daysSince(x.fecha) >= 7) ? ` · <b>${fp.filter(x => daysSince(x.fecha) >= 7).length}</b> con más de una semana` : ''}.</div></div>` : '';
+  })()}
   <div class="grid grid-4" style="margin-bottom:1rem">
     <div class="card kpi"><div class="label">Ventas de hoy</div><div class="value">${money(totalHoy)}</div><div class="sub">${hoy.length} venta${hoy.length === 1 ? '' : 's'}</div></div>
     <div class="card kpi"><div class="label">Efectivo en caja (hoy)</div><div class="value">${money(efectivo)}</div><div class="sub">ingresos − egresos en efectivo</div></div>
@@ -349,7 +360,33 @@ function bindRowLinks() {
 // =====================================================================
 // VENDER (punto de venta)
 // =====================================================================
-const carritoVacio = () => ({ items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', notas: '', editId: null, editNumero: null });
+const carritoVacio = () => ({ items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', notas: '', editId: null, editNumero: null, factura: 'no', facturaNro: '' });
+
+// Facturación de una venta: solo se registra el estado (no emite nada en AFIP)
+const FACTURA_ESTADOS = { no: ['No se factura', 'gray'], pendiente: ['Pendiente de emitir', 'amber'], emitida: ['Emitida', 'green'] };
+const pillFactura = v => { const e = v.facturacion || 'no'; return `<span class="pill ${FACTURA_ESTADOS[e][1]}">${FACTURA_ESTADOS[e][0]}${e === 'emitida' && v.factura_nro ? ` · N° ${esc(v.factura_nro)}` : ''}</span>`; };
+// Elegir el estado de la factura (y el número, si ya se emitió). alCambiar({ estado, nro }) en cada cambio.
+function controlFactura(el, { estado = 'no', nro = '' } = {}, alCambiar = () => {}) {
+  let est = estado, num = nro;
+  const pintar = () => {
+    el.innerHTML = `<div class="pay-opts">${Object.entries(FACTURA_ESTADOS).map(([k, [t]]) => `<button type="button" class="chip ${k === est ? 'active' : ''}" data-fe="${k}">${t}</button>`).join('')}</div>
+      <input class="input" data-fnro placeholder="N° de factura (opcional)" value="${esc(num)}" style="margin-top:.5rem" ${est === 'emitida' ? '' : 'hidden'}>`;
+    $$('[data-fe]', el).forEach(b => b.onclick = () => { est = b.dataset.fe; alCambiar({ estado: est, nro: num }); pintar(); });
+    $('[data-fnro]', el).oninput = e => { num = e.target.value; alCambiar({ estado: est, nro: num }); };
+  };
+  pintar();
+}
+// v: la venta o la orden de service (esOrden = true)
+function facturaModal(v, onDone, esOrden = false) {
+  let f = { estado: v.facturacion || 'no', nro: v.factura_nro || '' };
+  const m = modal(`Factura — ${esOrden ? 'service' : 'venta'} #${v.numero}`, `<p class="small muted" style="margin-bottom:.7rem">Es solo un registro para controlar qué hay que facturar: no emite nada en AFIP.</p><div id="fact-box"></div>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
+  controlFactura($('#fact-box', m.el), f, x => { f = x; });
+  $('#ok', m.el).onclick = () => run(async () => {
+    await (esOrden ? store.establecerFacturaOrden(v.id, f) : store.establecerFacturaVenta(v.id, f));
+    m.close(); toast('Factura actualizada'); onDone();
+  });
+}
 let cart = carritoVacio();
 
 ROUTES.vender = async ({ q }) => {
@@ -383,6 +420,7 @@ ROUTES.vender = async ({ q }) => {
         ${FORMAS_COBRO.map(f => `<button class="chip" data-f="${f}">${f}</button>`).join('')}</div>
         <div id="pagos-comb"></div>
         <button class="linkbtn small" id="combinar" style="margin-top:.45rem;padding:0">＋ Combinar dos medios de pago</button></div>
+      <div class="field"><label>Factura</label><div id="factura-box"></div></div>
       <div class="field"><label>Descuento</label>
         <div style="display:flex;gap:.4rem;align-items:center"><input class="input" id="desc" type="number" min="0" step="any" value="${cart.descValor || ''}" placeholder="0" style="flex:1">
           <div class="pay-opts" id="desc-modo" style="flex:0 0 auto;flex-wrap:nowrap"><button class="chip" data-dm="monto" title="Descuento en pesos">$</button><button class="chip" data-dm="pct" title="Descuento en % sobre el subtotal">%</button></div></div></div>
@@ -444,6 +482,7 @@ ROUTES.vender = async ({ q }) => {
   paintDescModo();
   $('#desc').oninput = e => { cart.descValor = Math.max(0, +String(e.target.value).replace(',', '.') || 0); paintCart(); };
   $('#obs').oninput = e => cart.notas = e.target.value;
+  controlFactura($('#factura-box'), { estado: cart.factura, nro: cart.facturaNro }, f => { cart.factura = f.estado; cart.facturaNro = f.nro; });
 
   function add(p) {
     const line = cart.items.find(i => i.producto_id === p.id);
@@ -540,6 +579,9 @@ ROUTES.vender = async ({ q }) => {
     };
   };
   $('#nuevo-cli').onclick = () => clienteModal(null, c => { cart.cliente_id = String(c.id); render(); });
+  // si falla guardar el estado de la factura, la venta ya quedó registrada: se avisa y se corrige desde la venta
+  const guardarFactura = id => store.establecerFacturaVenta(id, { estado: cart.factura || 'no', nro: cart.facturaNro })
+    .catch(() => toast('La venta se guardó, pero no se pudo guardar el estado de la factura: cambialo desde la venta', true));
   $('#cobrar').onclick = () => run(async () => {
     // pago combinado: las partes con monto (el último medio lleva lo que falta)
     let pagos = null;
@@ -564,17 +606,22 @@ ROUTES.vender = async ({ q }) => {
       ].filter(Boolean);
       if (cambios.length && !confirm(`Vas a MODIFICAR la venta #${cart.editNumero} (no es una venta nueva):\n\n${cambios.join('\n')}\n\n¿Confirmás?`)) return;
       await store.editarVenta(cart.editId, { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: formaPago, pagos, notas: (cart.notas || '').trim() });
+      await guardarFactura(cart.editId);
       cart = carritoVacio();
       toast('Venta actualizada'); go('#/caja'); return;
     }
     const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: formaPago, pagos, notas: (cart.notas || '').trim() });
+    const factura = cart.factura || 'no';
+    if (factura !== 'no') await guardarFactura(v.id);
     // Si la venta salió de un encargo, queda entregado y se aplica (cancela) el anticipo ya cobrado
     if (cart.encargoId) {
       await store.actualizarEncargo(cart.encargoId, { estado: 'entregado', fecha_entrega: new Date().toISOString() }).catch(() => toast('La venta se registró, pero no se pudo marcar el encargo como entregado', true));
       await store.aplicarAnticipoEncargo(cart.encargoId, v.id).catch(() => toast('La venta se registró, pero no se pudo aplicar el anticipo', true));
     }
     cart = carritoVacio();
-    const m = modal(`Venta #${v.numero} registrada`, `<div class="empty" style="padding:1rem"><div class="total-box">${money(v.total)}</div><div class="muted">${esc(textoPago(v))}</div></div>`,
+    const m = modal(`Venta #${v.numero} registrada`, `<div class="empty" style="padding:1rem"><div class="total-box">${money(v.total)}</div><div class="muted">${esc(textoPago(v))}</div>
+      ${factura === 'pendiente' ? '<div class="small" style="margin-top:.6rem"><span class="pill amber">Factura pendiente de emitir</span> · la ves en la pestaña Facturas</div>'
+        : factura === 'emitida' ? '<div class="small" style="margin-top:.6rem"><span class="pill green">Factura emitida</span></div>' : ''}</div>`,
       `<button class="btn" id="imp">Imprimir comprobante</button><button class="btn primary" data-close>Nueva venta</button>`);
     $('#imp', m.el).onclick = () => imprimirVenta(v.id);
     m.el.addEventListener('click', e => { if (e.target.closest('[data-close]')) render(); });
@@ -600,7 +647,8 @@ async function ventaModal(id) {
   const v = await store.venta(id);
   const m = modal(`Venta #${v.numero}`, `
     <dl class="kv" style="margin-bottom:1rem"><dt>Fecha</dt><dd>${fdatetime(v.fecha)}</dd><dt>Cliente</dt><dd>${v.cliente ? `<a href="#/clientes/${v.cliente.id}" data-close>${esc(v.cliente.nombre)}</a>` : 'Consumidor final'}</dd>
-    <dt>Forma de pago</dt><dd>${esc(textoPago(v))}</dd>${v.anulada ? '<dt>Estado</dt><dd><span class="pill red">Anulada</span></dd>' : ''}
+    <dt>Forma de pago</dt><dd>${esc(textoPago(v))}</dd>
+    <dt>Factura</dt><dd>${pillFactura(v)}${v.anulada && v.facturacion === 'emitida' ? ' <span class="pill red">venta anulada: falta la nota de crédito</span>' : ''} ${v.anulada ? '' : '<button class="btn sm" id="fact">Cambiar</button>'}</dd>${v.anulada ? '<dt>Estado</dt><dd><span class="pill red">Anulada</span></dd>' : ''}
     ${v.notas ? `<dt>Observaciones</dt><dd>📝 ${esc(v.notas)}</dd>` : ''}</dl>
     <table class="tbl"><thead><tr><th>Ítem</th><th class="num">Cant.</th><th class="num">Precio</th><th class="num">Subtotal</th></tr></thead><tbody>
     ${v.items.map(i => `<tr><td>${esc(i.descripcion)}</td><td class="num">${i.cantidad}</td><td class="num">${money(i.precio_unitario)}</td><td class="num">${money(i.subtotal)}</td></tr>`).join('')}
@@ -608,9 +656,10 @@ async function ventaModal(id) {
     <tr><td colspan="3"><b>Total</b></td><td class="num"><b>${money(v.total)}</b></td></tr></tbody></table>`,
     `${v.anulada ? '' : '<button class="btn" id="editar">Editar</button><button class="btn danger" id="anular">Anular venta</button>'}<button class="btn" id="imp">Imprimir</button><button class="btn primary" data-close>Cerrar</button>`, { wide: true });
   $('#imp', m.el).onclick = () => imprimirVenta(id);
+  const fb = $('#fact', m.el); if (fb) fb.onclick = () => facturaModal(v, () => { m.close(); render(); });
   const an = $('#anular', m.el);
   if (an) an.onclick = () => run(async () => {
-    if (!confirm('¿Anular esta venta? Se devuelve el stock y se registra un egreso en caja.')) return;
+    if (!confirm(`¿Anular esta venta? Se devuelve el stock y se registra un egreso en caja.${v.facturacion === 'emitida' ? `\n\nOjo: ya tiene la factura emitida${v.factura_nro ? ` (N° ${v.factura_nro})` : ''}, vas a necesitar emitir la nota de crédito.` : ''}`)) return;
     await store.anularVenta(id);
     await store.revertirAnticipoEncargo(id).catch(() => {});   // si venía de un encargo con anticipo, se libera; si no, no hace nada
     m.close(); toast('Venta anulada'); render();
@@ -622,6 +671,7 @@ async function ventaModal(id) {
     cart = {
       editId: v.id, editNumero: v.numero, cliente_id: v.cliente_id ? String(v.cliente_id) : '', descuento: +v.descuento || 0, forma_pago: v.pagos?.length ? v.pagos[0].forma_pago : v.forma_pago, notas: v.notas || '',
       pagos: v.pagos?.length ? v.pagos.map(p => ({ forma: p.forma_pago, monto: +p.monto })) : null,
+      factura: v.facturacion || 'no', facturaNro: v.factura_nro || '',
       orig: { cliente_id: v.cliente_id, clienteNombre: v.cliente?.nombre || '', total: +v.total },
       items: v.items.map(i => {
         const p = i.producto_id ? productos.find(x => x.id === i.producto_id) : null;
@@ -1621,7 +1671,8 @@ async function detalleOrden(id) {
         <dl class="kv"><dt>Cliente</dt><dd><a href="#/clientes/${o.cliente.id}">${esc(o.cliente.nombre)}</a> · ${esc(o.cliente.telefono)}</dd>
         ${esArmado ? '' : `<dt>Equipo</dt><dd>${esc(eq)}${o.equipo?.nro_serie ? ` <span class="small muted mono">S/N ${esc(o.equipo.nro_serie)}</span>` : ''}</dd>`}
         <dt>${esArmado ? 'Encargado' : 'Ingreso'}</dt><dd>${fdatetime(o.fecha_ingreso)}</dd>
-        ${o.fecha_entrega ? `<dt>Entregado</dt><dd>${fdatetime(o.fecha_entrega)} · ${money(o.total_cobrado)}</dd>` : ''}</dl>
+        ${o.fecha_entrega ? `<dt>Entregado</dt><dd>${fdatetime(o.fecha_entrega)} · ${money(o.total_cobrado)}</dd>` : ''}
+        ${cerrada || (o.facturacion || 'no') !== 'no' ? `<dt>Factura</dt><dd>${pillFactura(o)}${cerrada ? ' <button class="btn sm" id="fact-orden">Cambiar</button>' : ''}</dd>` : ''}</dl>
         <div class="row"><div class="field"><label>Fecha estimada</label><input class="input" type="date" id="fecha-est" value="${o.fecha_estimada || ''}"></div>
           <div class="field"><label>Técnico</label><input class="input" id="tecnico" value="${esc(o.tecnico)}"></div></div>
         <div class="field"><label>${esArmado ? 'Especificaciones' : 'Falla reportada'}</label><textarea class="input" id="falla">${esc(o.falla_reportada)}</textarea></div>
@@ -1988,9 +2039,10 @@ async function detalleOrden(id) {
   br.onblur = () => setTimeout(() => sug.hidden = true, 150);
   }
 
+  const factOrden = $('#fact-orden'); if (factOrden) factOrden.onclick = () => facturaModal(o, () => render(), true);
   const anEnt = $('#anular-entrega');
   if (anEnt) anEnt.onclick = () => run(async () => {
-    if (!confirm('¿Anular la entrega? La orden vuelve a "Listo para retirar", los repuestos vuelven al stock y se descuenta el cobro (de caja o de la cuenta corriente).')) return;
+    if (!confirm(`¿Anular la entrega? La orden vuelve a "Listo para retirar", los repuestos vuelven al stock y se descuenta el cobro (de caja o de la cuenta corriente).${o.facturacion === 'emitida' ? `\n\nOjo: ya tiene la factura emitida${o.factura_nro ? ` (N° ${o.factura_nro})` : ''}, vas a necesitar emitir la nota de crédito.` : ''}`)) return;
     await store.anularEntregaOrden(id); toast('Entrega anulada'); render();
   });
   const ent = $('#entregar');
@@ -2006,6 +2058,7 @@ async function detalleOrden(id) {
         <div class="field"><label>Forma de pago</label><div class="pay-opts" id="ent-chips">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div>
           <div id="ent-comb"></div><button class="linkbtn small" id="ent-combinar" style="margin-top:.4rem;padding:0">＋ Combinar dos medios de pago</button></div></div>
       <div class="small" style="margin:-.3rem 0 .9rem" id="saldo-restante"></div>
+      <div class="field"><label>Factura</label><div id="ent-factura"></div></div>
       <div class="field"><label>Mensaje final para el cliente (opcional)</label><input class="input" id="msg" placeholder="ej: Garantía de ${n.garantia_dias} días sobre el trabajo realizado."></div>
       <div class="field" id="nota-interna-box" hidden><label>Motivo interno de la entrega sin cobrar <span class="muted">(el cliente no lo ve)</span></label>
         <input class="input" id="nota-interna" list="motivos-sin-cobro" placeholder="ej: El cliente no quiso repararlo">
@@ -2064,6 +2117,8 @@ async function detalleOrden(id) {
       if (mas) mas.onclick = () => { comb.push({ forma: FORMAS_PAGO.find(f => !comb.some(p => p.forma === f)) || 'Efectivo', monto: 0, auto: true }); pintarSaldo(); };
     }
     $('#ent-combinar', m.el).onclick = () => { comb = [{ forma, monto: '', auto: false }, { forma: forma === 'Efectivo' ? 'Transferencia' : 'Efectivo', monto: 0, auto: true }]; pintarSaldo(); $('[data-em="0"]', m.el)?.focus(); };
+    let fact = { estado: o.facturacion || 'no', nro: o.factura_nro || '' };
+    controlFactura($('#ent-factura', m.el), fact, x => { fact = x; });
     $('#tot', m.el).oninput = pintarSaldo;
     $('#paga', m.el).oninput = () => { pagaEditado = true; pintarSaldo(); };
     $$('#ent-chips .chip', m.el).forEach(b => b.onclick = () => { forma = b.dataset.f; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarSaldo(); });
@@ -2076,6 +2131,8 @@ async function detalleOrden(id) {
       if (queda > 0.009 && !confirm(`Quedan ${money(queda)} como deuda en la cuenta corriente de ${o.cliente.nombre}. ¿Confirmar la entrega?`)) return;
       await store.entregarOrden(id, { total: tot, forma_pago: paga > 0 ? textoFormas() : CUENTA_CORRIENTE, pagado: paga, pagos: pagos?.length ? pagos : null,
         comentario: $('#msg', m.el).value.trim(), notaInterna: $('#nota-interna', m.el).value.trim() });
+      // el estado de la factura se guarda aparte: si falla, la entrega ya quedó hecha y se cambia desde la orden
+      if (fact.estado !== (o.facturacion || 'no') || fact.nro !== (o.factura_nro || '')) await store.establecerFacturaOrden(id, fact).catch(() => toast('Se entregó, pero no se pudo guardar el estado de la factura: cambialo desde la orden', true));
       m.close(); render();
       const r = modal(esArmado ? 'Equipo nuevo entregado' : 'Reparación entregada', `<div class="empty" style="padding:1rem"><div class="total-box">${money(tot)}</div>
           <div class="muted">${paga ? `Pagó ${money(paga)} (${esc(comb ? comb.filter(p => +p.monto > 0).map(p => `${p.forma} ${money(p.monto)}`).join(' + ') : forma)})` : saldo ? 'No pagó al retirar' : 'Sin saldo a cobrar'}${queda > 0.009 ? ` · quedan ${money(queda)} en su cuenta corriente` : ''}</div></div>`,
@@ -2214,6 +2271,67 @@ async function imprimirEntregaOrden(id, n) {
     <div class="c">Documento no válido como factura.<br>¡Gracias por confiar en nosotros!</div>
   </div>`, PAGINA_TICKET);
 }
+
+// =====================================================================
+// FACTURAS: qué ventas y entregas de service hay que facturar y cuáles ya se emitieron.
+// No depende de cómo se cobró: sirve igual si se pagó, quedó en cuenta corriente o fue parte y parte.
+// =====================================================================
+ROUTES.facturas = async ({ q }) => {
+  const [ventas, ordenes, clientes] = await Promise.all([store.ventas(), store.ordenes(), store.clientes()]);
+  const nombreDe = id => clientes.find(c => c.id === id)?.nombre || 'Consumidor final';
+  // Ventas y entregas de service en una sola lista. "cancelada": venta anulada, o service cuya entrega se anuló / todavía no se entregó
+  const facturables = [
+    ...ventas.filter(v => (v.facturacion || 'no') !== 'no').map(v => ({ ...v, origen: 'venta', clave: `v${v.id}`, fechaRef: v.fecha, monto: +v.total, cancelada: !!v.anulada })),
+    ...ordenes.filter(o => (o.facturacion || 'no') !== 'no').map(o => ({ ...o, origen: 'service', clave: `s${o.id}`, fechaRef: o.fecha_entrega || o.fecha_ingreso, monto: +o.total_cobrado || 0, cancelada: o.estado !== 'entregado' })),
+  ].sort((a, b) => String(b.fechaRef).localeCompare(String(a.fechaRef)));
+  const anticipos = await store.anticiposDeOrdenes(facturables.filter(x => x.origen === 'service').map(x => x.id)).catch(() => []);
+  const pendientes = facturables.filter(x => x.facturacion === 'pendiente' && !x.cancelada);
+  const emitidas = facturables.filter(x => x.facturacion === 'emitida');
+  const montoPend = pendientes.reduce((s, x) => s + x.monto, 0);
+  let filtro = q.get('estado') || 'pendiente', texto = '';
+  view().innerHTML = `
+  <div class="page-head"><div><h1>Facturas</h1><div class="small muted">Control de qué ventas y entregas de service hay que facturar. Es solo un registro: no emite nada en AFIP. El estado se carga al vender o entregar, o desde cada venta u orden.</div></div></div>
+  <div class="grid grid-2" style="margin-bottom:1rem">
+    <div class="card kpi"><div class="label">Pendientes de emitir</div><div class="value" style="${pendientes.length ? 'color:var(--warn)' : ''}">${pendientes.length}</div><div class="sub">${money(montoPend)} sin factura</div></div>
+    <div class="card kpi"><div class="label">Emitidas</div><div class="value">${emitidas.length}</div><div class="sub">${emitidas.filter(x => !x.factura_nro).length ? `${emitidas.filter(x => !x.factura_nro).length} sin número cargado` : 'todas con su número'}</div></div>
+  </div>
+  <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por cliente, N° de venta u orden, o N° de factura"></div></div>
+  <div class="chips" id="chips"></div>
+  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Comprobante</th><th>Fecha</th><th>Cliente</th><th class="num">Total</th><th>Cómo se pagó</th><th>Factura</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  const opts = [['pendiente', 'Pendientes de emitir', pendientes.length], ['emitida', 'Emitidas', emitidas.length], ['todas', 'Todas las que se facturan', facturables.length]];
+  // Cómo se pagó: la venta con sus partes; el service con pagos a cuenta + lo pagado al retirar + lo que quedó en cuenta corriente
+  const cobro = x => {
+    const cc = m => `<span class="pill amber">Cuenta corriente ${money(m)}</span>`;
+    if (x.origen === 'venta') return (x.pagos?.length ? x.pagos : [{ forma_pago: x.forma_pago, monto: x.total }])
+      .map(p => p.forma_pago === CUENTA_CORRIENTE ? cc(p.monto) : `<span class="small">${esc(p.forma_pago)} ${money(p.monto)}</span>`).join('<br>');
+    const antic = anticipos.filter(a => a.orden_id === x.id).reduce((s, a) => s - a.monto, 0);
+    const pagado = x.pagado_entrega != null ? +x.pagado_entrega : x.forma_pago_entrega === CUENTA_CORRIENTE ? 0 : Math.max(x.monto - antic, 0);
+    const resto = Math.max(x.monto - antic - pagado, 0);
+    const l = [antic > 0 ? `<span class="small">Pagos a cuenta ${money(antic)}</span>` : '', pagado > 0 ? `<span class="small">${esc(x.forma_pago_entrega || 'Al retirar')} ${money(pagado)}</span>` : '', resto > 0.009 ? cc(resto) : ''].filter(Boolean);
+    return l.join('<br>') || '<span class="small muted">Sin cobro</span>';
+  };
+  const paint = () => {
+    $('#chips').innerHTML = opts.map(([k, l, n]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}<span class="count">${n}</span></button>`).join('');
+    $$('#chips .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
+    const base = filtro === 'emitida' ? emitidas : filtro === 'todas' ? facturables : pendientes.slice().reverse();   // las pendientes, de la más vieja a la más nueva
+    const l = base.filter(x => matches(texto, `#${x.numero}`, nombreDe(x.cliente_id), x.factura_nro));
+    $('#rows').innerHTML = l.map(x => `<tr class="click" data-clave="${x.clave}"><td class="mono"><b>#${x.numero}</b><div class="small muted" style="font-family:inherit">${x.origen === 'venta' ? 'Venta' : 'Service'}</div></td>
+      <td class="nowrap">${fdate(x.fechaRef)}<div class="small muted">${daysSince(x.fechaRef) === 0 ? 'hoy' : `hace ${daysSince(x.fechaRef)} d`}</div></td>
+      <td>${esc(nombreDe(x.cliente_id))}</td><td class="num nowrap">${money(x.monto)}</td><td>${cobro(x)}</td>
+      <td>${pillFactura(x)}${x.cancelada ? ` <span class="pill red">${x.origen === 'venta' ? 'Anulada' : 'Entrega anulada'}${x.facturacion === 'emitida' ? ': falta nota de crédito' : ''}</span>` : ''}</td>
+      <td class="right nowrap">${x.facturacion === 'pendiente' && !x.cancelada ? `<button class="btn sm ok" data-emitir="${x.clave}">Marcar emitida</button>` : `<button class="btn sm" data-fact="${x.clave}">Cambiar</button>`}</td></tr>`).join('')
+      || `<tr><td colspan="7" class="empty">${filtro === 'pendiente' ? 'No hay nada con la factura pendiente de emitir.' : 'No hay nada en este estado.'}</td></tr>`;
+    const de = clave => facturables.find(x => x.clave === clave);
+    $$('[data-clave]').forEach(tr => tr.onclick = ev => {
+      if (ev.target.closest('button')) return;
+      const x = de(tr.dataset.clave); if (x.origen === 'venta') run(() => ventaModal(x.id)); else go(`#/service/${x.id}`);
+    });
+    $$('[data-emitir]').forEach(b => b.onclick = () => { const x = de(b.dataset.emitir); facturaModal({ ...x, facturacion: 'emitida' }, () => render(), x.origen === 'service'); });
+    $$('[data-fact]').forEach(b => b.onclick = () => { const x = de(b.dataset.fact); facturaModal(x, () => render(), x.origen === 'service'); });
+  };
+  $('#buscar').oninput = e => { texto = e.target.value.trim(); paint(); };
+  paint();
+};
 
 // =====================================================================
 // CAJA

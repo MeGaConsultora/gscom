@@ -391,6 +391,23 @@ export const store = {
     aplicarPagosVenta(v, 1, `Venta #${v.numero}`);
     save(); return clone(v);
   },
+  async facturasPendientes() {
+    return db.ventas.filter(v => v.facturacion === 'pendiente' && !v.anulada).length
+      + db.ordenes_servicio.filter(o => o.facturacion === 'pendiente' && o.estado === 'entregado').length;
+  },
+  async establecerFacturaOrden(id, { estado, nro = '' }) {
+    const o = byId('ordenes_servicio', id); if (!o) throw new Error('Orden no encontrada');
+    const emitida = estado === 'emitida';
+    Object.assign(o, { facturacion: estado, factura_nro: emitida ? String(nro || '').trim() : '', factura_fecha: emitida ? now() : null });
+    save();
+  },
+  async anticiposDeOrdenes(ids) { return clone(db.cc_movimientos.filter(m => ids.includes(m.orden_id) && m.tipo === 'pago' && !m.anulado)); },
+  async establecerFacturaVenta(id, { estado, nro = '' }) {
+    const v = byId('ventas', id); if (!v) throw new Error('Venta no encontrada');
+    const emitida = estado === 'emitida';
+    Object.assign(v, { facturacion: estado, factura_nro: emitida ? String(nro || '').trim() : '', factura_fecha: emitida ? now() : null });
+    save();
+  },
   async anularVenta(id) {
     const v = byId('ventas', id);
     if (v.anulada) throw new Error('La venta ya estaba anulada');

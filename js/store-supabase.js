@@ -195,6 +195,29 @@ export const store = {
       .gte('venta.fecha', desdeISO).eq('venta.anulada', false).order('id'), 20000);
   },
   async anularVenta(id) { await q(sb.rpc('anular_venta', { p_venta_id: id })); },
+  // Cuántas ventas y entregas de service esperan su factura (para el aviso en la barra; no baja todos los datos)
+  async facturasPendientes() {
+    const [v, o] = await Promise.all([
+      sb.from('ventas').select('id', { count: 'exact', head: true }).eq('facturacion', 'pendiente').eq('anulada', false),
+      sb.from('ordenes_servicio').select('id', { count: 'exact', head: true }).eq('facturacion', 'pendiente').eq('estado', 'entregado')]);
+    if (v.error) throw new Error(v.error.message);
+    if (o.error) throw new Error(o.error.message);
+    return (v.count || 0) + (o.count || 0);
+  },
+  async establecerFacturaOrden(id, { estado, nro = '' }) {
+    const emitida = estado === 'emitida';
+    await q(sb.from('ordenes_servicio').update({ facturacion: estado, factura_nro: emitida ? String(nro || '').trim() : '', factura_fecha: emitida ? new Date().toISOString() : null }).eq('id', id));
+  },
+  // Pagos a cuenta (anticipos) de varias órdenes juntas
+  async anticiposDeOrdenes(ids) {
+    if (!ids.length) return [];
+    return q(sb.from('cc_movimientos').select('*').in('orden_id', ids).eq('tipo', 'pago').eq('anulado', false));
+  },
+  // Estado de la factura de una venta: 'no' | 'pendiente' | 'emitida' (con su número, opcional)
+  async establecerFacturaVenta(id, { estado, nro = '' }) {
+    const emitida = estado === 'emitida';
+    await q(sb.from('ventas').update({ facturacion: estado, factura_nro: emitida ? String(nro || '').trim() : '', factura_fecha: emitida ? new Date().toISOString() : null }).eq('id', id));
+  },
   async editarVenta(id, { cliente_id, items, descuento = 0, forma_pago, notas = '', pagos = null }) {
     await q(sb.rpc('editar_venta', {
       p_venta_id: id, p_cliente_id: cliente_id || null,
