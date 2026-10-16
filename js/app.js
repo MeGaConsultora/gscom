@@ -201,6 +201,7 @@ async function render() {
     cart = carritoVacio();
   }
   $$('nav.tabs a').forEach(a => a.classList.toggle('active', a.dataset.r === (['inventario', 'elit'].includes(r.name) ? 'productos' : r.name)));
+  $('nav.tabs a.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });   // si la barra tiene scroll, la pestaña actual queda a la vista
   const fn = ROUTES[r.name] || ROUTES.inicio;
   view().innerHTML = '<div class="empty">Cargando…</div>';
   await run(() => fn(r));
@@ -223,7 +224,9 @@ async function actualizarContador() {
   if (e) e.innerHTML = `Encargos${n ? ` <span class="badge" title="Solicitudes de la tienda para revisar">${n}</span>` : ''}`;
   // Ventas con la factura pendiente de emitir
   const f = $('nav.tabs a[data-r=facturas]');
-  if (f) { const p = await store.facturasPendientes().catch(() => 0); f.innerHTML = `Facturas${p ? ` <span class="badge" style="background:var(--warn)" title="Ventas con la factura pendiente de emitir">${p}</span>` : ''}`; }
+  if (f) { const p = await store.facturasPendientes().catch(() => 0); f.innerHTML = `Facturas${p ? ` <span class="badge" style="background:var(--warn)" title="Ventas y servicios con la factura pendiente de emitir">${p}</span>` : ''}`; }
+  // los avisos cambian el ancho de las pestañas: se vuelve a dejar a la vista la actual (si la barra tiene scroll)
+  $('nav.tabs a.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
 
 // Entró una solicitud desde la tienda: aviso con sonido. Si el cliente la cancela, el aviso desaparece.
@@ -4234,6 +4237,12 @@ function pantallaLogin(mensaje = '') {
 // Arranque
 // =====================================================================
 const pintarNav = () => { $('nav.tabs').innerHTML = NAV.filter(([r]) => !soloTienda() || r === 'tienda').map(([r, l]) => `<a href="#/${r}" data-r="${r}">${l}</a>`).join(''); };
+// Si la barra de pestañas tiene scroll, la pestaña actual tiene que quedar a la vista aunque el ancho cambie después de cargar (fuentes, insignias, usuario)
+{
+  const verActiva = () => $('nav.tabs a.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  if (window.ResizeObserver) new ResizeObserver(verActiva).observe($('nav.tabs'));
+  document.fonts?.ready.then(verActiva);
+}
 let iniciada = false;
 
 async function iniciar() {
