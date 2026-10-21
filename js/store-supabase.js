@@ -363,6 +363,13 @@ export const store = {
   async cargarDeuda(clienteId, { monto, concepto }) {
     await q(sb.from('cc_movimientos').insert({ cliente_id: clienteId, tipo: 'cargo', monto: +monto, concepto }));
   },
+  // Saldo a favor cargado a mano: movimiento a favor del cliente (monto negativo) que NO mueve la caja
+  // imputaDeuda: si se aplica a lo que el cliente ya debe (true) o queda aparte como saldo a favor (false)
+  async cargarSaldoFavor(clienteId, { monto, concepto, imputaDeuda = true }) {
+    await q(sb.from('cc_movimientos').insert({ cliente_id: clienteId, tipo: 'ajuste', monto: -Math.abs(+monto), concepto, manual: true, imputa_deuda: !!imputaDeuda }));
+  },
+  async editarSaldoFavor(id, { concepto, monto, imputaDeuda = true }) { await q(sb.rpc('editar_saldo_favor_manual', { p_id: id, p_monto: +monto, p_concepto: concepto, p_imputa: !!imputaDeuda })); },
+  async eliminarSaldoFavor(id) { await q(sb.rpc('eliminar_saldo_favor_manual', { p_id: id })); },
   async anularCobroCuenta(ccId) { await q(sb.rpc('anular_cobro_cuenta', { p_cc_id: ccId })); },
   async editarCargoManual(id, { concepto, monto }) {
     await q(sb.rpc('editar_cargo_manual', { p_id: id, p_monto: +monto, p_concepto: concepto }));

@@ -2478,7 +2478,7 @@ ROUTES.fichero = async ({ id }) => {
   const aFavor = saldos.filter(s => s.saldo < -0.009);
   const alDia = saldos.filter(s => Math.abs(s.saldo) <= 0.009).sort((a, b) => String(a.nombre).localeCompare(String(b.nombre)));
   view().innerHTML = `
-  <div class="page-head"><h1>Fichero</h1><div class="actions"><button class="btn primary" id="cargar">+ Cargar deuda manual</button></div></div>
+  <div class="page-head"><h1>Fichero</h1><div class="actions"><button class="btn" id="cargar-favor">+ Saldo a favor</button><button class="btn primary" id="cargar">+ Cargar deuda manual</button></div></div>
   <div class="grid grid-3" style="margin-bottom:1rem">
     <div class="card kpi"><div class="label">Total adeudado</div><div class="value" style="color:${total ? 'var(--bad)' : 'inherit'}">${money(total)}</div></div>
     <div class="card kpi"><div class="label">Clientes que deben</div><div class="value">${deudores.length}</div></div>
@@ -2502,6 +2502,7 @@ ROUTES.fichero = async ({ id }) => {
   };
   $('#buscar').oninput = e => paint(e.target.value);
   $('#cargar').onclick = () => cargoManualModal();
+  $('#cargar-favor').onclick = () => cargoManualModal(null, 'favor');
   paint('');
 };
 
@@ -2511,6 +2512,10 @@ async function cuentaCliente(clienteId) {
   const saldo = movs.reduce((s, m) => s + +m.monto, 0);
   const { grupos } = deudaPorConcepto(movs, imps);
   const pendientes = grupos.filter(g => g.pendiente > 0.009);
+  // Saldo a favor cargado "sin aplicar a la deuda": no baja los conceptos pendientes (el saldo total sí lo cuenta)
+  const sinAplicar = movs.filter(m => m.tipo === 'ajuste' && m.manual && m.imputa_deuda === false).reduce((s, m) => s - m.monto, 0);
+  // Lo que se puede cobrar: con saldo a favor aparte, es la deuda de los conceptos (no el saldo neto)
+  const cobrable = sinAplicar > 0.009 ? pendientes.reduce((s, g) => s + g.pendiente, 0) : saldo;
   // Total compras: total neto por venta/orden/cargo (ya corregido si se editó), no la suma bruta de todos los "cargo" cargados alguna vez
   const totalCompras = grupos.reduce((s, g) => s + g.total, 0);
   // saldo acumulado línea por línea (de la más vieja a la más nueva)
@@ -2519,8 +2524,8 @@ async function cuentaCliente(clienteId) {
   const TIPO = { cargo: ['Cargo', 'amber'], pago: ['Pago', 'green'], ajuste: ['Ajuste', 'gray'] };
   view().innerHTML = `
   <div class="page-head"><div><a href="#/fichero" class="small muted">← Fichero</a><h1>${esc(c.nombre)}</h1></div>
-    <div class="actions"><a class="btn" href="#/clientes/${c.id}">Ficha del cliente</a><button class="btn" id="cargo">+ Cargar deuda</button>
-      <button class="btn ok" id="cobrar" ${saldo > 0 ? '' : 'disabled'}>Cobrar</button></div></div>
+    <div class="actions"><a class="btn" href="#/clientes/${c.id}">Ficha del cliente</a><button class="btn" id="cargo">+ Cargar deuda</button><button class="btn" id="cargo-favor">+ Saldo a favor</button>
+      <button class="btn ok" id="cobrar" ${cobrable > 0.009 ? '' : 'disabled'}>Cobrar</button></div></div>
   <div class="grid grid-3" style="margin-bottom:1rem">
     <div class="card kpi"><div class="label">Total compras</div><div class="value">${money(totalCompras)}</div></div>
     <div class="card kpi"><div class="label">Total pagado</div><div class="value">${money(-movs.filter(m => m.tipo === 'pago' && !m.anulado).reduce((s, m) => s + +m.monto, 0))}</div></div>
@@ -2533,20 +2538,23 @@ async function cuentaCliente(clienteId) {
       <td class="small">${esc(g.notas)}</td><td class="num">${money(g.total)}</td><td class="num muted">${g.pagado > 0.009 ? money(g.pagado) : '—'}</td>
       <td class="num"><b style="color:var(--bad)">${money(g.pendiente)}</b></td>
       <td class="right"><button class="btn sm ok" data-cobrar-uno="${g.clave}">Cobrar este</button></td></tr>`).join('')}
-    </tbody></table></div></div>` : ''}
+    </tbody></table></div>
+    ${sinAplicar > 0.009 ? `<p class="small muted" style="margin-top:.6rem">Además tiene <b>${money(sinAplicar)} a favor sin aplicar a la deuda</b> (se ve en los movimientos; se puede aplicar cuando quieras). El saldo de arriba ya lo descuenta.</p>` : ''}</div>` : ''}
   <h2 style="font-size:1rem;font-weight:600;margin:0 0 .6rem">Movimientos</h2>
   <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Observaciones</th><th class="num">Debe</th><th class="num">Haber</th><th class="num">Saldo</th><th></th></tr></thead><tbody>
-    ${conSaldo.map(m => `<tr><td class="nowrap">${fdatetime(m.fecha)}</td><td><span class="pill ${TIPO[m.tipo][1]}">${TIPO[m.tipo][0]}</span>${m.anulado ? ' <span class="pill red">Anulado</span>' : ''}</td>
-      <td>${esc(m.concepto)}${m.forma_pago ? ` <span class="small muted">· ${esc(m.forma_pago)}</span>` : ''}
+    ${conSaldo.map(m => `<tr><td class="nowrap">${fdatetime(m.fecha)}</td><td><span class="pill ${m.manual ? 'blue' : TIPO[m.tipo][1]}">${m.manual ? 'Saldo a favor' : TIPO[m.tipo][0]}</span>${m.anulado ? ' <span class="pill red">Anulado</span>' : ''}</td>
+      <td>${esc(m.concepto)}${m.forma_pago ? ` <span class="small muted">· ${esc(m.forma_pago)}</span>` : ''}${m.manual && m.imputa_deuda === false ? ' <span class="pill gray" title="No baja las deudas pendientes: es un saldo a favor aparte">sin aplicar a la deuda</span>' : ''}
         ${m.venta_id ? ` <a href="#" class="small" data-venta="${m.venta_id}">ver venta</a>` : ''}${m.orden_id ? ` <a class="small" href="#/service/${m.orden_id}">ver orden</a>` : ''}</td>
       <td class="small">${esc(m.venta?.notas || '')}</td>
       <td class="num">${m.monto > 0 ? money(m.monto) : ''}</td><td class="num">${m.monto < 0 ? money(-m.monto) : ''}</td><td class="num"><b>${money(m.acum)}</b></td>
       <td class="right nowrap">${m.tipo === 'pago' && !m.anulado ? `<button class="btn sm" data-recibo="${m.id}">Recibo</button> <button class="btn sm danger" data-anular="${m.id}">Anular</button>`
-        : m.tipo === 'cargo' && !m.venta_id && !m.orden_id ? `<button class="btn sm" data-editar-cargo="${m.id}">Editar</button> <button class="btn sm danger" data-eliminar-cargo="${m.id}">Eliminar</button>` : ''}</td></tr>`).join('')
+        : m.tipo === 'cargo' && !m.venta_id && !m.orden_id ? `<button class="btn sm" data-editar-cargo="${m.id}">Editar</button> <button class="btn sm danger" data-eliminar-cargo="${m.id}">Eliminar</button>`
+        : m.tipo === 'ajuste' && m.manual ? `${m.imputa_deuda === false && pendientes.length ? `<button class="btn sm ok" data-aplicar-favor="${m.id}" title="Baja las deudas pendientes con este saldo a favor">Aplicar a la deuda</button> ` : ''}<button class="btn sm" data-editar-cargo="${m.id}">Editar</button> <button class="btn sm danger" data-eliminar-cargo="${m.id}">Eliminar</button>` : ''}</td></tr>`).join('')
     || '<tr><td colspan="8" class="empty">Sin movimientos.</td></tr>'}</tbody></table></div>`;
   $('#cobrar').onclick = () => run(() => cobrarModal(c.id, c.nombre, saldo, render));
   $$('[data-cobrar-uno]').forEach(b => b.onclick = () => run(() => cobrarModal(c.id, c.nombre, saldo, render, b.dataset.cobrarUno)));
   $('#cargo').onclick = () => cargoManualModal(c.id);
+  $('#cargo-favor').onclick = () => cargoManualModal(c.id, 'favor');
   $$('[data-venta]').forEach(a => a.onclick = e => { e.preventDefault(); ventaModal(+a.dataset.venta); });
   $$('[data-recibo]').forEach(b => b.onclick = () => run(() => imprimirRecibo(c.id, +b.dataset.recibo)));
   $$('[data-anular]').forEach(b => b.onclick = () => run(async () => {
@@ -2557,22 +2565,35 @@ async function cuentaCliente(clienteId) {
     const mv = movs.find(x => x.id === +b.dataset.editarCargo);
     editarCargoModal(mv, () => render());
   });
+  $$('[data-aplicar-favor]').forEach(b => b.onclick = () => run(async () => {
+    const mv = movs.find(x => x.id === +b.dataset.aplicarFavor);
+    await store.editarSaldoFavor(mv.id, { concepto: mv.concepto, monto: Math.abs(mv.monto), imputaDeuda: true });
+    toast('Saldo a favor aplicado a la deuda'); render();
+  }));
   $$('[data-eliminar-cargo]').forEach(b => b.onclick = () => run(async () => {
+    const mv = movs.find(x => x.id === +b.dataset.eliminarCargo);
+    if (mv.manual) {
+      if (!confirm('¿Eliminar este saldo a favor? Se quita de la cuenta del cliente (vuelve a deber lo que cubría).')) return;
+      await store.eliminarSaldoFavor(mv.id); toast('Saldo a favor eliminado'); return render();
+    }
     if (!confirm('¿Eliminar este cargo? Se resta del saldo del cliente.')) return;
     await store.eliminarCargoManual(+b.dataset.eliminarCargo); toast('Cargo eliminado'); render();
   }));
 }
 
+// Edita un cargo manual o un saldo a favor manual (mv.manual); el monto se ve siempre en positivo
 function editarCargoModal(mv, onDone) {
-  const m = modal('Editar cargo', `
+  const favor = !!mv.manual;
+  const m = modal(favor ? 'Editar saldo a favor' : 'Editar cargo', `
     <div class="field"><label>Concepto</label><input class="input" id="concepto" value="${esc(mv.concepto)}"></div>
-    <div class="field"><label>Monto</label><input class="input" type="number" step="any" min="0" id="monto" value="${mv.monto}"></div>`,
+    <div class="field"><label>Monto</label><input class="input" type="number" step="any" min="0" id="monto" value="${Math.abs(mv.monto)}"></div>
+    ${favor ? `<label class="small" style="display:flex;gap:.45rem;align-items:center"><input type="checkbox" id="imputa" ${mv.imputa_deuda === false ? '' : 'checked'}> <b>Aplicarlo a lo que ya debe</b></label>` : ''}`,
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
   $('#ok', m.el).onclick = () => run(async () => {
     const concepto = $('#concepto', m.el).value.trim(), monto = +$('#monto', m.el).value;
     if (!concepto || !(monto > 0)) return toast('Completá concepto y monto', true);
-    await store.editarCargoManual(mv.id, { concepto, monto });
-    m.close(); toast('Cargo actualizado'); onDone();
+    await (favor ? store.editarSaldoFavor(mv.id, { concepto, monto, imputaDeuda: $('#imputa', m.el).checked }) : store.editarCargoManual(mv.id, { concepto, monto }));
+    m.close(); toast(favor ? 'Saldo a favor actualizado' : 'Cargo actualizado'); onDone();
   });
 }
 
@@ -2595,7 +2616,10 @@ function deudaPorConcepto(movs, imps = []) {
   };
   for (const m of cron) {
     const monto = +m.monto;
-    if (m.tipo === 'pago') {
+    // un saldo a favor cargado a mano se reparte como un cobro (lo más viejo primero; lo que sobra queda a favor), pero no es plata cobrada.
+    // Si se cargó "sin aplicar a la deuda", no toca ningún concepto: queda aparte (solo cuenta en el saldo total).
+    if (m.tipo === 'ajuste' && m.manual && m.imputa_deuda === false) continue;
+    if (m.tipo === 'pago' || (m.tipo === 'ajuste' && m.manual && monto < 0)) {
       if (m.anulado) continue;                                  // su anulación lo compensa
       let resto = -monto; const apl = aplicaciones[m.id] = [];
       const aplicar = (g, max) => { const x = Math.min(max, resto); if (x <= 0.009) return; g.pendiente -= x; g.pagado += x; resto -= x; apl.push({ grupo: g.clave, monto: x }); };
@@ -2619,6 +2643,8 @@ function deudaPorConcepto(movs, imps = []) {
 async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null) {
   const [movs, imps] = await Promise.all([store.ccMovimientos(clienteId), store.ccImputaciones(clienteId).catch(() => [])]);
   const pendientes = deudaPorConcepto(movs, imps).grupos.filter(g => g.pendiente > 0.009);
+  // con un saldo a favor cargado aparte (sin aplicar a la deuda) se cobra contra la deuda de los conceptos, no contra el saldo neto
+  if (movs.some(x => x.tipo === 'ajuste' && x.manual && x.imputa_deuda === false)) saldo = Math.max(pendientes.reduce((s, g) => s + g.pendiente, 0), 0);
   const sel = new Set(preseleccion ? [preseleccion] : pendientes.map(g => g.clave));
   let forma = 'Efectivo';
   const m = modal(`Cobrar a ${nombre}`, `
@@ -2759,15 +2785,19 @@ function anticipoModal(o, onDone) {
   });
 }
 
-// Deuda cargada a mano (ej: saldo que ya traía de antes, un trabajo no registrado como venta)
-async function cargoManualModal(clienteId = null) {
+// Deuda (ej: saldo que ya traía de antes, un trabajo no registrado como venta) o saldo a favor (tipo 'favor') cargados a mano
+async function cargoManualModal(clienteId = null, tipo = 'deuda') {
+  const favor = tipo === 'favor';
   const clientes = clienteId ? [] : await store.clientes();
-  const m = modal('Cargar deuda manual', `
+  const m = modal(favor ? 'Cargar saldo a favor' : 'Cargar deuda manual', `
+    ${favor ? `<p class="small muted" style="margin-bottom:.8rem">Se suma a lo que el cliente tiene a favor. <b>No entra a la caja</b>: si el cliente te entregó plata, registralo con <b>Cobrar</b>.</p>` : ''}
     ${clienteId ? '' : `<div class="field"><label>Cliente *</label><select class="input" id="cli"><option value="">Elegí un cliente…</option><option value="__nuevo">+ Cliente nuevo…</option>
       ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select></div>`}
     <div class="field"><label>Monto *</label><input class="input" type="number" step="any" min="0" id="monto"></div>
-    <div class="field"><label>Concepto *</label><input class="input" id="concepto" placeholder="ej: Saldo anterior, trabajo a domicilio"></div>`,
-    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Cargar</button>`);
+    <div class="field"><label>Concepto *</label><input class="input" id="concepto" placeholder="${favor ? 'ej: Saldo anterior a favor, nota de crédito, devolución pendiente' : 'ej: Saldo anterior, trabajo a domicilio'}"></div>
+    ${favor ? `<label class="small" style="display:flex;gap:.45rem;align-items:flex-start;margin-bottom:.4rem"><input type="checkbox" id="imputa" checked style="margin-top:.15rem">
+      <span><b>Aplicarlo a lo que ya debe</b><br><span class="muted">Si lo destildás, queda como saldo a favor aparte y no baja las deudas pendientes (el saldo total es el mismo). Lo podés aplicar después.</span></span></label>` : ''}`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">${favor ? 'Cargar saldo a favor' : 'Cargar'}</button>`);
   const cliSel = $('#cli', m.el);
   if (cliSel) cliSel.onchange = () => {
     if (cliSel.value !== '__nuevo') return;
@@ -2780,8 +2810,8 @@ async function cargoManualModal(clienteId = null) {
   $('#ok', m.el).onclick = () => run(async () => {
     const cid = clienteId || +$('#cli', m.el).value, monto = +$('#monto', m.el).value, concepto = $('#concepto', m.el).value.trim();
     if (!cid || !(monto > 0) || !concepto) return toast('Completá cliente, monto y concepto', true);
-    await store.cargarDeuda(cid, { monto, concepto });
-    m.close(); toast('Deuda cargada'); cid === clienteId ? render() : go(`#/fichero/${cid}`);
+    await (favor ? store.cargarSaldoFavor(cid, { monto, concepto, imputaDeuda: $('#imputa', m.el).checked }) : store.cargarDeuda(cid, { monto, concepto }));
+    m.close(); toast(favor ? 'Saldo a favor cargado' : 'Deuda cargada'); cid === clienteId ? render() : go(`#/fichero/${cid}`);
   });
 }
 

@@ -506,6 +506,20 @@ export const store = {
     if (!m || m.tipo !== 'cargo' || m.venta_id || m.orden_id) throw new Error('Este cargo no se puede eliminar directamente: viene de una venta o de una orden de service');
     db.cc_movimientos = db.cc_movimientos.filter(x => x.id !== m.id); save();
   },
+  async cargarSaldoFavor(clienteId, { monto, concepto, imputaDeuda = true }) {
+    insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'ajuste', monto: -Math.abs(+monto), concepto, forma_pago: '', anulado: false, manual: true, imputa_deuda: !!imputaDeuda }); save();
+  },
+  async editarSaldoFavor(id, { concepto, monto, imputaDeuda = true }) {
+    const m = byId('cc_movimientos', id);
+    if (!m || m.tipo !== 'ajuste' || !m.manual) throw new Error('Este movimiento no es un saldo a favor cargado a mano: no se puede editar directamente');
+    if (!(+monto > 0)) throw new Error('El monto tiene que ser mayor a cero');
+    Object.assign(m, { concepto, monto: -Math.abs(+monto), imputa_deuda: !!imputaDeuda }); save();
+  },
+  async eliminarSaldoFavor(id) {
+    const m = byId('cc_movimientos', id);
+    if (!m || m.tipo !== 'ajuste' || !m.manual) throw new Error('Este movimiento no es un saldo a favor cargado a mano: no se puede eliminar directamente');
+    db.cc_movimientos = db.cc_movimientos.filter(x => x.id !== m.id); save();
+  },
   async anularCobroCuenta(ccId) {
     const m = byId('cc_movimientos', ccId);
     if (m.tipo !== 'pago') throw new Error('Solo se pueden anular cobros');
