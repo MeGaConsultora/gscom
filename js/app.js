@@ -14,6 +14,18 @@ const fdatetime = iso => iso ? new Date(iso).toLocaleString('es-AR', { day: '2-d
 const sameDay = (a, b) => new Date(a).toDateString() === new Date(b).toDateString();
 const isToday = iso => sameDay(iso, new Date());
 const daysSince = iso => Math.max(0, Math.floor((Date.now() - new Date(iso)) / 86400000));
+
+// Fecha que se elige a mano en ventas, cobros y movimientos (el campo trae el día, aaaa-mm-dd; por defecto hoy)
+const hoyISO = () => new Date().toLocaleDateString('sv');
+const diaLocal = iso => new Date(iso).toLocaleDateString('sv');
+// Del día elegido a la fecha-hora que se guarda: null si es hoy (la base pone el momento actual); si es otro día, ese día con la hora de ahora
+const fechaDeDia = d => {
+  if (!d || d === hoyISO()) return null;
+  const [y, m, dd] = d.split('-').map(Number), n = new Date();
+  return new Date(y, m - 1, dd, n.getHours(), n.getMinutes(), n.getSeconds()).toISOString();
+};
+const campoFecha = (id, valor = '', etiqueta = 'Fecha') => `<div class="field"><label>${etiqueta}</label><input class="input" type="date" id="${id}" max="${hoyISO()}" value="${valor || hoyISO()}"></div>`;
+const diaFuturo = d => !!d && d > hoyISO();
 const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
 const matches = (q, ...fields) => { const t = norm(q).trim(); return !t || t.split(/\s+/).every(w => fields.some(f => norm(f).includes(w))); };
 const pill = estado => { const e = estadoInfo(estado); return `<span class="pill ${e.color}">${esc(e.label)}</span>`; };
@@ -363,7 +375,7 @@ function bindRowLinks() {
 // =====================================================================
 // VENDER (punto de venta)
 // =====================================================================
-const carritoVacio = () => ({ items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', notas: '', editId: null, editNumero: null, factura: 'no', facturaNro: '' });
+const carritoVacio = () => ({ items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', notas: '', editId: null, editNumero: null, factura: 'no', facturaNro: '', fecha: '' });
 
 // Facturación de una venta: solo se registra el estado (no emite nada en AFIP)
 const FACTURA_ESTADOS = { no: ['No se factura', 'gray'], pendiente: ['Pendiente de emitir', 'amber'], emitida: ['Emitida', 'green'] };
@@ -427,6 +439,8 @@ ROUTES.vender = async ({ q }) => {
       <div class="field"><label>Descuento</label>
         <div style="display:flex;gap:.4rem;align-items:center"><input class="input" id="desc" type="number" min="0" step="any" value="${cart.descValor || ''}" placeholder="0" style="flex:1">
           <div class="pay-opts" id="desc-modo" style="flex:0 0 auto;flex-wrap:nowrap"><button class="chip" data-dm="monto" title="Descuento en pesos">$</button><button class="chip" data-dm="pct" title="Descuento en % sobre el subtotal">%</button></div></div></div>
+      <div class="field"><label>Fecha de la venta</label><input class="input" type="date" id="fecha-venta" max="${hoyISO()}" value="${cart.fecha || hoyISO()}">
+        <div class="small" id="fecha-aviso" style="color:var(--warn);margin-top:.25rem"></div></div>
       <div class="field"><label>Observaciones <span class="muted">(interno, no sale en el comprobante)</span></label>
         <input class="input" id="obs" value="${esc(cart.notas)}" placeholder="ej: Retiró Juan Pérez · Paga el viernes"></div>
       <hr style="border:0;border-top:1px solid var(--line);margin:.6rem 0 1rem">
@@ -485,6 +499,10 @@ ROUTES.vender = async ({ q }) => {
   paintDescModo();
   $('#desc').oninput = e => { cart.descValor = Math.max(0, +String(e.target.value).replace(',', '.') || 0); paintCart(); };
   $('#obs').oninput = e => cart.notas = e.target.value;
+  // la fecha vuelve a hoy si se borra el campo; otro día se avisa debajo del campo
+  const pintarAvisoFecha = () => { $('#fecha-aviso').textContent = cart.fecha ? `Se registra con fecha ${fdate(cart.fecha + 'T12:00')}, no hoy.` : ''; };
+  $('#fecha-venta').onchange = e => { if (!e.target.value) e.target.value = hoyISO(); cart.fecha = e.target.value !== hoyISO() ? e.target.value : ''; pintarAvisoFecha(); };
+  pintarAvisoFecha();
   controlFactura($('#factura-box'), { estado: cart.factura, nro: cart.facturaNro }, f => { cart.factura = f.estado; cart.facturaNro = f.nro; });
 
   function add(p) {
@@ -585,7 +603,16 @@ ROUTES.vender = async ({ q }) => {
   // si falla guardar el estado de la factura, la venta ya quedó registrada: se avisa y se corrige desde la venta
   const guardarFactura = id => store.establecerFacturaVenta(id, { estado: cart.factura || 'no', nro: cart.facturaNro })
     .catch(() => toast('La venta se guardó, pero no se pudo guardar el estado de la factura: cambialo desde la venta', true));
+  // Fecha elegida: al editar, solo si cambió respecto de la que ya tenía la venta; en una venta nueva, solo si no es hoy.
+  // (se aplica después de registrar: la base pone "ahora" y acá se reubica la venta y sus movimientos en ese día)
+  const aplicarFecha = async (id, fechaOriginal = null) => {
+    const dia = cart.fecha || hoyISO();
+    if (dia === (fechaOriginal ? diaLocal(fechaOriginal) : hoyISO())) return;
+    await store.fijarFechaVenta(id, fechaDeDia(cart.fecha) || new Date().toISOString())
+      .catch(() => toast('La venta se guardó, pero no se pudo cambiar su fecha: la fecha quedó como hoy', true));
+  };
   $('#cobrar').onclick = () => run(async () => {
+    if (diaFuturo(cart.fecha)) return toast('La fecha de la venta no puede ser futura', true);
     // pago combinado: las partes con monto (el último medio lleva lo que falta)
     let pagos = null;
     if (cart.pagos) {
@@ -610,12 +637,15 @@ ROUTES.vender = async ({ q }) => {
       if (cambios.length && !confirm(`Vas a MODIFICAR la venta #${cart.editNumero} (no es una venta nueva):\n\n${cambios.join('\n')}\n\n¿Confirmás?`)) return;
       await store.editarVenta(cart.editId, { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: formaPago, pagos, notas: (cart.notas || '').trim() });
       await guardarFactura(cart.editId);
+      await aplicarFecha(cart.editId, cart.orig?.fecha);
       cart = carritoVacio();
       toast('Venta actualizada'); go('#/caja'); return;
     }
     const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: formaPago, pagos, notas: (cart.notas || '').trim() });
     const factura = cart.factura || 'no';
     if (factura !== 'no') await guardarFactura(v.id);
+    await aplicarFecha(v.id);
+    const diaVenta = cart.fecha;
     // Si la venta salió de un encargo, queda entregado y se aplica (cancela) el anticipo ya cobrado
     if (cart.encargoId) {
       await store.actualizarEncargo(cart.encargoId, { estado: 'entregado', fecha_entrega: new Date().toISOString() }).catch(() => toast('La venta se registró, pero no se pudo marcar el encargo como entregado', true));
@@ -623,6 +653,7 @@ ROUTES.vender = async ({ q }) => {
     }
     cart = carritoVacio();
     const m = modal(`Venta #${v.numero} registrada`, `<div class="empty" style="padding:1rem"><div class="total-box">${money(v.total)}</div><div class="muted">${esc(textoPago(v))}</div>
+      ${diaVenta ? `<div class="small" style="margin-top:.4rem">Con fecha <b>${fdate(diaVenta + 'T12:00')}</b></div>` : ''}
       ${factura === 'pendiente' ? '<div class="small" style="margin-top:.6rem"><span class="pill amber">Factura pendiente de emitir</span> · la ves en la pestaña Facturas</div>'
         : factura === 'emitida' ? '<div class="small" style="margin-top:.6rem"><span class="pill green">Factura emitida</span></div>' : ''}</div>`,
       `<button class="btn" id="imp">Imprimir comprobante</button><button class="btn primary" data-close>Nueva venta</button>`);
@@ -675,7 +706,8 @@ async function ventaModal(id) {
       editId: v.id, editNumero: v.numero, cliente_id: v.cliente_id ? String(v.cliente_id) : '', descuento: +v.descuento || 0, forma_pago: v.pagos?.length ? v.pagos[0].forma_pago : v.forma_pago, notas: v.notas || '',
       pagos: v.pagos?.length ? v.pagos.map(p => ({ forma: p.forma_pago, monto: +p.monto })) : null,
       factura: v.facturacion || 'no', facturaNro: v.factura_nro || '',
-      orig: { cliente_id: v.cliente_id, clienteNombre: v.cliente?.nombre || '', total: +v.total },
+      fecha: diaLocal(v.fecha) === hoyISO() ? '' : diaLocal(v.fecha),   // la venta conserva su fecha; se cambia a propósito si hace falta
+      orig: { cliente_id: v.cliente_id, clienteNombre: v.cliente?.nombre || '', total: +v.total, fecha: v.fecha },
       items: v.items.map(i => {
         const p = i.producto_id ? productos.find(x => x.id === i.producto_id) : null;
         return { producto_id: i.producto_id, descripcion: i.descripcion, cantidad: +i.cantidad, precio_unitario: +i.precio_unitario, stock: p?.stock ?? 0, es_servicio: p ? p.es_servicio : true };
@@ -2372,11 +2404,19 @@ ROUTES.caja = async ({ q }) => {
     const m = modal(tipo === 'ingreso' ? 'Ingreso de caja' : 'Egreso de caja', `
       <div class="field"><label>Concepto</label><input class="input" name="concepto" placeholder="${tipo === 'ingreso' ? 'ej: Fondo inicial' : 'ej: Pago de flete, retiro'}"></div>
       <div class="row"><div class="field"><label>Monto</label><input class="input" name="monto" type="number" step="any" min="0"></div>
-      <div class="field"><label>Forma de pago</label><select class="input" name="forma_pago">${FORMAS_PAGO.map(f => `<option>${f}</option>`).join('')}</select></div></div>`,
+      <div class="field"><label>Forma de pago</label><select class="input" name="forma_pago">${FORMAS_PAGO.map(f => `<option>${f}</option>`).join('')}</select></div></div>
+      ${campoFecha('fecha-mov')}`,
       `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Registrar</button>`);
     $('#ok', m.el).onclick = () => run(async () => {
       const f = formData(m.el); if (!f.concepto || !(+f.monto > 0)) return toast('Completá concepto y monto', true);
-      await store.agregarMovimientoCaja({ tipo, concepto: f.concepto, monto: +f.monto, forma_pago: f.forma_pago }); m.close(); render();
+      const dia = $('#fecha-mov', m.el).value || hoyISO();
+      if (diaFuturo(dia)) return toast('La fecha no puede ser futura', true);
+      await store.agregarMovimientoCaja({ tipo, concepto: f.concepto, monto: +f.monto, forma_pago: f.forma_pago, fecha: fechaDeDia(dia) });
+      m.close();
+      if (dia !== hoyISO()) {   // si es de otro día, se muestra ese día
+        toast(`Registrado con fecha ${fdate(dia + 'T12:00')}`);
+        if (q.get('dia') === dia) render(); else go(`#/caja?dia=${dia}`);
+      } else if (q.get('dia') && q.get('dia') !== hoyISO()) go('#/caja'); else render();
     });
   };
   $('#ing').onclick = () => movModal('ingreso');
@@ -2658,6 +2698,7 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
     <div class="field"><label>Monto a cobrar</label><input class="input" type="number" step="any" min="0" id="monto">
       <div class="small muted" style="margin-top:.3rem" id="ayuda"></div></div>
     <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div>
+    ${campoFecha('fecha-cobro', '', 'Fecha del cobro')}
     <div class="field"><label>Nota (opcional)</label><input class="input" id="nota" placeholder="ej: entrega a cuenta"></div>`,
     `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Registrar cobro</button>`, { wide: true });
   const inp = $('#monto', m.el), ayuda = $('#ayuda', m.el);
@@ -2679,13 +2720,18 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
   $('#ok', m.el).onclick = () => run(async () => {
     const monto = +inp.value;
     if (!(monto > 0)) return toast('Ingresá el monto a cobrar', true);
+    const dia = $('#fecha-cobro', m.el).value || hoyISO();
+    if (diaFuturo(dia)) return toast('La fecha del cobro no puede ser futura', true);
     if (monto > saldo + 0.009 && !confirm(`El monto supera la deuda (${money(saldo)}). La diferencia queda a favor del cliente. ¿Continuar?`)) return;
     // Imputación: lo cobrado se reparte entre lo marcado, de lo más viejo a lo más nuevo
     let resto = monto; const imputaciones = [];
     for (const g of elegidos()) { const x = Math.min(g.pendiente, resto); if (x > 0.009) { imputaciones.push({ grupo: g.clave, monto: +x.toFixed(2) }); resto -= x; } }
     const ccId = await store.cobrarCuenta(clienteId, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim(), imputaciones });
+    // otro día que hoy: el cobro y su ingreso a caja se reubican en esa fecha (se registran primero y se mueven después)
+    const f = fechaDeDia(dia);
+    if (f) await store.fijarFechaCobro(ccId, f).catch(() => toast('El cobro se registró, pero no se pudo cambiar su fecha: quedó como hoy', true));
     m.close(); onDone();
-    const r = modal('Cobro registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(forma)} · ${esc(nombre)}</div></div>`,
+    const r = modal('Cobro registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(forma)} · ${esc(nombre)}${f ? ` · con fecha ${fdate(dia + 'T12:00')}` : ''}</div></div>`,
       `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="rec">Imprimir recibo</button>`);
     $('#rec', r.el).onclick = () => run(() => imprimirRecibo(clienteId, ccId));
   });
@@ -2795,6 +2841,7 @@ async function cargoManualModal(clienteId = null, tipo = 'deuda') {
       ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select></div>`}
     <div class="field"><label>Monto *</label><input class="input" type="number" step="any" min="0" id="monto"></div>
     <div class="field"><label>Concepto *</label><input class="input" id="concepto" placeholder="${favor ? 'ej: Saldo anterior a favor, nota de crédito, devolución pendiente' : 'ej: Saldo anterior, trabajo a domicilio'}"></div>
+    ${campoFecha('fecha-mov')}
     ${favor ? `<label class="small" style="display:flex;gap:.45rem;align-items:flex-start;margin-bottom:.4rem"><input type="checkbox" id="imputa" checked style="margin-top:.15rem">
       <span><b>Aplicarlo a lo que ya debe</b><br><span class="muted">Si lo destildás, queda como saldo a favor aparte y no baja las deudas pendientes (el saldo total es el mismo). Lo podés aplicar después.</span></span></label>` : ''}`,
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">${favor ? 'Cargar saldo a favor' : 'Cargar'}</button>`);
@@ -2810,7 +2857,10 @@ async function cargoManualModal(clienteId = null, tipo = 'deuda') {
   $('#ok', m.el).onclick = () => run(async () => {
     const cid = clienteId || +$('#cli', m.el).value, monto = +$('#monto', m.el).value, concepto = $('#concepto', m.el).value.trim();
     if (!cid || !(monto > 0) || !concepto) return toast('Completá cliente, monto y concepto', true);
-    await (favor ? store.cargarSaldoFavor(cid, { monto, concepto, imputaDeuda: $('#imputa', m.el).checked }) : store.cargarDeuda(cid, { monto, concepto }));
+    const dia = $('#fecha-mov', m.el).value || hoyISO();
+    if (diaFuturo(dia)) return toast('La fecha no puede ser futura', true);
+    const fecha = fechaDeDia(dia);
+    await (favor ? store.cargarSaldoFavor(cid, { monto, concepto, imputaDeuda: $('#imputa', m.el).checked, fecha }) : store.cargarDeuda(cid, { monto, concepto, fecha }));
     m.close(); toast(favor ? 'Saldo a favor cargado' : 'Deuda cargada'); cid === clienteId ? render() : go(`#/fichero/${cid}`);
   });
 }

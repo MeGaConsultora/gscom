@@ -228,7 +228,11 @@ export const store = {
 
   // Caja
   async cajaMovimientos() { return todas(() => sb.from('caja_movimientos').select('*').order('fecha', { ascending: false }).order('id', { ascending: false }), 5000); },
-  async agregarMovimientoCaja(m) { return q(sb.from('caja_movimientos').insert(m).select().single()); },
+  // m.fecha (ISO) es opcional: si no viene (o es null), la base pone el momento actual
+  async agregarMovimientoCaja(m) {
+    const { fecha, ...datos } = m;
+    return q(sb.from('caja_movimientos').insert({ ...datos, ...(fecha ? { fecha } : {}) }).select().single());
+  },
   async cierresCaja() { return q(sb.from('caja_cierres').select('*').order('fecha', { ascending: false }).limit(60)); },
   async cerrarCaja(c) { return q(sb.from('caja_cierres').insert(c).select().single()); },
 
@@ -360,13 +364,17 @@ export const store = {
   async ccImputaciones(clienteId) {
     return q(sb.from('cc_imputaciones').select('*, pago:cc_movimientos!inner(cliente_id)').eq('pago.cliente_id', clienteId));
   },
-  async cargarDeuda(clienteId, { monto, concepto }) {
-    await q(sb.from('cc_movimientos').insert({ cliente_id: clienteId, tipo: 'cargo', monto: +monto, concepto }));
+  // fecha (ISO, opcional): si no viene, la base pone el momento actual
+  async cargarDeuda(clienteId, { monto, concepto, fecha = null }) {
+    await q(sb.from('cc_movimientos').insert({ cliente_id: clienteId, tipo: 'cargo', monto: +monto, concepto, ...(fecha ? { fecha } : {}) }));
   },
+  // Cambia la fecha de una venta ya registrada (y sus movimientos de caja / cuenta corriente / stock) o de un cobro de cuenta corriente
+  async fijarFechaVenta(id, fecha) { await q(sb.rpc('fijar_fecha_venta', { p_venta_id: id, p_fecha: fecha })); },
+  async fijarFechaCobro(ccId, fecha) { await q(sb.rpc('fijar_fecha_cobro_cuenta', { p_cc_id: ccId, p_fecha: fecha })); },
   // Saldo a favor cargado a mano: movimiento a favor del cliente (monto negativo) que NO mueve la caja
   // imputaDeuda: si se aplica a lo que el cliente ya debe (true) o queda aparte como saldo a favor (false)
-  async cargarSaldoFavor(clienteId, { monto, concepto, imputaDeuda = true }) {
-    await q(sb.from('cc_movimientos').insert({ cliente_id: clienteId, tipo: 'ajuste', monto: -Math.abs(+monto), concepto, manual: true, imputa_deuda: !!imputaDeuda }));
+  async cargarSaldoFavor(clienteId, { monto, concepto, imputaDeuda = true, fecha = null }) {
+    await q(sb.from('cc_movimientos').insert({ cliente_id: clienteId, tipo: 'ajuste', monto: -Math.abs(+monto), concepto, manual: true, imputa_deuda: !!imputaDeuda, ...(fecha ? { fecha } : {}) }));
   },
   async editarSaldoFavor(id, { concepto, monto, imputaDeuda = true }) { await q(sb.rpc('editar_saldo_favor_manual', { p_id: id, p_monto: +monto, p_concepto: concepto, p_imputa: !!imputaDeuda })); },
   async eliminarSaldoFavor(id) { await q(sb.rpc('eliminar_saldo_favor_manual', { p_id: id })); },

@@ -492,8 +492,26 @@ export const store = {
     const pagos = new Set(db.cc_movimientos.filter(m => m.cliente_id === +clienteId).map(m => m.id));
     return clone((db.cc_imputaciones || []).filter(x => pagos.has(x.pago_id)));
   },
-  async cargarDeuda(clienteId, { monto, concepto }) {
-    insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'cargo', monto: +monto, concepto, forma_pago: '', anulado: false }); save();
+  async cargarDeuda(clienteId, { monto, concepto, fecha = null }) {
+    insert('cc_movimientos', { cliente_id: +clienteId, fecha: fecha || now(), tipo: 'cargo', monto: +monto, concepto, forma_pago: '', anulado: false }); save();
+  },
+  // Cambia la fecha de una venta ya registrada (y sus movimientos de caja / cuenta corriente / stock) o de un cobro de cuenta corriente.
+  // Los movimientos originales son los creados junto con la venta/cobro (en el demo, con segundos de diferencia como mucho):
+  // los ajustes de una edición posterior conservan su propia fecha.
+  async fijarFechaVenta(id, fecha) {
+    const v = byId('ventas', id); if (!v) throw new Error('Venta no encontrada');
+    if (new Date(fecha) > Date.now() + 300000) throw new Error('La fecha no puede ser futura');
+    const orig = x => Math.abs(new Date(x) - new Date(v.fecha)) < 3000;
+    db.caja_movimientos.filter(m => m.venta_id === v.id && orig(m.fecha)).forEach(m => { m.fecha = fecha; });
+    db.cc_movimientos.filter(m => m.venta_id === v.id && orig(m.fecha)).forEach(m => { m.fecha = fecha; });
+    db.stock_movimientos.filter(m => m.venta_id === v.id && orig(m.created_at)).forEach(m => { m.created_at = fecha; });
+    v.fecha = fecha; save();
+  },
+  async fijarFechaCobro(ccId, fecha) {
+    const m = byId('cc_movimientos', ccId); if (!m || m.tipo !== 'pago') throw new Error('Cobro no encontrado');
+    if (new Date(fecha) > Date.now() + 300000) throw new Error('La fecha no puede ser futura');
+    db.caja_movimientos.filter(c => c.cc_movimiento_id === m.id && c.tipo === 'ingreso').forEach(c => { c.fecha = fecha; });
+    m.fecha = fecha; save();
   },
   async editarCargoManual(id, { concepto, monto }) {
     const m = byId('cc_movimientos', id);
@@ -506,8 +524,8 @@ export const store = {
     if (!m || m.tipo !== 'cargo' || m.venta_id || m.orden_id) throw new Error('Este cargo no se puede eliminar directamente: viene de una venta o de una orden de service');
     db.cc_movimientos = db.cc_movimientos.filter(x => x.id !== m.id); save();
   },
-  async cargarSaldoFavor(clienteId, { monto, concepto, imputaDeuda = true }) {
-    insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'ajuste', monto: -Math.abs(+monto), concepto, forma_pago: '', anulado: false, manual: true, imputa_deuda: !!imputaDeuda }); save();
+  async cargarSaldoFavor(clienteId, { monto, concepto, imputaDeuda = true, fecha = null }) {
+    insert('cc_movimientos', { cliente_id: +clienteId, fecha: fecha || now(), tipo: 'ajuste', monto: -Math.abs(+monto), concepto, forma_pago: '', anulado: false, manual: true, imputa_deuda: !!imputaDeuda }); save();
   },
   async editarSaldoFavor(id, { concepto, monto, imputaDeuda = true }) {
     const m = byId('cc_movimientos', id);
@@ -535,7 +553,7 @@ export const store = {
 
   // Caja
   async cajaMovimientos() { return clone(db.caja_movimientos.slice().reverse()); },
-  async agregarMovimientoCaja(m) { const r = insert('caja_movimientos', { fecha: now(), ...m }); save(); return clone(r); },
+  async agregarMovimientoCaja(m) { const { fecha, ...datos } = m; const r = insert('caja_movimientos', { ...datos, fecha: fecha || now() }); save(); return clone(r); },
   async cierresCaja() { return clone(db.caja_cierres.slice().reverse()); },
   async cerrarCaja(c) { const r = insert('caja_cierres', { fecha: now(), ...c }); save(); return clone(r); },
 
