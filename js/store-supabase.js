@@ -370,7 +370,10 @@ export const store = {
   },
   // Cambia la fecha de una venta ya registrada (y sus movimientos de caja / cuenta corriente / stock) o de un cobro de cuenta corriente
   async fijarFechaVenta(id, fecha) { await q(sb.rpc('fijar_fecha_venta', { p_venta_id: id, p_fecha: fecha })); },
+  // (también sirve para un anticipo de service o de encargo: es un pago de cuenta corriente con su ingreso en caja)
   async fijarFechaCobro(ccId, fecha) { await q(sb.rpc('fijar_fecha_cobro_cuenta', { p_cc_id: ccId, p_fecha: fecha })); },
+  // Cambia la fecha de una entrega de service ya registrada (y su cobro, cargos y baja de repuestos)
+  async fijarFechaEntrega(ordenId, fecha) { await q(sb.rpc('fijar_fecha_entrega_orden', { p_orden_id: ordenId, p_fecha: fecha })); },
   // Saldo a favor cargado a mano: movimiento a favor del cliente (monto negativo) que NO mueve la caja
   // imputaDeuda: si se aplica a lo que el cliente ya debe (true) o queda aparte como saldo a favor (false)
   async cargarSaldoFavor(clienteId, { monto, concepto, imputaDeuda = true, fecha = null }) {

@@ -507,6 +507,17 @@ export const store = {
     db.stock_movimientos.filter(m => m.venta_id === v.id && orig(m.created_at)).forEach(m => { m.created_at = fecha; });
     v.fecha = fecha; save();
   },
+  async fijarFechaEntrega(ordenId, fecha) {
+    const o = byId('ordenes_servicio', ordenId); if (!o) throw new Error('Orden no encontrada');
+    if (o.estado !== 'entregado' || !o.fecha_entrega) throw new Error('La orden no está entregada');
+    if (new Date(fecha) > Date.now() + 300000) throw new Error('La fecha no puede ser futura');
+    const orig = x => Math.abs(new Date(x) - new Date(o.fecha_entrega)) < 3000;   // lo generado por la entrega (en el demo, con segundos de diferencia como mucho)
+    db.caja_movimientos.filter(m => m.orden_id === o.id && orig(m.fecha)).forEach(m => { m.fecha = fecha; });
+    db.cc_movimientos.filter(m => m.orden_id === o.id && m.tipo !== 'pago' && orig(m.fecha)).forEach(m => { m.fecha = fecha; });
+    db.stock_movimientos.filter(m => m.orden_id === o.id && orig(m.created_at)).forEach(m => { m.created_at = fecha; });
+    db.orden_estados.filter(h => h.orden_id === o.id && h.estado === 'entregado' && orig(h.created_at)).forEach(h => { h.created_at = fecha; });
+    o.fecha_entrega = fecha; save();
+  },
   async fijarFechaCobro(ccId, fecha) {
     const m = byId('cc_movimientos', ccId); if (!m || m.tipo !== 'pago') throw new Error('Cobro no encontrado');
     if (new Date(fecha) > Date.now() + 300000) throw new Error('La fecha no puede ser futura');
