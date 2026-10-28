@@ -1733,7 +1733,7 @@ async function detalleOrden(id) {
         ${cerrada ? '' : `<div class="search" style="position:relative;margin-bottom:.6rem"><input class="input" id="buscar-rep" placeholder="Agregar repuesto o mano de obra (buscar o escanear)"><div class="suggest" id="sug" hidden></div></div>
         <div class="row" style="align-items:flex-end;margin-bottom:.4rem">
           <div class="field" style="flex:3;margin:0"><label class="small">Concepto libre (algo que no está cargado como producto o servicio)</label><input class="input" id="libre-desc" placeholder="ej: Limpieza interna y cambio de pasta térmica"></div>
-          <div class="field" style="flex:0 0 130px;margin:0"><label class="small">Importe</label><input class="input" type="number" step="any" min="0" id="libre-monto"></div>
+          <div class="field" style="flex:0 0 130px;margin:0"><label class="small">Importe <span class="muted">(0 = sin cargo)</span></label><input class="input" type="number" step="any" min="0" id="libre-monto"></div>
           <div class="field" style="flex:0 0 auto;margin:0"><button class="btn" id="libre-add">Agregar</button></div></div>`}
         <div id="items" style="margin-top:.6rem"></div>
         <div id="cuentas" style="margin-top:.6rem"></div>
@@ -1822,7 +1822,7 @@ async function detalleOrden(id) {
       <td>${!i.producto_id && !cerrada ? `<input class="input" data-desc="${k}" value="${esc(i.descripcion)}" title="Concepto libre: se puede editar">` : esc(i.descripcion)}</td>
       <td><input class="input" data-c="${k}" value="${i.cantidad}" ${cerrada ? 'disabled' : ''}></td>
       <td><input class="input" data-p="${k}" value="${i.precio_unitario}" ${cerrada ? 'disabled' : ''}></td>
-      <td class="num">${money(i.cantidad * i.precio_unitario)}</td><td style="width:28px">${cerrada ? '' : `<button class="x" data-d="${k}">×</button>`}</td></tr>`).join('')}
+      <td class="num">${+i.precio_unitario === 0 ? '<span class="pill green">Sin cargo</span>' : money(i.cantidad * i.precio_unitario)}</td><td style="width:28px">${cerrada ? '' : `<button class="x" data-d="${k}">×</button>`}</td></tr>`).join('')}
       <tr><td colspan="3"><b>Total del detalle</b></td><td class="num"><b>${money(total)}</b></td><td></td></tr></tbody></table>` : '<div class="muted small">Sin ítems cargados.</div>';
     // Cuentas: contra el presupuesto, pagos a cuenta y saldo a cobrar
     const lin = (l, v, extra = '') => `<tr><td>${l}</td><td class="num nowrap" ${extra}>${v}</td></tr>`;
@@ -1858,7 +1858,7 @@ async function detalleOrden(id) {
     };
     const lineasWA = p => {
       const nombreSlot = c => ARMADO_SLOTS.find(s => s.id === c)?.nombre;
-      return p.items.map(i => `• ${i.componente ? `${nombreSlot(i.componente)}: ` : ''}${+i.cantidad !== 1 ? `${i.cantidad} × ` : ''}${i.descripcion} — ${money(i.cantidad * i.precio_unitario)}`).join('\n');
+      return p.items.map(i => `• ${i.componente ? `${nombreSlot(i.componente)}: ` : ''}${+i.cantidad !== 1 ? `${i.cantidad} × ` : ''}${i.descripcion} — ${+i.precio_unitario === 0 ? 'sin cargo' : money(i.cantidad * i.precio_unitario)}`).join('\n');
     };
     const enviarWA = p => window.open(waLink(o.cliente.telefono,
       `Hola ${primerNombre(o.cliente)}! Te pasamos el presupuesto de tu equipo (${tipoOrden(o).nombre} #${o.numero}${p.version > 1 ? `, versión ${p.version}` : ''}):\n\n${lineasWA(p)}\n\n*Total: ${money(p.total)}*\n\nPodés seguirlo acá: ${url}`), '_blank', 'noopener');
@@ -2051,9 +2051,9 @@ async function detalleOrden(id) {
   if (!cerrada) {   // agregar ítems solo mientras la orden está abierta
   // concepto libre (sin producto): ej. un trabajo que no está cargado como servicio estándar
   const agregarLibre = () => {
-    const desc = $('#libre-desc').value.trim(), monto = +$('#libre-monto').value;
+    const desc = $('#libre-desc').value.trim(), montoTxt = $('#libre-monto').value.trim(), monto = +montoTxt;
     if (!desc) return toast('Escribí el concepto', true);
-    if (!(monto > 0)) return toast('Poné el importe', true);
+    if (montoTxt === '' || !(monto >= 0)) return toast('Poné el importe (0 si va sin cargo)', true);   // 0 = bonificado: queda en el detalle como "sin cargo"
     items.push({ producto_id: null, descripcion: desc, cantidad: 1, precio_unitario: monto });
     $('#libre-desc').value = ''; $('#libre-monto').value = ''; saveItems(); $('#libre-desc').focus();
   };
@@ -2223,7 +2223,7 @@ async function imprimirPresupuestoArmado(o, n, pres) {
   // la foto tiene que estar cargada antes de abrir la impresión (si no, sale en blanco); máx. 4 s
   if (pres.foto_url) await new Promise(ok => { const im = new Image(); im.onload = im.onerror = ok; im.src = pres.foto_url; setTimeout(ok, 4000); });
   const fila = i => `<tr><td>${esc(nombreSlot(i.componente))}</td><td>${esc(i.descripcion)}</td><td class="num">${+i.cantidad}</td>
-    <td class="num nowrap">${money(i.precio_unitario)}</td><td class="num nowrap">${money(i.cantidad * i.precio_unitario)}</td></tr>`;
+    ${+i.precio_unitario === 0 ? '<td class="num nowrap" colspan="2"><b>SIN CARGO</b></td>' : `<td class="num nowrap">${money(i.precio_unitario)}</td><td class="num nowrap">${money(i.cantidad * i.precio_unitario)}</td>`}</tr>`;
   const contacto = [n.telefono && `Tel. ${esc(n.telefono)}`, n.whatsapp && `WhatsApp ${esc(n.whatsapp)}`, n.email && esc(n.email)].filter(Boolean).join(' · ');
   const titulo = document.title;
   document.title = `Presupuesto ${o.numero}${pres.version > 1 ? ` v${pres.version}` : ''} - ${o.cliente.nombre}`;   // nombre sugerido del PDF
@@ -2303,7 +2303,8 @@ async function imprimirEntregaOrden(id, n) {
     <div>Cliente: ${esc(o.cliente.nombre)}</div>
     ${eq ? `<div>Equipo: ${esc(eq)}</div>` : ''}
     ${o.items.length ? `<hr><table>${o.items.map(i => `<tr><td colspan="2">${esc(i.descripcion)}</td></tr>
-      <tr><td>${i.cantidad} x ${money(i.precio_unitario)}</td><td style="text-align:right">${money(i.cantidad * i.precio_unitario)}</td></tr>`).join('')}</table>` : ''}
+      ${+i.precio_unitario === 0 ? `<tr><td>${i.cantidad} x</td><td style="text-align:right"><b>SIN CARGO</b></td></tr>`
+        : `<tr><td>${i.cantidad} x ${money(i.precio_unitario)}</td><td style="text-align:right">${money(i.cantidad * i.precio_unitario)}</td></tr>`}`).join('')}</table>` : ''}
     <hr><table><tr><td class="big">TOTAL</td><td class="big" style="text-align:right">${money(total)}</td></tr></table>
     <table>
       ${anticipado ? `<tr><td>Pagos a cuenta</td><td style="text-align:right">-${money(Math.min(anticipado, total))}</td></tr>` : ''}
