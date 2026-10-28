@@ -8,9 +8,9 @@ export const ESTADOS = [
   { id: 'derivado',       label: 'Derivado a laboratorio', color: 'violet', cliente: 'Tu equipo fue derivado a un laboratorio externo para su reparación.' },
   { id: 'repuesto',       label: 'Esperando repuesto',  color: 'violet', cliente: 'Estamos esperando un repuesto para continuar.' },
   { id: 'listo',          label: 'Listo para retirar',  color: 'green',  cliente: '¡Tu equipo está listo! Podés pasar a retirarlo.' },
-  { id: 'entregado',      label: 'Entregado',           color: 'gray',   cliente: 'Equipo entregado. ¡Gracias por confiar en nosotros!' },
+  { id: 'entregado',      label: 'Entregado',           color: 'green',   cliente: 'Equipo entregado. ¡Gracias por confiar en nosotros!' },
   { id: 'sin_reparacion', label: 'Sin reparación',      color: 'red',    cliente: 'El equipo no pudo ser reparado. Podés pasar a retirarlo.' },
-  { id: 'encargado',      label: 'Encargado',           color: 'gray',   cliente: 'Registramos tu pedido.' },
+  { id: 'encargado',      label: 'Encargado',           color: 'yellow',   cliente: 'Registramos tu pedido.' },
   // sirve para armar una PC o para preparar un equipo ya armado (instalación de software, configuración)
   { id: 'en_armado',      label: 'En preparación',      color: 'blue',   cliente: 'Estamos preparando tu equipo.' },
 ];
