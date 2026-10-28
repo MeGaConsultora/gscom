@@ -1733,7 +1733,7 @@ async function detalleOrden(id) {
         ${cerrada ? '' : `<div class="search" style="position:relative;margin-bottom:.6rem"><input class="input" id="buscar-rep" placeholder="Agregar repuesto o mano de obra (buscar o escanear)"><div class="suggest" id="sug" hidden></div></div>
         <div class="row" style="align-items:flex-end;margin-bottom:.4rem">
           <div class="field" style="flex:3;margin:0"><label class="small">Concepto libre (algo que no está cargado como producto o servicio)</label><input class="input" id="libre-desc" placeholder="ej: Limpieza interna y cambio de pasta térmica"></div>
-          <div class="field" style="flex:0 0 130px;margin:0"><label class="small">Importe <span class="muted">(0 = sin cargo)</span></label><input class="input" type="number" step="any" min="0" id="libre-monto"></div>
+          <div class="field" style="flex:0 0 190px;margin:0"><label class="small" style="white-space:nowrap">Importe <span class="muted">(0 = sin cargo)</span></label><input class="input" type="number" step="any" min="0" id="libre-monto"></div>
           <div class="field" style="flex:0 0 auto;margin:0"><button class="btn" id="libre-add">Agregar</button></div></div>`}
         <div id="items" style="margin-top:.6rem"></div>
         <div id="cuentas" style="margin-top:.6rem"></div>
