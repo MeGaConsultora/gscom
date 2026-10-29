@@ -218,6 +218,17 @@ export const store = {
     const emitida = estado === 'emitida';
     await q(sb.from('ventas').update({ facturacion: estado, factura_nro: emitida ? String(nro || '').trim() : '', factura_fecha: emitida ? new Date().toISOString() : null }).eq('id', id));
   },
+  // Ítems de ventas (con producto) junto al precio de lista actual de cada producto: base de la sugerencia de actualizar precios
+  async itemsConPrecioActual(ventaIds) {
+    if (!ventaIds.length) return [];
+    const items = await q(sb.from('venta_items').select('*').in('venta_id', ventaIds).not('producto_id', 'is', null));
+    const ids = [...new Set(items.map(i => i.producto_id))];
+    if (!ids.length) return [];
+    const prods = await q(sb.from('productos').select('id, nombre, precio_venta, activo').in('id', ids));
+    return items.map(i => { const p = prods.find(x => x.id === i.producto_id); return p?.activo ? { ...i, precio_actual: +p.precio_venta, producto: p.nombre } : null; }).filter(Boolean);
+  },
+  // cambios: [{ id, lista, aplicar, precio }] → devuelve cuánto se sumó a la deuda de la venta
+  async actualizarPreciosVenta(ventaId, cambios) { return +(await q(sb.rpc('actualizar_precios_venta', { p_venta_id: ventaId, p_cambios: cambios }))) || 0; },
   async editarVenta(id, { cliente_id, items, descuento = 0, forma_pago, notas = '', pagos = null }) {
     await q(sb.rpc('editar_venta', {
       p_venta_id: id, p_cliente_id: cliente_id || null,

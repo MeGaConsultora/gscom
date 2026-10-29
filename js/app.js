@@ -2561,6 +2561,10 @@ async function cuentaCliente(clienteId) {
   const saldo = movs.reduce((s, m) => s + +m.monto, 0);
   const { grupos } = deudaPorConcepto(movs, imps);
   const pendientes = grupos.filter(g => g.pendiente > 0.009);
+  // Productos de lo que todavía debe que hoy cuestan más que cuando se vendieron (solo una sugerencia, se decide caso por caso)
+  const subas = new Map();
+  (await store.itemsConPrecioActual([...new Set(pendientes.map(g => g.venta_id).filter(Boolean))]).catch(() => [])).filter(subioPrecio)
+    .forEach(i => subas.set(i.venta_id, [...(subas.get(i.venta_id) || []), i]));
   // Saldo a favor cargado "sin aplicar a la deuda": no baja los conceptos pendientes (el saldo total sí lo cuenta)
   const sinAplicar = movs.filter(m => m.tipo === 'ajuste' && m.manual && m.imputa_deuda === false).reduce((s, m) => s - m.monto, 0);
   // Lo que se puede cobrar: con saldo a favor aparte, es la deuda de los conceptos (no el saldo neto)
@@ -2581,9 +2585,11 @@ async function cuentaCliente(clienteId) {
     <div class="card kpi"><div class="label">Saldo</div><div class="value" style="color:${saldo > 0 ? 'var(--bad)' : 'var(--ok)'}">${money(saldo)}</div><div class="sub">${saldo > 0 ? 'adeuda' : saldo < 0 ? 'a favor del cliente' : 'al día'}</div></div>
   </div>
   ${pendientes.length ? `<div class="card card-pad" style="margin-bottom:1rem"><h2>Qué debe</h2>
+    ${subas.size ? `<p class="small" style="margin:-.2rem 0 .6rem"><span class="pill amber">Precios</span> Hay productos de lo que debe que hoy cuestan más que cuando se vendieron. Es solo una sugerencia: revisá cada venta y elegí si aplicás el precio actual o dejás lo acordado.</p>` : ''}
     <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Concepto</th><th>Observaciones</th><th class="num">Total</th><th class="num">Pagado</th><th class="num">Pendiente</th><th></th></tr></thead><tbody>
     ${pendientes.map(g => `<tr><td class="nowrap">${fdate(g.fecha)}</td>
-      <td>${esc(g.concepto)}${g.venta_id ? ` <a href="#" class="small" data-venta="${g.venta_id}">ver venta</a>` : ''}${g.orden_id ? ` <a class="small" href="#/service/${g.orden_id}">ver orden</a>` : ''}</td>
+      <td>${esc(g.concepto)}${g.venta_id ? ` <a href="#" class="small" data-venta="${g.venta_id}">ver venta</a>` : ''}${g.orden_id ? ` <a class="small" href="#/service/${g.orden_id}">ver orden</a>` : ''}
+        ${subas.has(g.venta_id) ? `<div><button class="btn sm" data-precios="${g.venta_id}" title="Algunos productos subieron de precio desde la venta">↑ Revisar precios (+${money(subas.get(g.venta_id).reduce((s, i) => s + i.cantidad * (i.precio_actual - i.precio_unitario), 0))})</button></div>` : ''}</td>
       <td class="small">${esc(g.notas)}</td><td class="num">${money(g.total)}</td><td class="num muted">${g.pagado > 0.009 ? money(g.pagado) : '—'}</td>
       <td class="num"><b style="color:var(--bad)">${money(g.pendiente)}</b></td>
       <td class="right"><button class="btn sm ok" data-cobrar-uno="${g.clave}">Cobrar este</button></td></tr>`).join('')}
@@ -2605,6 +2611,7 @@ async function cuentaCliente(clienteId) {
   $('#cargo').onclick = () => cargoManualModal(c.id);
   $('#cargo-favor').onclick = () => cargoManualModal(c.id, 'favor');
   $$('[data-venta]').forEach(a => a.onclick = e => { e.preventDefault(); ventaModal(+a.dataset.venta); });
+  $$('[data-precios]').forEach(b => b.onclick = () => preciosVentaModal(+b.dataset.precios, subas.get(+b.dataset.precios), render));
   $$('[data-recibo]').forEach(b => b.onclick = () => run(() => imprimirRecibo(c.id, +b.dataset.recibo)));
   $$('[data-anular]').forEach(b => b.onclick = () => run(async () => {
     if (!confirm('¿Anular este cobro? La deuda vuelve a la cuenta y se descuenta de caja.')) return;
@@ -2628,6 +2635,38 @@ async function cuentaCliente(clienteId) {
     if (!confirm('¿Eliminar este cargo? Se resta del saldo del cliente.')) return;
     await store.eliminarCargoManual(+b.dataset.eliminarCargo); toast('Cargo eliminado'); render();
   }));
+}
+
+// ¿El producto cuesta hoy más que cuando se vendió (y que el precio contra el que ya se decidió)? Es solo una sugerencia
+const subioPrecio = i => i.precio_actual > Math.max(+i.precio_unitario, +i.precio_revisado || 0) + 0.009;
+
+// Sugerencia de actualizar precios de una venta que el cliente todavía debe. Nada es automático:
+// cada producto se marca (o no), el precio propuesto se puede cambiar, y también se puede dejar todo como estaba.
+function preciosVentaModal(ventaId, items, onDone) {
+  const m = modal('Productos que subieron de precio', `
+    <p class="small muted" style="margin-top:-.4rem">Estos productos cuestan hoy más que cuando se vendieron. Marcá los que querés actualizar: la diferencia se suma a lo que el cliente debe de esta venta. No cambia la caja ni lo que ya pagó.</p>
+    <div class="card tbl-wrap"><table class="tbl small"><thead><tr><th style="width:28px"></th><th>Producto</th><th class="num">Cant.</th><th class="num">Cobrado c/u</th><th class="num">Precio actual</th><th class="num">Diferencia</th></tr></thead><tbody>
+    ${items.map((i, k) => `<tr><td><input type="checkbox" data-c="${k}" checked></td><td>${esc(i.producto || i.descripcion)}</td><td class="num">${+i.cantidad}</td><td class="num">${money(i.precio_unitario)}</td>
+      <td class="num"><input class="input" data-p="${k}" value="${+i.precio_actual}" inputmode="decimal" style="width:100px;text-align:right"></td><td class="num nowrap" data-d="${k}"></td></tr>`).join('')}
+    </tbody></table></div>
+    <p style="margin:.7rem 0 0">La deuda de esta venta subiría <b id="tot-dif"></b>.</p>`,
+    `<button class="btn" data-close>Cancelar</button><button class="btn" id="dejar" title="Mantiene lo acordado: no vuelve a sugerirlo salvo que el producto suba de nuevo">Dejar como está</button><button class="btn primary" id="aplicar">Aplicar los marcados</button>`, { wide: true });
+  const precio = k => { const v = +String($(`[data-p="${k}"]`, m.el).value).replace(',', '.'); return v >= 0 ? v : items[k].precio_unitario; };
+  const marcado = k => $(`[data-c="${k}"]`, m.el).checked;
+  const pintar = () => {
+    let total = 0;
+    items.forEach((i, k) => { const d = i.cantidad * (precio(k) - i.precio_unitario); if (marcado(k)) total += d; $(`[data-d="${k}"]`, m.el).textContent = marcado(k) ? money(d) : '—'; });
+    $('#tot-dif', m.el).textContent = money(total);
+  };
+  $$('[data-c], [data-p]', m.el).forEach(x => x.oninput = x.onchange = pintar);
+  pintar();
+  const enviar = aplicarMarcados => run(async () => {
+    if (aplicarMarcados && !items.some((_, k) => marcado(k))) return toast('Marcá al menos un producto', true);
+    const dif = await store.actualizarPreciosVenta(ventaId, items.map((i, k) => ({ id: i.id, lista: i.precio_actual, aplicar: aplicarMarcados && marcado(k), precio: precio(k) })));
+    m.close(); toast(dif ? `Precios actualizados: la deuda subió ${money(dif)}` : 'Listo: se mantienen los precios acordados'); onDone();
+  });
+  $('#aplicar', m.el).onclick = () => enviar(true);
+  $('#dejar', m.el).onclick = () => enviar(false);
 }
 
 // Edita un cargo manual o un saldo a favor manual (mv.manual); el monto se ve siempre en positivo

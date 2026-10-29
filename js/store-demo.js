@@ -416,6 +416,36 @@ export const store = {
     aplicarPagosVenta(v, -1, `Anulación venta #${v.numero}`);
     save();
   },
+  async itemsConPrecioActual(ventaIds) {
+    return clone(db.venta_items.filter(i => ventaIds.includes(i.venta_id) && i.producto_id).map(i => {
+      const p = byId('productos', i.producto_id); return p?.activo ? { ...i, precio_actual: +p.precio_venta, producto: p.nombre } : null;
+    }).filter(Boolean));
+  },
+  async actualizarPreciosVenta(ventaId, cambios) {
+    const v = byId('ventas', ventaId);
+    if (!v) throw new Error('Venta no encontrada');
+    if (v.anulada) throw new Error('La venta está anulada');
+    let dif = 0;
+    for (const c of cambios) {
+      const it = db.venta_items.find(i => i.id === c.id && i.venta_id === ventaId); if (!it) continue;
+      if (c.aplicar) {
+        const precio = Math.round(+c.precio * 100) / 100;
+        if (!(precio >= 0)) throw new Error('Precio no válido');
+        dif += it.cantidad * (precio - it.precio_unitario);
+        Object.assign(it, { precio_unitario: precio, subtotal: it.cantidad * precio, precio_revisado: c.lista ?? precio });
+      } else it.precio_revisado = c.lista;
+    }
+    if (dif) {
+      if (!v.pagos && v.forma_pago !== CC) throw new Error('Esta venta no quedó a cuenta corriente');
+      if (v.pagos) {
+        if (!v.pagos.some(p => p.forma_pago === CC)) throw new Error('Esta venta no quedó a cuenta corriente');
+        v.pagos = v.pagos.map(p => p.forma_pago === CC ? { ...p, monto: Math.round((p.monto + dif) * 100) / 100 } : p);
+      }
+      v.subtotal += dif; v.total += dif;
+      insert('cc_movimientos', { cliente_id: v.cliente_id, fecha: now(), tipo: dif > 0 ? 'cargo' : 'ajuste', monto: dif, concepto: `Actualización de precios — venta #${v.numero}`, forma_pago: '', venta_id: v.id, anulado: false });
+    }
+    save(); return dif;
+  },
   async editarVenta(id, { cliente_id, items, descuento = 0, forma_pago, notas, pagos = null }) {
     const v = byId('ventas', id);
     if (!v) throw new Error('Venta no encontrada');
