@@ -2967,8 +2967,13 @@ ROUTES.compras = async ({ id }) => {
     <a class="btn primary" href="#/compras/nueva">${enCurso ? `${compraDraft.editId ? 'Continuar edición' : 'Continuar carga'} (${compraDraft.items.length})` : 'Ingresar mercadería'}</a></div></div>
   <div class="split">
     <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Proveedor</th><th>Comprobante</th><th>Ítems</th><th class="num">Total</th></tr></thead><tbody>
-      ${compras.map(c => `<tr class="click" data-compra="${c.id}"><td>${fdate(c.fecha)}</td><td>${esc(provName(c.proveedor_id))}</td><td>${esc(c.nro_comprobante) || '—'}</td>
-        <td class="small">${c.items.map(i => `${i.cantidad}× ${esc(productos.find(p => p.id === i.producto_id)?.nombre || '')}`).join(', ')}</td><td class="num">${money(c.total)}</td></tr>`).join('')
+      ${compras.map(c => {
+        // resumen de una línea (la lista completa está en el detalle, al hacer clic): con muchos productos no ocupa media pantalla
+        const nombres = c.items.map(i => `${i.cantidad}× ${productos.find(p => p.id === i.producto_id)?.nombre || ''}`).join(', ');
+        const unidades = c.items.reduce((s, i) => s + +i.cantidad, 0);
+        return `<tr class="click" data-compra="${c.id}"><td class="nowrap">${fdate(c.fecha)}</td><td>${esc(provName(c.proveedor_id))}</td><td>${esc(c.nro_comprobante) || '—'}</td>
+        <td class="small" style="max-width:0;width:40%"><b>${c.items.length} ítem${c.items.length === 1 ? '' : 's'}</b> <span class="muted">· ${unidades} u.</span>
+          <div class="muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${esc(nombres)}">${esc(nombres)}</div></td><td class="num nowrap">${money(c.total)}</td></tr>`; }).join('')
       || '<tr><td colspan="5" class="empty">Todavía no se registraron compras. Usá "Ingresar mercadería" cuando llegue un pedido: suma el stock y actualiza costos y precios.</td></tr>'}</tbody></table></div>
     <div class="card card-pad"><h2>Proveedores</h2>${proveedores.map(p => `<div class="equipo"><b>${esc(p.nombre)}</b><div class="small muted">${esc(p.cuit)} ${p.telefono ? '· ' + esc(p.telefono) : ''}</div></div>`).join('') || '<div class="muted small">Sin proveedores.</div>'}</div>
   </div>`;
