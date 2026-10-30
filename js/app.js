@@ -1595,35 +1595,7 @@ ROUTES.service = async ({ id, q }) => {
   <div class="chips" id="chips"></div>
   <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Ingreso</th><th>Cliente</th><th>Equipo</th><th>Detalle</th><th>Estado</th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const opts = [['activas', 'En taller', ordenes.filter(ACTIVAS).length], ...ESTADOS.map(e => [e.id, e.label, ordenes.filter(o => o.estado === e.id).length]), ['todas', 'Todas', ordenes.length]];
-  // lo que quedó en cuenta corriente de cada comprobante (para el resumen del grupo)
-  const ccDe = x => {
-    if (x.origen === 'venta') return (x.pagos?.length ? x.pagos : [{ forma_pago: x.forma_pago, monto: x.total }]).filter(p => p.forma_pago === CUENTA_CORRIENTE).reduce((s, p) => s + +p.monto, 0);
-    const antic = anticipos.filter(a => a.orden_id === x.id).reduce((s, a) => s - a.monto, 0);
-    const pagado = x.pagado_entrega != null ? +x.pagado_entrega : x.forma_pago_entrega === CUENTA_CORRIENTE ? 0 : Math.max(x.monto - antic, 0);
-    return Math.max(x.monto - antic - pagado, 0);
-  };
-  let agrupar = true; try { agrupar = localStorage.getItem('gscom_facturas_agrupar') !== '0'; } catch {}
-  const abiertos = new Set();
-  // Una sola factura para varios comprobantes del mismo cliente
-  const emitirVarias = (items, cliente) => {
-    const total = items.reduce((s, x) => s + x.monto, 0);
-    const m = modal(`Marcar emitidas — ${cliente}`, `<p class="small muted" style="margin-bottom:.7rem">Se marcan como emitidas con el mismo número de factura. Es solo un registro: no emite nada en AFIP.</p>
-      <table class="tbl small" style="margin-bottom:.8rem"><tbody>${items.map(x => `<tr><td><label style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" data-sel="${x.clave}" checked> ${x.origen === 'venta' ? 'Venta' : 'Service'} #${x.numero}</label></td><td>${fdate(x.fechaRef)}</td><td class="num">${money(x.monto)}</td></tr>`).join('')}
-        <tr><td colspan="2"><b>Total</b></td><td class="num"><b id="em-total">${money(total)}</b></td></tr></tbody></table>
-      <div class="field"><label>N° de factura <span class="muted">(opcional, ej: 0005-00001234)</span></label><input class="input" id="em-nro"></div>`,
-      `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Marcar emitidas</button>`);
-    const elegidos = () => items.filter(x => $(`[data-sel="${x.clave}"]`, m.el).checked);
-    $$('[data-sel]', m.el).forEach(c => c.onchange = () => { $('#em-total', m.el).textContent = money(elegidos().reduce((s, x) => s + x.monto, 0)); });
-    setTimeout(() => $('#em-nro', m.el).focus(), 50);
-    $('#ok', m.el).onclick = () => run(async () => {
-      const sel = elegidos(); if (!sel.length) return toast('No elegiste ningún comprobante', true);
-      const f = { estado: 'emitida', nro: $('#em-nro', m.el).value.trim() };
-      for (const x of sel) await (x.origen === 'service' ? store.establecerFacturaOrden(x.id, f) : store.establecerFacturaVenta(x.id, f));
-      m.close(); toast(`${sel.length} comprobante(s) marcados como emitidos`); render();
-    });
-  };
   const paint = () => {
-    $('#agrupar').checked = agrupar;
     $('#chips').innerHTML = opts.map(([k, l, n]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}<span class="count">${n}</span></button>`).join('');
     $$('#chips .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
     const l = ordenes.filter(o => (filtro === 'todas' || (filtro === 'activas' ? ACTIVAS(o) : o.estado === filtro))
