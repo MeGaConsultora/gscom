@@ -2416,7 +2416,7 @@ ROUTES.facturas = async ({ q }) => {
     $$('#chips .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
     const base = filtro === 'emitida' ? emitidas : filtro === 'todas' ? facturables : pendientes.slice().reverse();   // las pendientes, de la más vieja a la más nueva
     const l = base.filter(x => matches(texto, `#${x.numero}`, nombreDe(x.cliente_id), x.factura_nro));
-    const fila = (x, enGrupo = false) => `<tr class="click" data-clave="${x.clave}" ${enGrupo ? `data-hijo="${x.cliente_id ?? 0}" style="background:#fafbfc${abiertos.has(String(x.cliente_id ?? 0)) ? '' : ';display:none'}"` : ''}><td class="mono"${enGrupo ? ' style="padding-left:1.6rem"' : ''}><b>#${x.numero}</b><div class="small muted" style="font-family:inherit">${x.origen === 'venta' ? 'Venta' : 'Service'}</div></td>
+    const fila = (x, enGrupo = false, ultimo = false) => `<tr class="click${enGrupo ? ` fact-hijo${ultimo ? ' fact-hijo-ult' : ''}` : ''}" data-clave="${x.clave}" ${enGrupo ? `data-hijo="${x.cliente_id ?? 0}"${abiertos.has(String(x.cliente_id ?? 0)) ? '' : ' style="display:none"'}` : ''}><td class="mono"${enGrupo ? ' style="padding-left:1.6rem"' : ''}><b>#${x.numero}</b><div class="small muted" style="font-family:inherit">${x.origen === 'venta' ? 'Venta' : 'Service'}</div></td>
       <td class="nowrap">${fdate(x.fechaRef)}<div class="small muted">${daysSince(x.fechaRef) === 0 ? 'hoy' : `hace ${daysSince(x.fechaRef)} d`}</div></td>
       <td>${enGrupo ? '<span class="muted">↳</span>' : esc(nombreDe(x.cliente_id))}</td><td class="num nowrap">${money(x.monto)}</td><td>${cobro(x)}</td>
       <td>${pillFactura(x)}${x.cancelada ? ` <span class="pill red">${x.origen === 'venta' ? 'Anulada' : 'Entrega anulada'}${x.facturacion === 'emitida' ? ': falta nota de crédito' : ''}</span>` : ''}</td>
@@ -2436,7 +2436,7 @@ ROUTES.facturas = async ({ q }) => {
         <td>${pend.length ? `<span class="pill amber">${pend.length} pendiente${pend.length > 1 ? 's' : ''}</span>` : ''} ${emit ? `<span class="pill green">${emit} emitida${emit > 1 ? 's' : ''}</span>` : ''}</td>
         <td class="right nowrap">${pend.length > 1 ? `<button class="btn sm ok" data-emitir-grupo="${g.k}" title="Una sola factura para todos los pendientes de este cliente">Marcar emitidas (${pend.length})</button>` : ''}</td></tr>`;
     };
-    $('#rows').innerHTML = (agrupar ? grupos.map(g => g.items.length > 1 ? filaGrupo(g) + g.items.map(x => fila(x, true)).join('') : fila(g.items[0])).join('') : l.map(x => fila(x)).join(''))
+    $('#rows').innerHTML = (agrupar ? grupos.map(g => g.items.length > 1 ? filaGrupo(g) + g.items.map((x, k) => fila(x, true, k === g.items.length - 1)).join('') : fila(g.items[0])).join('') : l.map(x => fila(x)).join(''))
       || `<tr><td colspan="7" class="empty">${filtro === 'pendiente' ? 'No hay nada con la factura pendiente de emitir.' : 'No hay nada en este estado.'}</td></tr>`;
     $$('[data-grupo]').forEach(tr => tr.onclick = ev => {
       if (ev.target.closest('button')) return;
