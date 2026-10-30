@@ -1595,7 +1595,35 @@ ROUTES.service = async ({ id, q }) => {
   <div class="chips" id="chips"></div>
   <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>N°</th><th>Ingreso</th><th>Cliente</th><th>Equipo</th><th>Detalle</th><th>Estado</th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const opts = [['activas', 'En taller', ordenes.filter(ACTIVAS).length], ...ESTADOS.map(e => [e.id, e.label, ordenes.filter(o => o.estado === e.id).length]), ['todas', 'Todas', ordenes.length]];
+  // lo que quedó en cuenta corriente de cada comprobante (para el resumen del grupo)
+  const ccDe = x => {
+    if (x.origen === 'venta') return (x.pagos?.length ? x.pagos : [{ forma_pago: x.forma_pago, monto: x.total }]).filter(p => p.forma_pago === CUENTA_CORRIENTE).reduce((s, p) => s + +p.monto, 0);
+    const antic = anticipos.filter(a => a.orden_id === x.id).reduce((s, a) => s - a.monto, 0);
+    const pagado = x.pagado_entrega != null ? +x.pagado_entrega : x.forma_pago_entrega === CUENTA_CORRIENTE ? 0 : Math.max(x.monto - antic, 0);
+    return Math.max(x.monto - antic - pagado, 0);
+  };
+  let agrupar = true; try { agrupar = localStorage.getItem('gscom_facturas_agrupar') !== '0'; } catch {}
+  const abiertos = new Set();
+  // Una sola factura para varios comprobantes del mismo cliente
+  const emitirVarias = (items, cliente) => {
+    const total = items.reduce((s, x) => s + x.monto, 0);
+    const m = modal(`Marcar emitidas — ${cliente}`, `<p class="small muted" style="margin-bottom:.7rem">Se marcan como emitidas con el mismo número de factura. Es solo un registro: no emite nada en AFIP.</p>
+      <table class="tbl small" style="margin-bottom:.8rem"><tbody>${items.map(x => `<tr><td><label style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" data-sel="${x.clave}" checked> ${x.origen === 'venta' ? 'Venta' : 'Service'} #${x.numero}</label></td><td>${fdate(x.fechaRef)}</td><td class="num">${money(x.monto)}</td></tr>`).join('')}
+        <tr><td colspan="2"><b>Total</b></td><td class="num"><b id="em-total">${money(total)}</b></td></tr></tbody></table>
+      <div class="field"><label>N° de factura <span class="muted">(opcional, ej: 0005-00001234)</span></label><input class="input" id="em-nro"></div>`,
+      `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Marcar emitidas</button>`);
+    const elegidos = () => items.filter(x => $(`[data-sel="${x.clave}"]`, m.el).checked);
+    $$('[data-sel]', m.el).forEach(c => c.onchange = () => { $('#em-total', m.el).textContent = money(elegidos().reduce((s, x) => s + x.monto, 0)); });
+    setTimeout(() => $('#em-nro', m.el).focus(), 50);
+    $('#ok', m.el).onclick = () => run(async () => {
+      const sel = elegidos(); if (!sel.length) return toast('No elegiste ningún comprobante', true);
+      const f = { estado: 'emitida', nro: $('#em-nro', m.el).value.trim() };
+      for (const x of sel) await (x.origen === 'service' ? store.establecerFacturaOrden(x.id, f) : store.establecerFacturaVenta(x.id, f));
+      m.close(); toast(`${sel.length} comprobante(s) marcados como emitidos`); render();
+    });
+  };
   const paint = () => {
+    $('#agrupar').checked = agrupar;
     $('#chips').innerHTML = opts.map(([k, l, n]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}<span class="count">${n}</span></button>`).join('');
     $$('#chips .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
     const l = ordenes.filter(o => (filtro === 'todas' || (filtro === 'activas' ? ACTIVAS(o) : o.estado === filtro))
@@ -2340,8 +2368,9 @@ ROUTES.facturas = async ({ q }) => {
     <div class="card kpi"><div class="label">Emitidas</div><div class="value">${emitidas.length}</div><div class="sub">${emitidas.filter(x => !x.factura_nro).length ? `${emitidas.filter(x => !x.factura_nro).length} sin número cargado` : 'todas con su número'}</div></div>
   </div>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por cliente, N° de venta u orden, o N° de factura"></div></div>
-  <div class="chips" id="chips"></div>
-  <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Comprobante</th><th>Fecha</th><th>Cliente</th><th class="num">Total</th><th>Cómo se pagó</th><th>Factura</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
+  <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap;margin-bottom:.2rem"><div class="chips" id="chips" style="margin-bottom:0"></div>
+    <label class="small" style="display:flex;gap:.35rem;align-items:center;margin-left:auto"><input type="checkbox" id="agrupar"> Agrupar por cliente</label></div>
+  <div class="card tbl-wrap" style="margin-top:.6rem"><table class="tbl"><thead><tr><th>Comprobante</th><th>Fecha</th><th>Cliente</th><th class="num">Total</th><th>Cómo se pagó</th><th>Factura</th><th></th></tr></thead><tbody id="rows"></tbody></table></div>`;
   const opts = [['pendiente', 'Pendientes de emitir', pendientes.length], ['emitida', 'Emitidas', emitidas.length], ['todas', 'Todas las que se facturan', facturables.length]];
   // Cómo se pagó: la venta con sus partes; el service con pagos a cuenta + lo pagado al retirar + lo que quedó en cuenta corriente
   const cobro = x => {
@@ -2354,17 +2383,69 @@ ROUTES.facturas = async ({ q }) => {
     const l = [antic > 0 ? `<span class="small">Pagos a cuenta ${money(antic)}</span>` : '', pagado > 0 ? `<span class="small">${esc(x.forma_pago_entrega || 'Al retirar')} ${money(pagado)}</span>` : '', resto > 0.009 ? cc(resto) : ''].filter(Boolean);
     return l.join('<br>') || '<span class="small muted">Sin cobro</span>';
   };
+  // lo que quedó en cuenta corriente de cada comprobante (para el resumen del grupo)
+  const ccDe = x => {
+    if (x.origen === 'venta') return (x.pagos?.length ? x.pagos : [{ forma_pago: x.forma_pago, monto: x.total }]).filter(p => p.forma_pago === CUENTA_CORRIENTE).reduce((s, p) => s + +p.monto, 0);
+    const antic = anticipos.filter(a => a.orden_id === x.id).reduce((s, a) => s - a.monto, 0);
+    const pagado = x.pagado_entrega != null ? +x.pagado_entrega : x.forma_pago_entrega === CUENTA_CORRIENTE ? 0 : Math.max(x.monto - antic, 0);
+    return Math.max(x.monto - antic - pagado, 0);
+  };
+  let agrupar = true; try { agrupar = localStorage.getItem('gscom_facturas_agrupar') !== '0'; } catch {}
+  const abiertos = new Set();
+  // Una sola factura para varios comprobantes del mismo cliente
+  const emitirVarias = (items, cliente) => {
+    const total = items.reduce((s, x) => s + x.monto, 0);
+    const m = modal(`Marcar emitidas — ${cliente}`, `<p class="small muted" style="margin-bottom:.7rem">Se marcan como emitidas con el mismo número de factura. Es solo un registro: no emite nada en AFIP.</p>
+      <table class="tbl small" style="margin-bottom:.8rem"><tbody>${items.map(x => `<tr><td><label style="display:flex;gap:.4rem;align-items:center"><input type="checkbox" data-sel="${x.clave}" checked> ${x.origen === 'venta' ? 'Venta' : 'Service'} #${x.numero}</label></td><td>${fdate(x.fechaRef)}</td><td class="num">${money(x.monto)}</td></tr>`).join('')}
+        <tr><td colspan="2"><b>Total</b></td><td class="num"><b id="em-total">${money(total)}</b></td></tr></tbody></table>
+      <div class="field"><label>N° de factura <span class="muted">(opcional, ej: 0005-00001234)</span></label><input class="input" id="em-nro"></div>`,
+      `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Marcar emitidas</button>`);
+    const elegidos = () => items.filter(x => $(`[data-sel="${x.clave}"]`, m.el).checked);
+    $$('[data-sel]', m.el).forEach(c => c.onchange = () => { $('#em-total', m.el).textContent = money(elegidos().reduce((s, x) => s + x.monto, 0)); });
+    setTimeout(() => $('#em-nro', m.el).focus(), 50);
+    $('#ok', m.el).onclick = () => run(async () => {
+      const sel = elegidos(); if (!sel.length) return toast('No elegiste ningún comprobante', true);
+      const f = { estado: 'emitida', nro: $('#em-nro', m.el).value.trim() };
+      for (const x of sel) await (x.origen === 'service' ? store.establecerFacturaOrden(x.id, f) : store.establecerFacturaVenta(x.id, f));
+      m.close(); toast(`${sel.length} comprobante(s) marcados como emitidos`); render();
+    });
+  };
   const paint = () => {
+    $('#agrupar').checked = agrupar;
     $('#chips').innerHTML = opts.map(([k, l, n]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}<span class="count">${n}</span></button>`).join('');
     $$('#chips .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
     const base = filtro === 'emitida' ? emitidas : filtro === 'todas' ? facturables : pendientes.slice().reverse();   // las pendientes, de la más vieja a la más nueva
     const l = base.filter(x => matches(texto, `#${x.numero}`, nombreDe(x.cliente_id), x.factura_nro));
-    $('#rows').innerHTML = l.map(x => `<tr class="click" data-clave="${x.clave}"><td class="mono"><b>#${x.numero}</b><div class="small muted" style="font-family:inherit">${x.origen === 'venta' ? 'Venta' : 'Service'}</div></td>
+    const fila = (x, enGrupo = false) => `<tr class="click" data-clave="${x.clave}" ${enGrupo ? `data-hijo="${x.cliente_id ?? 0}" style="background:#fafbfc${abiertos.has(String(x.cliente_id ?? 0)) ? '' : ';display:none'}"` : ''}><td class="mono"${enGrupo ? ' style="padding-left:1.6rem"' : ''}><b>#${x.numero}</b><div class="small muted" style="font-family:inherit">${x.origen === 'venta' ? 'Venta' : 'Service'}</div></td>
       <td class="nowrap">${fdate(x.fechaRef)}<div class="small muted">${daysSince(x.fechaRef) === 0 ? 'hoy' : `hace ${daysSince(x.fechaRef)} d`}</div></td>
-      <td>${esc(nombreDe(x.cliente_id))}</td><td class="num nowrap">${money(x.monto)}</td><td>${cobro(x)}</td>
+      <td>${enGrupo ? '<span class="muted">↳</span>' : esc(nombreDe(x.cliente_id))}</td><td class="num nowrap">${money(x.monto)}</td><td>${cobro(x)}</td>
       <td>${pillFactura(x)}${x.cancelada ? ` <span class="pill red">${x.origen === 'venta' ? 'Anulada' : 'Entrega anulada'}${x.facturacion === 'emitida' ? ': falta nota de crédito' : ''}</span>` : ''}</td>
-      <td class="right nowrap">${x.facturacion === 'pendiente' && !x.cancelada ? `<button class="btn sm ok" data-emitir="${x.clave}">Marcar emitida</button>` : `<button class="btn sm" data-fact="${x.clave}">Cambiar</button>`}</td></tr>`).join('')
+      <td class="right nowrap">${x.facturacion === 'pendiente' && !x.cancelada ? `<button class="btn sm ok" data-emitir="${x.clave}">Marcar emitida</button>` : `<button class="btn sm" data-fact="${x.clave}">Cambiar</button>`}</td></tr>`;
+    // Agrupado: una fila por cliente (en el orden en que aparece su primer comprobante); los que tienen uno solo quedan como fila común
+    const grupos = [];
+    if (agrupar) l.forEach(x => { const k = String(x.cliente_id ?? 0); let g = grupos.find(y => y.k === k); if (!g) grupos.push(g = { k, items: [] }); g.items.push(x); });
+    const filaGrupo = g => {
+      const it = g.items, abierto = abiertos.has(g.k);
+      const fechas = it.map(x => x.fechaRef).sort(), vieja = fechas[0], nueva = fechas[fechas.length - 1];
+      const cc = it.reduce((s, x) => s + ccDe(x), 0), total = it.reduce((s, x) => s + x.monto, 0);
+      const pend = it.filter(x => x.facturacion === 'pendiente' && !x.cancelada), emit = it.filter(x => x.facturacion === 'emitida').length;
+      return `<tr class="click" data-grupo="${g.k}" style="background:var(--accent-soft)"><td class="nowrap"><b>${abierto ? '▾' : '▸'} ${it.length} comprobantes</b></td>
+        <td class="nowrap">${fdate(vieja)}${fdate(vieja) !== fdate(nueva) ? `<div class="small muted">al ${fdate(nueva)}</div>` : ''}</td>
+        <td><b>${esc(nombreDe(it[0].cliente_id))}</b></td><td class="num nowrap"><b>${money(total)}</b></td>
+        <td>${cc > 0.009 ? `<span class="pill amber">Cuenta corriente ${money(cc)}</span>` : ''}${total - cc > 0.009 ? `${cc > 0.009 ? '<br>' : ''}<span class="small">Cobrado ${money(total - cc)}</span>` : ''}</td>
+        <td>${pend.length ? `<span class="pill amber">${pend.length} pendiente${pend.length > 1 ? 's' : ''}</span>` : ''} ${emit ? `<span class="pill green">${emit} emitida${emit > 1 ? 's' : ''}</span>` : ''}</td>
+        <td class="right nowrap">${pend.length > 1 ? `<button class="btn sm ok" data-emitir-grupo="${g.k}" title="Una sola factura para todos los pendientes de este cliente">Marcar emitidas (${pend.length})</button>` : ''}</td></tr>`;
+    };
+    $('#rows').innerHTML = (agrupar ? grupos.map(g => g.items.length > 1 ? filaGrupo(g) + g.items.map(x => fila(x, true)).join('') : fila(g.items[0])).join('') : l.map(x => fila(x)).join(''))
       || `<tr><td colspan="7" class="empty">${filtro === 'pendiente' ? 'No hay nada con la factura pendiente de emitir.' : 'No hay nada en este estado.'}</td></tr>`;
+    $$('[data-grupo]').forEach(tr => tr.onclick = ev => {
+      if (ev.target.closest('button')) return;
+      const k = tr.dataset.grupo; abiertos.has(k) ? abiertos.delete(k) : abiertos.add(k); paint();
+    });
+    $$('[data-emitir-grupo]').forEach(b => b.onclick = () => {
+      const g = grupos.find(y => y.k === b.dataset.emitirGrupo);
+      emitirVarias(g.items.filter(x => x.facturacion === 'pendiente' && !x.cancelada), nombreDe(g.items[0].cliente_id));
+    });
     const de = clave => facturables.find(x => x.clave === clave);
     $$('[data-clave]').forEach(tr => tr.onclick = ev => {
       if (ev.target.closest('button')) return;
@@ -2374,6 +2455,7 @@ ROUTES.facturas = async ({ q }) => {
     $$('[data-fact]').forEach(b => b.onclick = () => { const x = de(b.dataset.fact); facturaModal(x, () => render(), x.origen === 'service'); });
   };
   $('#buscar').oninput = e => { texto = e.target.value.trim(); paint(); };
+  $('#agrupar').onchange = e => { agrupar = e.target.checked; try { localStorage.setItem('gscom_facturas_agrupar', agrupar ? '1' : '0'); } catch {} paint(); };
   paint();
 };
 
