@@ -102,7 +102,12 @@ main { max-width: 1280px; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
 textarea.input { resize: vertical; min-height: 70px; }
 .row { display: flex; gap: .75rem; }
 .row > * { flex: 1; min-width: 0; }
-@media (max-width: 560px) { .row { flex-direction: column; gap: 0; } }
+/* En el celular solo se apilan las filas de formulario (campos, buscador + filtros); las de "etiqueta  valor" o "selector + botón" quedan en línea */
+@media (max-width: 560px) {
+  .row:has(> .field), .row:has(> .search), .row:has(> select):not(:has(> .btn)) { flex-direction: column; gap: .5rem; align-items: stretch !important; }
+  .row:has(> .field) { gap: 0; }
+  .row:has(> .search) > *, .row:has(> select):not(:has(> .btn)) > * { flex: none; width: 100%; }
+}
 
 .search { position: relative; }
 .search input { padding-left: 2.1rem; }
@@ -203,6 +208,32 @@ dl.kv dt { color: var(--muted); }
 
 /* ---------- Impresión ---------- */
 #print-area { display: none; }
+/* ===== Celular ===== */
+@media (max-width: 600px) {
+  /* filtros (chips) en una sola fila que se desliza, en vez de 5 o 6 renglones */
+  .chips { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; padding-bottom: 2px; margin-right: -16px; padding-right: 16px; }
+  .chips::-webkit-scrollbar { display: none; }
+  .chips > * { flex: 0 0 auto; }
+  /* indicadores de a dos */
+  .grid-4:has(> .kpi), .grid-3:has(> .kpi), .grid-2:has(> .kpi) { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .6rem; }
+  .kpi { padding: .8rem .9rem; }
+  .kpi .value { font-size: 1.3rem; }
+  .page-head .actions .btn { padding: .45rem .7rem; font-size: .88rem; }
+  /* listados: cada fila es una tarjeta con "etiqueta  valor" (las etiquetas las pone etiquetarTablas() en app.js) */
+  .tbl-wrap:has(> .tbl.apilada) { overflow: visible; }
+  .tbl.apilada, .tbl.apilada tbody { display: block; width: 100%; }
+  .tbl.apilada thead { display: none; }
+  .tbl.apilada tr { display: block; padding: .6rem .9rem; border-bottom: 1px solid var(--line); }
+  .tbl.apilada td { display: flex; justify-content: space-between; align-items: center; gap: .9rem; border: 0; padding: .16rem 0; text-align: right; }
+  .tbl.apilada td::before { content: attr(data-label); flex: 0 0 auto; font-size: .72rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; text-align: left; }
+  .tbl.apilada td[data-label=""] { display: inline-flex; vertical-align: middle; margin: 0 .5rem .3rem 0; padding: 0; }
+  .tbl.apilada td[data-label=""]::before { display: none; }
+  .tbl.apilada td > .cel { min-width: 0; }
+  .tbl.apilada td:first-child { font-size: 1.02rem; }
+  .tbl.apilada td[colspan] { display: block; text-align: center; }
+  .tbl.apilada td.nowrap, .tbl.apilada td .nowrap { white-space: normal; }
+  .tbl.apilada td input[type=checkbox] { transform: scale(1.2); }
+}
 @media print {
   html, body { background: #fff !important; }
   body > *:not(#print-area) { display: none !important; }   /* solo se imprime el comprobante, sin hojas de más */

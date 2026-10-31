@@ -202,6 +202,35 @@ function parseHash() {
   const [name, id] = path.split('/');
   return { name, id, q: new URLSearchParams(qs || '') };
 }
+// Celular: los listados se ven como tarjetas (CSS .tbl.apilada). Cada celda toma la etiqueta de su columna
+// y su contenido se envuelve en .cel para que quede "ETIQUETA  valor". Se reaplica cuando cambia la pantalla.
+function etiquetarTablas() {
+  $$('#view .card.tbl-wrap > table.tbl').forEach(t => {
+    const ths = [...t.querySelectorAll('thead th')];
+    if (!ths.length) return;
+    t.classList.add('apilada');
+    const nombres = ths.map(th => th.textContent.replace(/[▲▼↕]/g, '').trim());
+    t.querySelectorAll('tbody tr').forEach(tr => {
+      let col = 0;
+      [...tr.children].forEach(td => {
+        if (!td.dataset.etq) {
+          td.dataset.etq = '1';
+          if (!td.hasAttribute('colspan')) {
+            td.dataset.label = nombres[col] || '';
+            const cel = document.createElement('div'); cel.className = 'cel';
+            while (td.firstChild) cel.appendChild(td.firstChild);   // se mueven los nodos (no se pierden los clics ya asignados)
+            td.appendChild(cel);
+          }
+        }
+        col += +(td.getAttribute('colspan') || 1);
+      });
+    });
+  });
+}
+let etiquetarPend = false;
+new MutationObserver(() => { if (etiquetarPend) return; etiquetarPend = true; requestAnimationFrame(() => { etiquetarPend = false; etiquetarTablas(); }); })
+  .observe(document.getElementById('view'), { childList: true, subtree: true });
+
 async function render() {
   $$('.modal-bg').forEach(m => m.remove()); // cerrar modales al cambiar de pantalla
   const r = parseHash();
