@@ -261,7 +261,7 @@ function menusMovil() {
   });
 }
 let etiquetarPend = false;
-new MutationObserver(() => { if (etiquetarPend) return; etiquetarPend = true; setTimeout(() => { etiquetarPend = false; etiquetarTablas(); menusMovil(); }, 0); })
+new MutationObserver(() => { if (etiquetarPend) return; etiquetarPend = true; try { etiquetarTablas(); menusMovil(); } finally { etiquetarPend = false; } })
   .observe(document.getElementById('view'), { childList: true, subtree: true });
 
 async function render() {
@@ -2505,7 +2505,7 @@ ROUTES.facturas = async ({ q }) => {
         <td><b>${esc(nombreDe(it[0].cliente_id))}</b></td><td class="num nowrap"><b>${money(total)}</b></td>
         <td>${cc > 0.009 ? `<span class="pill amber">Cuenta corriente ${money(cc)}</span>` : ''}${total - cc > 0.009 ? `${cc > 0.009 ? '<br>' : ''}<span class="small">Cobrado ${money(total - cc)}</span>` : ''}</td>
         <td>${pend.length ? `<span class="pill amber">${pend.length} pendiente${pend.length > 1 ? 's' : ''}</span>` : ''} ${emit ? `<span class="pill green">${emit} emitida${emit > 1 ? 's' : ''}</span>` : ''}</td>
-        <td class="right nowrap">${pend.length ? `<button class="btn sm" data-pdf-grupo="${g.k}" title="Detalle de los pendientes de este cliente para armar la factura">PDF</button> ` : ''}${pend.length > 1 ? `<button class="btn sm ok" data-emitir-grupo="${g.k}" title="Una sola factura para todos los pendientes de este cliente">Marcar emitidas (${pend.length})</button>` : ''}</td></tr>`;
+        <td class="right nowrap"><button class="btn sm" data-ver-grupo="${g.k}">${abierto ? 'Ocultar ▴' : 'Ver detalle ▾'}</button> ${pend.length ? `<button class="btn sm" data-pdf-grupo="${g.k}" title="Detalle de los pendientes de este cliente para armar la factura">PDF</button> ` : ''}${pend.length > 1 ? `<button class="btn sm ok" data-emitir-grupo="${g.k}" title="Una sola factura para todos los pendientes de este cliente">Marcar emitidas (${pend.length})</button>` : ''}</td></tr>`;
     };
     $('#rows').innerHTML = (agrupar ? grupos.map(g => g.items.length > 1 ? filaGrupo(g) + g.items.map((x, k) => fila(x, true, k === g.items.length - 1)).join('') : fila(g.items[0])).join('') : l.map(x => fila(x)).join(''))
       || `<tr><td colspan="7" class="empty">${filtro === 'pendiente' ? 'No hay nada con la factura pendiente de emitir.' : 'No hay nada en este estado.'}</td></tr>`;
@@ -2513,6 +2513,7 @@ ROUTES.facturas = async ({ q }) => {
       if (ev.target.closest('button')) return;
       const k = tr.dataset.grupo; abiertos.has(k) ? abiertos.delete(k) : abiertos.add(k); paint();
     });
+    $$('[data-ver-grupo]').forEach(b => b.onclick = () => { const k = b.dataset.verGrupo; abiertos.has(k) ? abiertos.delete(k) : abiertos.add(k); paint(); });
     $$('[data-pdf-grupo]').forEach(b => b.onclick = () => {
       const g = grupos.find(y => y.k === b.dataset.pdfGrupo);
       run(() => imprimirDetalleFacturar(g.items.filter(x => x.facturacion === 'pendiente' && !x.cancelada), clientes));
@@ -4548,7 +4549,11 @@ function pantallaLogin(mensaje = '') {
 // =====================================================================
 // Arranque
 // =====================================================================
-const pintarNav = () => { $('nav.tabs').innerHTML = NAV.filter(([r]) => !soloTienda() || r === 'tienda').map(([r, l]) => `<a href="#/${r}" data-r="${r}">${l}</a>`).join(''); };
+const pintarNav = () => {
+  $('nav.tabs').innerHTML = NAV.filter(([r]) => !soloTienda() || r === 'tienda').map(([r, l]) => `<a href="#/${r}" data-r="${r}">${l}</a>`).join('');
+  // cambiar de sección reemplaza la entrada del historial (en el celular, "atrás" no recorre todas las secciones abiertas)
+  $$('nav.tabs a').forEach(a => a.onclick = e => { if (e.ctrlKey || e.metaKey || e.shiftKey || e.button) return; e.preventDefault(); if (location.hash !== a.getAttribute('href')) location.replace(a.getAttribute('href')); else render(); });
+};
 // Si la barra de pestañas tiene scroll, la pestaña actual tiene que quedar a la vista aunque el ancho cambie después de cargar (fuentes, insignias, usuario)
 {
   const verActiva = () => $('nav.tabs a.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });

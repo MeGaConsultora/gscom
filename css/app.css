@@ -131,6 +131,13 @@ table.tbl { width: 100%; border-collapse: collapse; }
 .tbl tr.fact-hijo td { background: #fdf8ec; }
 .tbl tr.fact-hijo td:first-child { box-shadow: inset 4px 0 0 var(--accent); }
 .tbl tr.fact-hijo-ult td { border-bottom: 2px solid #8fa6cf; }
+@media (max-width: 600px) {   /* en tarjetas: el detalle desplegado queda "colgando" del cliente */
+  .tbl.apilada tr.fact-hijo { background: #fdf8ec; border-left: 4px solid var(--accent); margin-left: .6rem; }
+  .tbl.apilada tr.fact-hijo td, .tbl.apilada tr.fact-hijo-ult td { background: none; box-shadow: none; border-bottom: 0; }
+  .tbl.apilada tr.fact-hijo-ult { border-bottom: 2px solid #8fa6cf; margin-bottom: .2rem; }
+  .tbl.apilada tr.fact-hijo td:nth-child(3) { display: none; }   /* "Cliente ↳": ya está en la tarjeta de arriba */
+  .tbl.apilada tr.fact-hijo td:first-child { padding-left: 0 !important; }
+}
 .pill.yellow { background: #fff6c7; color: #8a6a00; }
 .pill.green { background: var(--ok-soft); color: var(--ok); }
 .pill.red { background: var(--bad-soft); color: var(--bad); }
@@ -232,7 +239,7 @@ dl.kv dt { color: var(--muted); }
   .tbl.apilada thead { display: none; }
   .tbl.apilada tr { display: block; padding: .6rem .9rem; border-bottom: 1px solid var(--line); }
   .tbl.apilada td { display: flex; justify-content: space-between; align-items: center; gap: .9rem; border: 0; padding: .16rem 0; text-align: right; }
-  .tbl.apilada td::before { content: attr(data-label); flex: 0 0 auto; font-size: .72rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; text-align: left; }
+  .tbl.apilada td::before { content: attr(data-label); flex: 0 0 auto; font-family: "DM Sans", system-ui, sans-serif; font-size: .72rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; text-align: left; }
   .tbl.apilada td[data-label=""] { display: inline-flex; vertical-align: middle; margin: 0 .5rem .3rem 0; padding: 0; }
   .tbl.apilada td[data-label=""]::before { display: none; }
   .tbl.apilada td > .cel { min-width: 0; }
