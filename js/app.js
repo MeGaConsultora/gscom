@@ -2320,6 +2320,42 @@ async function imprimirEntregaOrden(id, n) {
 // FACTURAS: qué ventas y entregas de service hay que facturar y cuáles ya se emitieron.
 // No depende de cómo se cobró: sirve igual si se pagó, quedó en cuenta corriente o fue parte y parte.
 // =====================================================================
+// Detalle para facturar en A4 (o PDF): por cliente, cada venta / service con sus ítems, para armar la factura sin abrir uno por uno
+async function imprimirDetalleFacturar(lista, clientes) {
+  if (!lista.length) return toast('No hay comprobantes para incluir', true);
+  const [n, det] = await Promise.all([store.negocio(), Promise.all(lista.map(x => x.origen === 'venta' ? store.venta(x.id) : store.orden(x.id)))]);
+  const porCliente = [];
+  lista.forEach((x, k) => { const id = x.cliente_id ?? 0; let g = porCliente.find(y => y.id === id); if (!g) porCliente.push(g = { id, items: [] }); g.items.push({ x, d: det[k] }); });
+  const cliDe = id => clientes.find(c => c.id === id);
+  const filasItems = (x, d) => {
+    const its = d?.items || [];
+    const suma = its.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
+    const filas = its.map(i => `<tr><td>${esc(i.descripcion)}</td><td class="num">${+i.cantidad}</td>
+      <td class="num nowrap">${+i.precio_unitario === 0 ? 'sin cargo' : money(i.precio_unitario)}</td><td class="num nowrap">${money(i.cantidad * i.precio_unitario)}</td></tr>`).join('');
+    const extra = x.origen === 'venta' && +d?.descuento ? `<tr><td colspan="3">Descuento</td><td class="num nowrap">−${money(d.descuento)}</td></tr>`
+      : x.origen === 'service' && Math.abs(suma - x.monto) > 0.009 ? `<tr><td colspan="3">${its.length ? 'Ajuste al total cobrado' : 'Total del trabajo'}</td><td class="num nowrap">${money(x.monto - suma)}</td></tr>` : '';
+    return filas + extra;
+  };
+  const seccion = (g, k) => {
+    const c = cliDe(g.id), total = g.items.reduce((s, { x }) => s + x.monto, 0);
+    return `<div class="hoja-pedido" ${k < porCliente.length - 1 ? 'style="page-break-after:always"' : ''}>
+      <div class="ped-head"><b>${esc(n.nombre)}</b> · Detalle para facturar · ${fdate(new Date().toISOString())}</div>
+      <h1>${esc(c?.nombre || 'Consumidor final')}</h1>
+      <div class="ped-sub">${[c?.dni_cuit && `CUIT/DNI: <b>${esc(c.dni_cuit)}</b>`, c?.condicion_iva && `Condición IVA: <b>${esc(c.condicion_iva)}</b>`, c?.direccion && esc(c.direccion), c?.email && esc(c.email)].filter(Boolean).join(' · ') || '<span style="color:#888">Sin datos fiscales cargados</span>'}</div>
+      ${g.items.map(({ x, d }) => `<div style="break-inside:avoid;margin-bottom:5mm">
+        <div style="font-size:10.5pt;margin-bottom:1mm"><b>${x.origen === 'venta' ? 'Venta' : tipoOrden(x).nombre} #${x.numero}</b> · ${fdate(x.fechaRef)}${x.origen === 'service' && [x.equipo?.tipo, x.equipo?.marca, x.equipo?.modelo].filter(Boolean).length ? ` · ${esc([x.equipo?.tipo, x.equipo?.marca, x.equipo?.modelo].filter(Boolean).join(' '))}` : ''}</div>
+        <table class="ped-tbl"><thead><tr><th style="width:58%">Detalle</th><th class="num">Cant.</th><th class="num">Precio unit.</th><th class="num">Subtotal</th></tr></thead><tbody>
+          ${filasItems(x, d)}
+          <tr><td colspan="3" style="border-bottom:0"><b>Total ${x.origen === 'venta' ? 'de la venta' : 'del service'}</b></td><td class="num nowrap" style="border-bottom:0"><b>${money(x.monto)}</b></td></tr></tbody></table></div>`).join('')}
+      <table class="ped-tbl" style="margin-top:2mm"><tbody><tr><td style="font-size:12pt;border-bottom:0"><b>TOTAL A FACTURAR (${g.items.length} comprobante${g.items.length > 1 ? 's' : ''})</b></td><td class="num nowrap" style="font-size:12pt;border-bottom:0"><b>${money(total)}</b></td></tr></tbody></table>
+    </div>`;
+  };
+  const titulo = document.title;
+  document.title = porCliente.length === 1 ? `Detalle a facturar - ${cliDe(porCliente[0].id)?.nombre || 'Consumidor final'}` : `Detalle a facturar - ${new Date().toLocaleDateString('sv')}`;
+  window.addEventListener('afterprint', function volver() { window.removeEventListener('afterprint', volver); document.title = titulo; });
+  printHTML(porCliente.map(seccion).join(''), PAGINA_A4);
+}
+
 ROUTES.facturas = async ({ q }) => {
   const [ventas, ordenes, clientes] = await Promise.all([store.ventas(), store.ordenes(), store.clientes()]);
   const nombreDe = id => clientes.find(c => c.id === id)?.nombre || 'Consumidor final';
@@ -2334,7 +2370,8 @@ ROUTES.facturas = async ({ q }) => {
   const montoPend = pendientes.reduce((s, x) => s + x.monto, 0);
   let filtro = q.get('estado') || 'pendiente', texto = '';
   view().innerHTML = `
-  <div class="page-head"><div><h1>Facturas</h1><div class="small muted">Control de qué ventas y entregas de service hay que facturar. Es solo un registro: no emite nada en AFIP. El estado se carga al vender o entregar, o desde cada venta u orden.</div></div></div>
+  <div class="page-head"><div><h1>Facturas</h1><div class="small muted">Control de qué ventas y entregas de service hay que facturar. Es solo un registro: no emite nada en AFIP. El estado se carga al vender o entregar, o desde cada venta u orden.</div></div>
+    <div class="actions"><button class="btn" id="pdf-pend" title="Todas las pendientes de emitir (respetando la búsqueda), una hoja por cliente con el detalle de cada venta o service">🖨 Detalle para facturar (PDF)</button></div></div>
   <div class="grid grid-2" style="margin-bottom:1rem">
     <div class="card kpi"><div class="label">Pendientes de emitir</div><div class="value" style="${pendientes.length ? 'color:var(--warn)' : ''}">${pendientes.length}</div><div class="sub">${money(montoPend)} sin factura</div></div>
     <div class="card kpi"><div class="label">Emitidas</div><div class="value">${emitidas.length}</div><div class="sub">${emitidas.filter(x => !x.factura_nro).length ? `${emitidas.filter(x => !x.factura_nro).length} sin número cargado` : 'todas con su número'}</div></div>
@@ -2406,13 +2443,17 @@ ROUTES.facturas = async ({ q }) => {
         <td><b>${esc(nombreDe(it[0].cliente_id))}</b></td><td class="num nowrap"><b>${money(total)}</b></td>
         <td>${cc > 0.009 ? `<span class="pill amber">Cuenta corriente ${money(cc)}</span>` : ''}${total - cc > 0.009 ? `${cc > 0.009 ? '<br>' : ''}<span class="small">Cobrado ${money(total - cc)}</span>` : ''}</td>
         <td>${pend.length ? `<span class="pill amber">${pend.length} pendiente${pend.length > 1 ? 's' : ''}</span>` : ''} ${emit ? `<span class="pill green">${emit} emitida${emit > 1 ? 's' : ''}</span>` : ''}</td>
-        <td class="right nowrap">${pend.length > 1 ? `<button class="btn sm ok" data-emitir-grupo="${g.k}" title="Una sola factura para todos los pendientes de este cliente">Marcar emitidas (${pend.length})</button>` : ''}</td></tr>`;
+        <td class="right nowrap">${pend.length ? `<button class="btn sm" data-pdf-grupo="${g.k}" title="Detalle de los pendientes de este cliente para armar la factura">PDF</button> ` : ''}${pend.length > 1 ? `<button class="btn sm ok" data-emitir-grupo="${g.k}" title="Una sola factura para todos los pendientes de este cliente">Marcar emitidas (${pend.length})</button>` : ''}</td></tr>`;
     };
     $('#rows').innerHTML = (agrupar ? grupos.map(g => g.items.length > 1 ? filaGrupo(g) + g.items.map((x, k) => fila(x, true, k === g.items.length - 1)).join('') : fila(g.items[0])).join('') : l.map(x => fila(x)).join(''))
       || `<tr><td colspan="7" class="empty">${filtro === 'pendiente' ? 'No hay nada con la factura pendiente de emitir.' : 'No hay nada en este estado.'}</td></tr>`;
     $$('[data-grupo]').forEach(tr => tr.onclick = ev => {
       if (ev.target.closest('button')) return;
       const k = tr.dataset.grupo; abiertos.has(k) ? abiertos.delete(k) : abiertos.add(k); paint();
+    });
+    $$('[data-pdf-grupo]').forEach(b => b.onclick = () => {
+      const g = grupos.find(y => y.k === b.dataset.pdfGrupo);
+      run(() => imprimirDetalleFacturar(g.items.filter(x => x.facturacion === 'pendiente' && !x.cancelada), clientes));
     });
     $$('[data-emitir-grupo]').forEach(b => b.onclick = () => {
       const g = grupos.find(y => y.k === b.dataset.emitirGrupo);
@@ -2427,6 +2468,7 @@ ROUTES.facturas = async ({ q }) => {
     $$('[data-fact]').forEach(b => b.onclick = () => { const x = de(b.dataset.fact); facturaModal(x, () => render(), x.origen === 'service'); });
   };
   $('#buscar').oninput = e => { texto = e.target.value.trim(); paint(); };
+  $('#pdf-pend').onclick = () => run(() => imprimirDetalleFacturar(pendientes.slice().reverse().filter(x => matches(texto, `#${x.numero}`, nombreDe(x.cliente_id), x.factura_nro)), clientes));
   $('#agrupar').onchange = e => { agrupar = e.target.checked; try { localStorage.setItem('gscom_facturas_agrupar', agrupar ? '1' : '0'); } catch {} paint(); };
   paint();
 };
