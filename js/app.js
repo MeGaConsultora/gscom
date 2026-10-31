@@ -227,8 +227,41 @@ function etiquetarTablas() {
     });
   });
 }
+// Celular: los filtros con muchas opciones (chips) y los botones de arriba que no entran se ofrecen en un desplegable.
+// En la computadora el desplegable no se ve (CSS) y todo queda como siempre.
+function menusMovil() {
+  $$('#view .chips').forEach(ch => {
+    const chips = [...ch.querySelectorAll(':scope > .chip')];
+    let sel = ch.previousElementSibling?.classList.contains('chips-sel') ? ch.previousElementSibling : null;
+    if (chips.length <= 4) { sel?.remove(); ch.classList.remove('con-sel'); return; }
+    const etiqueta = c => { const n = c.querySelector('.count')?.textContent.trim(); const t = [...c.childNodes].filter(x => !(x.classList && x.classList.contains('count'))).map(x => x.textContent).join('').replace(/\s+/g, ' ').trim(); return n ? `${t} (${n})` : t; };
+    const firma = chips.map(c => etiqueta(c) + (c.classList.contains('active') ? '*' : '')).join('|');
+    if (sel && sel.dataset.firma === firma) return;
+    if (!sel) {
+      sel = document.createElement('select'); sel.className = 'input chips-sel'; ch.before(sel);
+      sel.onchange = () => ch.querySelectorAll(':scope > .chip')[+sel.value]?.click();
+    }
+    sel.dataset.firma = firma;
+    sel.innerHTML = chips.map((c, i) => `<option value="${i}" ${c.classList.contains('active') ? 'selected' : ''}>${esc(etiqueta(c))}</option>`).join('');
+    ch.classList.add('con-sel');
+  });
+  $$('#view .page-head .actions').forEach(ac => {
+    const items = [...ac.children].filter(b => b.matches('a.btn, button.btn') && !b.classList.contains('primary') && !b.hidden);
+    let sel = ac.querySelector(':scope > .acciones-sel');
+    if (items.length < 3) { sel?.remove(); items.forEach(b => b.classList.remove('en-menu')); return; }
+    const firma = items.map(b => b.textContent.trim()).join('|');
+    if (sel && sel.dataset.firma === firma) return;
+    if (!sel) {
+      sel = document.createElement('select'); sel.className = 'input acciones-sel'; ac.prepend(sel);
+      sel.onchange = () => { const b = sel._items[+sel.value]; sel.value = ''; b?.click(); };
+    }
+    sel._items = items; sel.dataset.firma = firma;
+    sel.innerHTML = '<option value="">Más opciones…</option>' + items.map((b, i) => `<option value="${i}">${esc(b.textContent.trim())}</option>`).join('');
+    items.forEach(b => b.classList.add('en-menu'));
+  });
+}
 let etiquetarPend = false;
-new MutationObserver(() => { if (etiquetarPend) return; etiquetarPend = true; requestAnimationFrame(() => { etiquetarPend = false; etiquetarTablas(); }); })
+new MutationObserver(() => { if (etiquetarPend) return; etiquetarPend = true; setTimeout(() => { etiquetarPend = false; etiquetarTablas(); menusMovil(); }, 0); })
   .observe(document.getElementById('view'), { childList: true, subtree: true });
 
 async function render() {
@@ -1617,7 +1650,7 @@ async function fichaCliente(id) {
 ROUTES.service = async ({ id, q }) => {
   if (id) return detalleOrden(+id);
   const ordenes = await store.ordenes();
-  let filtro = q.get('estado') || 'activas', texto = '';
+  let filtro = q.get('estado') || (matchMedia('(max-width: 600px)').matches ? 'todas' : 'activas'), texto = '';   // en el celular arranca en "Todas"
   view().innerHTML = `
   <div class="page-head"><h1>Service técnico</h1><div class="actions"><button class="btn" id="nueva-armado" title="Armar una PC, instalar software o configurar un equipo nuevo">+ Equipo nuevo</button><button class="btn primary" id="nueva" title="Reparar un equipo que trae el cliente">+ Reparación</button></div></div>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="search"><input class="input" id="buscar" placeholder="Buscar por N° de orden, cliente, equipo o detalle"></div></div>

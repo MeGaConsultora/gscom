@@ -208,6 +208,8 @@ dl.kv dt { color: var(--muted); }
 
 /* ---------- Impresión ---------- */
 #print-area { display: none; }
+/* desplegables que reemplazan filtros y botones en el celular (ver menusMovil en app.js) */
+.chips-sel, .acciones-sel { display: none; }
 /* ===== Celular ===== */
 @media (max-width: 600px) {
   /* filtros (chips) en una sola fila que se desliza, en vez de 5 o 6 renglones */
@@ -219,6 +221,11 @@ dl.kv dt { color: var(--muted); }
   .kpi { padding: .8rem .9rem; }
   .kpi .value { font-size: 1.3rem; }
   .page-head .actions .btn { padding: .45rem .7rem; font-size: .88rem; }
+  .chips.con-sel { display: none; }
+  .chips-sel { display: block; margin-bottom: 1rem; }
+  .page-head .actions .en-menu { display: none; }
+  .page-head .actions:has(> .acciones-sel) { width: 100%; flex-wrap: nowrap; }
+  .acciones-sel { display: block; flex: 1; min-width: 0; }
   /* listados: cada fila es una tarjeta con "etiqueta  valor" (las etiquetas las pone etiquetarTablas() en app.js) */
   .tbl-wrap:has(> .tbl.apilada) { overflow: visible; }
   .tbl.apilada, .tbl.apilada tbody { display: block; width: 100%; }
