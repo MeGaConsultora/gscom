@@ -205,17 +205,18 @@ function parseHash() {
 // Celular: los listados se ven como tarjetas (CSS .tbl.apilada). Cada celda toma la etiqueta de su columna
 // y su contenido se envuelve en .cel para que quede "ETIQUETA  valor". Se reaplica cuando cambia la pantalla.
 function etiquetarTablas() {
-  $$('#view .card.tbl-wrap > table.tbl').forEach(t => {
+  $$('#view .card.tbl-wrap > table.tbl, .modal-bg table.tbl').forEach(t => {
     const ths = [...t.querySelectorAll('thead th')];
     if (!ths.length) return;
     t.classList.add('apilada');
     const nombres = ths.map(th => th.textContent.replace(/[▲▼↕]/g, '').trim());
     t.querySelectorAll('tbody tr').forEach(tr => {
+      if ([...tr.children].some(td => +(td.getAttribute('colspan') || 1) > 1 && !td.classList.contains('empty'))) tr.classList.add('fila-total');
       let col = 0;
       [...tr.children].forEach(td => {
         if (!td.dataset.etq) {
           td.dataset.etq = '1';
-          if (!td.hasAttribute('colspan')) {
+          if (!td.hasAttribute('colspan') && !tr.classList.contains('fila-total')) {
             td.dataset.label = nombres[col] || '';
             const cel = document.createElement('div'); cel.className = 'cel';
             while (td.firstChild) cel.appendChild(td.firstChild);   // se mueven los nodos (no se pierden los clics ya asignados)
@@ -262,7 +263,7 @@ function menusMovil() {
 }
 let etiquetarPend = false;
 new MutationObserver(() => { if (etiquetarPend) return; etiquetarPend = true; try { etiquetarTablas(); menusMovil(); } finally { etiquetarPend = false; } })
-  .observe(document.getElementById('view'), { childList: true, subtree: true });
+  .observe(document.body, { childList: true, subtree: true });
 
 async function render() {
   $$('.modal-bg').forEach(m => m.remove()); // cerrar modales al cambiar de pantalla
