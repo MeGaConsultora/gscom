@@ -242,6 +242,11 @@ dl.kv dt { color: var(--muted); }
   .tbl.apilada td::before { content: attr(data-label); flex: 0 0 auto; font-family: "DM Sans", system-ui, sans-serif; font-size: .72rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; text-align: left; }
   .tbl.apilada td[data-label=""] { display: inline-flex; vertical-align: middle; margin: 0 .5rem .3rem 0; padding: 0; }
   .tbl.apilada td[data-label=""]::before { display: none; }
+  .tbl.apilada td[data-label=""] > .cel { max-width: none; }
+  /* botones al final de la tarjeta (Avisar / Entregar, Editar / Eliminar, etc.): todo el ancho, uno al lado del otro */
+  .tbl.apilada td[data-label=""]:last-child:not(:first-child) { display: flex; width: 100% !important; margin: .5rem 0 .1rem; }
+  .tbl.apilada td[data-label=""]:last-child:not(:first-child) > .cel { display: flex; flex-wrap: wrap; gap: .45rem; width: 100%; }
+  .tbl.apilada td[data-label=""]:last-child:not(:first-child) > .cel > .btn { flex: 1 1 0; justify-content: center; text-align: center; white-space: nowrap; }
   .tbl.apilada td > .cel { min-width: 0; max-width: 72%; }
   .tbl.apilada td { max-width: none !important; width: auto !important; }   /* anula anchos fijos pensados para la computadora */
   .tbl.apilada tr.fila-total { display: flex; justify-content: space-between; align-items: center; gap: .8rem; font-weight: 600; }
