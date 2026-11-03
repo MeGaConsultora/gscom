@@ -521,7 +521,7 @@ ROUTES.vender = async ({ q }) => {
   $('#cliente').value = cart.cliente_id;
   $('#cliente').onchange = e => cart.cliente_id = e.target.value;
   const paintPago = () => $$('#pagos .chip').forEach(b => b.classList.toggle('active', b.dataset.f === cart.forma_pago));
-  $$('#pagos .chip').forEach(b => b.onclick = () => { if (cart.forma_pago !== b.dataset.f) cart.plan = null; cart.forma_pago = b.dataset.f; paintPago(); paintCart(); });
+  $$('#pagos .chip').forEach(b => b.onclick = () => { if (cart.forma_pago !== b.dataset.f) cart.plan = planDefecto(b.dataset.f, planes); cart.forma_pago = b.dataset.f; paintPago(); paintCart(); });
   paintPago();
   // Pago combinado: cart.pagos = [{ forma, monto }]; el último se completa solo con lo que falta para el total
   const restoPagos = total => Math.round((total - cart.pagos.slice(0, -1).reduce((s, p) => s + (+p.monto || 0), 0)) * 100) / 100;
@@ -548,7 +548,7 @@ ROUTES.vender = async ({ q }) => {
       <div class="small" style="display:flex;justify-content:space-between;gap:.5rem">
         ${cart.pagos.length < 3 ? '<button class="linkbtn" id="pago-mas" style="padding:0;white-space:nowrap">＋ Otro medio</button>' : '<span></span>'}
         <span class="${resto > 0 ? 'muted' : ''}" style="${resto > 0 ? '' : 'color:var(--bad)'}">${resto > 0 ? 'El último medio se completa con lo que falta' : 'Los montos superan el total'}</span></div>`;
-    $$('[data-pf]', box).forEach(s => s.onchange = () => { const p = cart.pagos[+s.dataset.pf]; p.forma = s.value; p.plan = null; paintCart(); });
+    $$('[data-pf]', box).forEach(s => s.onchange = () => { const p = cart.pagos[+s.dataset.pf]; p.forma = s.value; p.plan = planDefecto(s.value, planes); paintCart(); });
     $$('[data-pp]', box).forEach(s => s.onchange = () => { const p = cart.pagos[+s.dataset.pp]; p.plan = leerPlan(s, planes, p.plan); paintCart(); });
     $$('[data-pm]', box).forEach(inp => {
       inp.onfocus = () => inp.select();
@@ -560,11 +560,12 @@ ROUTES.vender = async ({ q }) => {
       paintCart();
     });
     const mas = $('#pago-mas', box);
-    if (mas) mas.onclick = () => { cart.pagos.splice(ult, 0, { forma: FORMAS_COBRO.find(f => !cart.pagos.some(p => p.forma === f)) || 'Efectivo', monto: '' }); paintCart(); };
+    if (mas) mas.onclick = () => { const f = FORMAS_COBRO.find(f => !cart.pagos.some(p => p.forma === f)) || 'Efectivo'; cart.pagos.splice(ult, 0, { forma: f, monto: '', plan: planDefecto(f, planes) }); paintCart(); };
   }
   $('#combinar').onclick = () => {
     const otra = FORMAS_COBRO.find(f => f !== cart.forma_pago) || 'Efectivo';
     cart.pagos = [{ forma: cart.forma_pago, monto: '', plan: cart.plan }, { forma: cart.forma_pago === 'Efectivo' ? 'Débito' : otra === 'Efectivo' ? 'Efectivo' : otra }];
+    cart.pagos[1].plan = planDefecto(cart.pagos[1].forma, planes);
     cart.plan = null; paintCart(); $('[data-pm="0"]')?.focus();
   };
   // descuento: en pesos o en % del subtotal (a la base va siempre el monto en pesos)
@@ -757,8 +758,10 @@ const textoPago = v => v.pagos?.length ? v.pagos.map(p => `${p.forma_pago}${p.pl
 const MEDIOS_RECARGO = ['Débito', 'Crédito', 'Mercado Pago'];
 let planesPagoCache = null;
 const planesPago = async () => planesPagoCache ??= (await store.planesPago().catch(() => [])).filter(p => p.activo !== false);
-const nombrePlan = p => `${p.nombre} · ${+p.cuotas > 1 ? `${p.cuotas} cuotas` : '1 pago'}`;
+const nombrePlan = p => `${p.nombre || (p.medio === 'Mercado Pago' ? 'Mercado Pago' : 'Todas las tarjetas')} · ${+p.cuotas > 1 ? `${p.cuotas} cuotas` : '1 pago'}`;
 const elegidoDePlan = p => p ? { plan_id: p.id, plan: nombrePlan(p), cuotas: +p.cuotas, pct: +p.recargo } : null;
+// el plan marcado "por defecto" de un medio: queda elegido solo al elegir ese medio (se puede cambiar)
+const planDefecto = (medio, planes) => elegidoDePlan(planes.find(p => p.medio === medio && p.predeterminado));
 const planDeParte = p => +p.recargo ? { plan_id: p.plan_id ?? null, plan: p.plan || '', cuotas: +p.cuotas || 1, pct: +p.pct || 0 } : null;
 const recargoDe = (base, el) => el?.pct ? Math.round(base * el.pct) / 100 : 0;
 const textoCuotas = (monto, el) => el?.cuotas > 1 ? `${el.cuotas} cuotas de ${money(monto / el.cuotas)}` : '';
@@ -2273,7 +2276,7 @@ async function detalleOrden(id) {
             return sp ? `<div style="display:flex;gap:.4rem;align-items:center;margin:-.15rem 0 .5rem">${sp}<span style="width:24px"></span></div>` : '';
           })()}`).join('')
         + (comb.length < 3 ? '<button class="linkbtn small" id="ent-mas" style="padding:0">＋ Otro medio</button>' : '');
-      $$('[data-ef]', box).forEach(s => s.onchange = () => { const p = comb[+s.dataset.ef]; p.forma = s.value; p.plan = null; s.blur(); pintarSaldo(); });
+      $$('[data-ef]', box).forEach(s => s.onchange = () => { const p = comb[+s.dataset.ef]; p.forma = s.value; p.plan = planDefecto(s.value, planes); s.blur(); pintarSaldo(); });
       $$('[data-ep]', box).forEach(s => s.onchange = () => { const p = comb[+s.dataset.ep]; p.plan = leerPlan(s, planes, p.plan); s.blur(); pintarSaldo(); });
       $$('[data-em]', box).forEach(inp => {
         inp.onfocus = () => inp.select();
@@ -2282,14 +2285,14 @@ async function detalleOrden(id) {
       });
       $$('[data-eq]', box).forEach(b => b.onclick = () => { comb.splice(+b.dataset.eq, 1); if (comb.length < 2) { forma = comb[0]?.forma || forma; plan = comb[0]?.plan || null; comb = null; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x.dataset.f === forma)); } pintarSaldo(); });
       const mas = $('#ent-mas', box);
-      if (mas) mas.onclick = () => { comb.push({ forma: FORMAS_PAGO.find(f => !comb.some(p => p.forma === f)) || 'Efectivo', monto: 0, auto: true }); pintarSaldo(); };
+      if (mas) mas.onclick = () => { const f = FORMAS_PAGO.find(f => !comb.some(p => p.forma === f)) || 'Efectivo'; comb.push({ forma: f, monto: 0, auto: true, plan: planDefecto(f, planes) }); pintarSaldo(); };
     }
     $('#ent-combinar', m.el).onclick = () => { comb = [{ forma, monto: '', auto: false, plan }, { forma: forma === 'Efectivo' ? 'Transferencia' : 'Efectivo', monto: 0, auto: true }]; plan = null; pintarSaldo(); $('[data-em="0"]', m.el)?.focus(); };
     let fact = { estado: o.facturacion || 'no', nro: o.factura_nro || '' };
     controlFactura($('#ent-factura', m.el), fact, x => { fact = x; });
     $('#tot', m.el).oninput = pintarSaldo;
     $('#paga', m.el).oninput = () => { pagaEditado = true; pintarSaldo(); };
-    $$('#ent-chips .chip', m.el).forEach(b => b.onclick = () => { if (forma !== b.dataset.f) plan = null; forma = b.dataset.f; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarSaldo(); });
+    $$('#ent-chips .chip', m.el).forEach(b => b.onclick = () => { if (forma !== b.dataset.f) plan = planDefecto(b.dataset.f, planes); forma = b.dataset.f; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarSaldo(); });
     pintarSaldo();
     $('#ok', m.el).onclick = () => run(async () => {
       const { tot, saldo, paga, queda, partes, recargo } = cuentas();
@@ -3019,7 +3022,7 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
   const alMarcar = () => { inp.value = +sumaSel().toFixed(2) || ''; pintarAyuda(); };
   $$('[data-g]', m.el).forEach(cb => cb.onchange = () => { cb.checked ? sel.add(cb.dataset.g) : sel.delete(cb.dataset.g); alMarcar(); });
   inp.oninput = pintarAyuda;
-  $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { if (forma !== b.dataset.f) plan = null; forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarPlanCob(); });
+  $$('.pay-opts .chip', m.el).forEach(b => b.onclick = () => { if (forma !== b.dataset.f) plan = planDefecto(b.dataset.f, planes); forma = b.dataset.f; $$('.pay-opts .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarPlanCob(); });
   if (pendientes.length) alMarcar(); else { inp.value = saldo > 0 ? saldo : ''; pintarAyuda(); }
   inp.select();
   $('#ok', m.el).onclick = () => run(async () => {
@@ -4929,25 +4932,26 @@ async function pintarPlanes() {
   if (!planes) { box.textContent = 'No se pudieron cargar los planes (¿falta ejecutar el SQL 57?).'; return; }
   box.className = '';
   box.innerHTML = `${planes.length ? `<table class="tbl small"><thead><tr><th>Medio</th><th>Marca / banco</th><th class="num">Cuotas</th><th class="num">Recargo</th><th></th></tr></thead><tbody>
-    ${planes.map(p => `<tr><td>${esc(p.medio)}</td><td>${esc(p.nombre)}</td><td class="num">${p.cuotas}</td><td class="num">${+p.recargo}%</td>
+    ${planes.map(p => `<tr><td>${esc(p.medio)}</td><td>${esc(p.nombre || (p.medio === 'Mercado Pago' ? 'Mercado Pago' : 'Todas las tarjetas'))}${p.predeterminado ? ' <span class="pill green" title="Se aplica solo al elegir este medio de pago">por defecto</span>' : ''}</td><td class="num">${p.cuotas}</td><td class="num">${+p.recargo}%</td>
       <td class="right nowrap"><button class="btn sm" data-plan-ed="${p.id}">Editar</button> <button class="btn sm danger" data-plan-del="${p.id}">Borrar</button></td></tr>`).join('')}</tbody></table>`
     : '<p class="small muted">Todavía no hay planes cargados.</p>'}
     <button class="btn" id="plan-nuevo" style="margin-top:.7rem">+ Agregar plan</button>`;
   const editar = (p = null) => {
     const m = modal(p ? 'Editar plan de pago' : 'Nuevo plan de pago', `
       <div class="field"><label>Medio de pago</label><select class="input" id="pl-medio">${MEDIOS_RECARGO.map(x => `<option ${x === (p?.medio || 'Crédito') ? 'selected' : ''}>${x}</option>`).join('')}</select></div>
-      <div class="field"><label>Marca / banco</label><input class="input" id="pl-nombre" value="${esc(p?.nombre || '')}" placeholder="ej: Visa Banco Nación, Naranja, Cuotas MP"></div>
+      <div class="field"><label>Marca / banco</label><input class="input" id="pl-nombre" value="${esc(p?.nombre || '')}" placeholder="ej: Visa Banco Nación, Naranja (vacío = todas las tarjetas)"></div>
       <div class="row"><div class="field"><label>Cuotas</label><input class="input" id="pl-cuotas" type="number" min="1" max="60" step="1" value="${p?.cuotas || 1}"></div>
         <div class="field"><label>Recargo (%)</label><input class="input" id="pl-rec" type="number" min="0" max="99" step="any" value="${p ? +p.recargo : ''}" placeholder="ej: 6"></div></div>
+      <label class="small" style="display:flex;gap:.45rem;align-items:flex-start;margin-bottom:.7rem"><input type="checkbox" id="pl-def" ${p?.predeterminado ? 'checked' : ''} style="margin-top:.2rem">
+        <span><b>Aplicarlo siempre que se pague con este medio</b><br><span class="muted">Queda elegido solo al elegir el medio (en cada venta se puede cambiar o sacar). Uno por medio de pago.</span></span></label>
       <p class="small muted">Cambiarlo no modifica las ventas ya hechas: cada una guarda el recargo que se le cobró.</p>`,
       `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">Guardar</button>`);
     $('#pl-nombre', m.el).focus();
     $('#ok', m.el).onclick = () => run(async () => {
       const nombre = $('#pl-nombre', m.el).value.trim(), cuotas = +$('#pl-cuotas', m.el).value, recargo = +String($('#pl-rec', m.el).value).replace(',', '.');
-      if (!nombre) return toast('Escribí la marca o el banco', true);
       if (!Number.isInteger(cuotas) || cuotas < 1 || cuotas > 60) return toast('Las cuotas van de 1 a 60', true);
       if ($('#pl-rec', m.el).value === '' || !(recargo >= 0 && recargo < 100)) return toast('El recargo va de 0 a 99 %', true);
-      await store.guardarPlanPago({ id: p?.id, medio: $('#pl-medio', m.el).value, nombre, cuotas, recargo, activo: true });
+      await store.guardarPlanPago({ id: p?.id, medio: $('#pl-medio', m.el).value, nombre, cuotas, recargo, activo: true, predeterminado: $('#pl-def', m.el).checked });
       planesPagoCache = null; m.close(); toast('Plan guardado'); pintarPlanes();
     });
   };

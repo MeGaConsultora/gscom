@@ -316,8 +316,10 @@ export const store = {
   },
   // Planes de pago con recargo (tarjetas / Mercado Pago), se cargan en Ajustes
   async planesPago() { return q(sb.from('planes_pago').select('*').order('medio').order('nombre').order('cuotas')); },
-  async guardarPlanPago({ id, medio, nombre, cuotas, recargo, activo = true }) {
-    const fila = { medio, nombre: String(nombre || '').trim(), cuotas: +cuotas || 1, recargo: +recargo || 0, activo };
+  async guardarPlanPago({ id, medio, nombre, cuotas, recargo, activo = true, predeterminado = false }) {
+    const fila = { medio, nombre: String(nombre || '').trim(), cuotas: +cuotas || 1, recargo: +recargo || 0, activo, predeterminado: !!predeterminado };
+    // uno solo por defecto en cada medio
+    if (fila.predeterminado) await q(sb.from('planes_pago').update({ predeterminado: false }).eq('medio', medio).eq('predeterminado', true));
     return id ? q(sb.from('planes_pago').update(fila).eq('id', id)) : q(sb.from('planes_pago').insert(fila));
   },
   async borrarPlanPago(id) { await q(sb.from('planes_pago').delete().eq('id', id)); },

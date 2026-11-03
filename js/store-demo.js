@@ -736,11 +736,12 @@ export const store = {
     db.seq.planes_pago ||= 4;
     return clone(db.planes_pago.slice().sort((a, b) => a.medio.localeCompare(b.medio) || a.nombre.localeCompare(b.nombre) || a.cuotas - b.cuotas));
   },
-  async guardarPlanPago({ id, medio, nombre, cuotas, recargo, activo = true }) {
+  async guardarPlanPago({ id, medio, nombre, cuotas, recargo, activo = true, predeterminado = false }) {
     await this.planesPago();
-    if (!MEDIOS_RECARGO.includes(medio) || !String(nombre || '').trim()) throw new Error('Completá el medio y el nombre del plan');
+    if (!MEDIOS_RECARGO.includes(medio)) throw new Error('Elegí el medio de pago');
     if (!(+recargo >= 0 && +recargo < 100) || !(+cuotas >= 1 && +cuotas <= 60)) throw new Error('Revisá las cuotas (1 a 60) y el recargo (0 a 99 %)');
-    const fila = { medio, nombre: String(nombre).trim(), cuotas: +cuotas || 1, recargo: +recargo || 0, activo };
+    const fila = { medio, nombre: String(nombre || '').trim(), cuotas: +cuotas || 1, recargo: +recargo || 0, activo, predeterminado: !!predeterminado };
+    if (fila.predeterminado) db.planes_pago.filter(p => p.medio === medio).forEach(p => { p.predeterminado = false; });
     if (id) Object.assign(byId('planes_pago', id), fila); else insert('planes_pago', fila);
     save();
   },
