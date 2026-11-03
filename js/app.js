@@ -3202,12 +3202,15 @@ const palabras = s => norm(s).split(/[^a-z0-9]+/).filter(t => t.length >= 2 && !
 const parecido = (a, b) => { const A = new Set(a), B = new Set(b); let c = 0; A.forEach(t => { if (B.has(t)) c++; }); return A.size + B.size ? 2 * c / (A.size + B.size) : 0; };   // (soloDigitos ya está definido más arriba)
 
 function elegirArchivosFactura(alLeer) {
+  // la cámara solo tiene sentido en el celular o la tablet (en la PC, "capture" se ignora y abre el explorador de archivos)
+  const conCamara = matchMedia('(pointer: coarse)').matches;
   const hojas = [];   // { blob, ext, nombre }
   const m = modal('Cargar compra desde la factura', `
     <p class="small muted">Elegí el PDF de la factura o sacale una foto a cada hoja (derecha, completa y con buena luz). La lee la IA y completa la compra; después revisás todo antes de guardar.</p>
     <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.9rem 0">
-      <label class="btn">📷 Sacar foto de una hoja<input type="file" accept="image/*" capture="environment" id="f-cam" hidden></label>
+      ${conCamara ? '<label class="btn">📷 Sacar foto de una hoja<input type="file" accept="image/*" capture="environment" id="f-cam" hidden></label>' : ''}
       <label class="btn">📁 Elegir PDF o imágenes<input type="file" accept="application/pdf,image/*" multiple id="f-arch" hidden></label></div>
+    ${conCamara ? '' : '<p class="small muted" style="margin:-.3rem 0 .7rem">¿La factura está en papel? Abrí GScom en el celular → Compras → Ingresar mercadería → Cargar desde factura, y sacale una foto a cada hoja.</p>'}
     <div id="f-hojas"></div>
     <p class="small muted" style="margin-top:.6rem">Cada lectura tiene un costo de IA (unos centavos de dólar por factura).</p>`,
     '<button class="btn" data-close>Cancelar</button><button class="btn primary" id="f-leer" disabled>Leer factura</button>');
@@ -3233,7 +3236,7 @@ function elegirArchivosFactura(alLeer) {
     }
     pintar();
   });
-  $('#f-cam', m.el).onchange = e => { agregar([...e.target.files]); e.target.value = ''; };
+  if (conCamara) $('#f-cam', m.el).onchange = e => { agregar([...e.target.files]); e.target.value = ''; };
   $('#f-arch', m.el).onchange = e => { agregar([...e.target.files]); e.target.value = ''; };
   $('#f-leer', m.el).onclick = () => run(async () => {
     const b = $('#f-leer', m.el); b.disabled = true; b.textContent = 'Leyendo… (puede tardar un minuto)';
