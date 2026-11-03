@@ -33,6 +33,17 @@ async function todas(armar, max = Infinity, tanda = 1000) {
 
 const ORDEN_SEL = '*, cliente:clientes(*), equipo:equipos(*)';
 
+// Función "factura-celular": la usa el celular que escaneó el QR, sin sesión (el control lo hace el token)
+async function llamarFacturaCelular(body) {
+  const { data, error } = await sb.functions.invoke('factura-celular', { body });
+  if (error) {
+    let msg = error.message;
+    try { msg = (await error.context.json()).error || msg; } catch { /* sin detalle */ }
+    throw new Error(/Failed to send|fetch/i.test(msg) ? 'No se pudo conectar. Revisá la conexión del celular y probá de nuevo.' : msg);
+  }
+  return data;
+}
+
 export const store = {
   modo: 'supabase',
 
@@ -308,6 +319,13 @@ export const store = {
   async crearPedidoCelular() { return (await q(sb.from('factura_celular').insert({}).select().single())).token; },
   async pedidoCelular(token) { return q(sb.from('factura_celular').select('*').eq('token', token).maybeSingle()); },
   async enviarPedidoCelular(token, rutas) { await q(sb.from('factura_celular').update({ estado: 'subido', archivos: rutas }).eq('token', token).eq('estado', 'esperando')); },
+  async celularEstado(token) { return llamarFacturaCelular({ accion: 'estado', token }); },
+  async celularSubir(token, hojas) {
+    const aBase64 = b => new Promise((ok, mal) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1]); r.onerror = () => mal(new Error('No se pudo leer el archivo')); r.readAsDataURL(b); });
+    const archivos = [];
+    for (const h of hojas) archivos.push({ tipo: h.ext === 'pdf' ? 'application/pdf' : 'image/jpeg', datos: await aBase64(h.blob) });
+    return llamarFacturaCelular({ accion: 'subir', token, archivos });
+  },
   async borrarPedidoCelular(token) { await sb.from('factura_celular').delete().eq('token', token); },
   async compras() { return q(sb.from('compras').select('*, items:compra_items(*)').order('fecha', { ascending: false }).limit(500)); },
   async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {

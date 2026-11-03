@@ -3265,7 +3265,7 @@ async function facturaDesdeCelular(alLeer) {
       <div style="width:190px;height:190px;background:#fff;padding:8px;border:1px solid var(--line);border-radius:10px">${qrSVG(url)}</div>
       <div style="flex:1;min-width:220px">
         <ol class="small" style="margin:0 0 .6rem 1.1rem;line-height:1.7">
-          <li>Escaneá el código con la cámara del celular (tiene que tener la sesión de GScom iniciada).</li>
+          <li>Escaneá el código con la cámara de cualquier celular (no hace falta tener GScom ni usuario).</li>
           <li>Sacale una foto a cada hoja de la factura (o elegí el PDF).</li>
           <li>Tocá <b>Enviar a la PC</b>: acá se lee sola y seguís con la revisión.</li></ol>
         <div class="small" id="fc-estado"><span class="muted">Esperando las fotos del celular…</span></div></div></div>`,
@@ -3295,15 +3295,14 @@ async function facturaDesdeCelular(alLeer) {
   }, 2000);
 }
 
-// En el celular (lo abre el QR de la PC): sacar las fotos de la factura y mandarlas a la PC
-ROUTES['foto-factura'] = async ({ id }) => {
-  const p = await store.pedidoCelular(id).catch(() => null);
-  const vencido = p && Date.now() - new Date(p.creado).getTime() > 15 * 60000;
-  if (!p || p.estado !== 'esperando' || vencido) {
+// En el celular (lo abre el QR de la PC), SIN sesión: sacar las fotos de la factura y mandarlas a la PC.
+// El token del QR (15 minutos, un solo uso) solo permite subir los archivos de esa factura (función "factura-celular").
+async function paginaFotoFactura(id) {
+  $('nav.tabs').hidden = true;
+  try { await store.celularEstado(id); }
+  catch (e) {
     view().innerHTML = `<div class="card card-pad" style="max-width:480px;margin:2rem auto;text-align:center">
-      <h2>${p?.estado === 'subido' ? '✓ Esta factura ya se mandó' : 'El código ya no sirve'}</h2>
-      <p class="small muted" style="margin:.6rem 0 1rem">${p?.estado === 'subido' ? 'Seguí con la revisión en la PC.' : 'Venció o ya se usó. Pedí un código nuevo desde la PC (Compras → Ingresar mercadería → Cargar desde factura → Desde el celular).'}</p>
-      <a class="btn" href="#/inicio">Ir al inicio</a></div>`;
+      <h2>El código ya no sirve</h2><p class="small muted" style="margin:.6rem 0 0">${esc(e.message)}</p></div>`;
     return;
   }
   const hojas = [];
@@ -3341,17 +3340,14 @@ ROUTES['foto-factura'] = async ({ id }) => {
   $('#ff-arch').onchange = e => { agregar([...e.target.files]); e.target.value = ''; };
   $('#ff-enviar').onclick = () => run(async () => {
     const b = $('#ff-enviar'); b.disabled = true; b.textContent = 'Enviando…';
-    const rutas = [];
     try {
-      for (const h of hojas) rutas.push(await store.subirArchivoFactura(h.blob, h.ext));
-      await store.enviarPedidoCelular(id, rutas);
-    } catch (e) { await store.borrarArchivosFactura(rutas); b.disabled = false; b.textContent = 'Enviar a la PC'; throw e; }
+      await store.celularSubir(id, hojas);
+    } catch (e) { b.disabled = false; b.textContent = 'Enviar a la PC'; throw e; }
     view().innerHTML = `<div class="card card-pad" style="max-width:480px;margin:2rem auto;text-align:center">
-      <h2>✓ Listo</h2><p class="small muted" style="margin:.6rem 0 1rem">La factura ya está en la PC: ahí se lee y seguís con la revisión.</p>
-      <a class="btn" href="#/inicio">Ir al inicio</a></div>`;
+      <h2>✓ Listo</h2><p class="small muted" style="margin:.6rem 0 0">La factura ya está en la PC: ahí se lee y seguís con la revisión. Ya podés cerrar esta página.</p></div>`;
   });
   pintar();
-};
+}
 
 // Revisión de lo leído: proveedor y, renglón por renglón, a qué producto corresponde (o crear uno nuevo / no cargarlo)
 async function revisarFacturaIA(f, rutas, uso, { d, productos, proveedores, cats, redondeo, alListo }) {
@@ -4938,6 +4934,7 @@ const pintarNav = () => {
 let iniciada = false;
 
 async function iniciar() {
+  if (parseHash().name === 'foto-factura') return paginaFotoFactura(parseHash().id);   // QR de la factura: sin sesión
   if (store.modo === 'demo') {
     $('#demo-badge').hidden = false;
     ROL = (await store.perfil()).rol;

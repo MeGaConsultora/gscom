@@ -726,6 +726,16 @@ export const store = {
   async crearPedidoCelular() { db.factura_celular ||= []; const t = crypto.randomUUID(); db.factura_celular.push({ token: t, creado: now(), estado: 'esperando', archivos: [] }); save(); return t; },
   async pedidoCelular(token) { const d = JSON.parse(localStorage.getItem(DEMO_KEY) || '{}'); return clone((d.factura_celular || []).find(x => x.token === token) || null); },
   async enviarPedidoCelular(token, rutas) { const d = JSON.parse(localStorage.getItem(DEMO_KEY) || '{}'); const p = (d.factura_celular || []).find(x => x.token === token && x.estado === 'esperando'); if (p) { p.estado = 'subido'; p.archivos = rutas; localStorage.setItem(DEMO_KEY, JSON.stringify(d)); db.factura_celular = d.factura_celular; } },
+  async celularEstado(token) {
+    const d = JSON.parse(localStorage.getItem(DEMO_KEY) || '{}'), p = (d.factura_celular || []).find(x => x.token === token);
+    if (!p || p.estado !== 'esperando' || Date.now() - new Date(p.creado).getTime() > 15 * 60000) throw new Error(p?.estado === 'subido' ? 'Esta factura ya se mandó: seguí en la PC.' : 'El código venció o ya se usó. Pedí uno nuevo desde la PC.');
+    return { ok: true };
+  },
+  async celularSubir(token, hojas) {
+    await this.celularEstado(token);
+    await this.enviarPedidoCelular(token, hojas.map((h, i) => `compras/demo/${Date.now()}-${i}.${h.ext}`));
+    return { ok: true, archivos: hojas.length };
+  },
   async borrarPedidoCelular(token) { db.factura_celular = (db.factura_celular || []).filter(x => x.token !== token); save(); },
   async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {
     const c = insert('compras', { fecha: now(), proveedor_id: proveedor_id || null, nro_comprobante, notas,
