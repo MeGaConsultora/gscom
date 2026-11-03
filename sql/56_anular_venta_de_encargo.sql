@@ -3,7 +3,6 @@
 -- Hasta ahora, al anular esa venta se liberaba el anticipo pero el encargo
 -- seguía "entregado", y así no se podía volver a entregar ni cancelar.
 -- Ahora vuelve a "recibido" (o "reservado" si es una reserva).
--- Al final corrige los que ya quedaron así y los muestra.
 -- =====================================================================
 create or replace function revertir_anticipo_encargo(p_venta_id bigint) returns void
 language plpgsql as $$
@@ -22,15 +21,6 @@ end $$;
 revoke execute on function revertir_anticipo_encargo(bigint) from public, anon;
 grant  execute on function revertir_anticipo_encargo(bigint) to authenticated;
 
--- Los que ya quedaron "entregados" con la venta anulada: su último movimiento es la liberación del anticipo
-with ultimo as (
-  select distinct on (encargo_id) encargo_id, concepto from cc_movimientos
-   where encargo_id is not null and tipo in ('cargo', 'ajuste')
-   order by encargo_id, id desc
-), corregidos as (
-  update encargos e set estado = case when e.tipo = 'reserva' then 'reservado' else 'recibido' end, fecha_entrega = null
-    from ultimo u
-   where u.encargo_id = e.id and u.concepto like 'Anulación de venta: se libera%' and e.estado = 'entregado'
-  returning e.id, e.tipo, e.numero, e.estado, e.cliente_id
-)
-select c.tipo, c.numero, c.estado as estado_nuevo, cl.nombre as cliente from corregidos c left join clientes cl on cl.id = c.cliente_id;
+-- No se corrige ningún encargo ya existente: puede haberse entregado igual con otra venta
+-- (como el N° 4, vendido con la venta #66). Esos quedan "entregado" y su anticipo, si no quedó
+-- aplicado a ninguna venta, la app lo toma como un cobro más en la cuenta del cliente.

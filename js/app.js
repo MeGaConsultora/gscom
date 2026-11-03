@@ -2861,6 +2861,11 @@ function deudaPorConcepto(movs, imps = []) {
   const grupos = new Map(), aplicaciones = {}, aFavor = [];   // aFavor: lo que sobró de cada cobro, para lo que se cargue después
   // Un movimiento de un encargo agrupa por el encargo (aunque también tenga venta_id: es el mismo concepto
   // desde que se cobra el anticipo hasta que la venta que lo entrega queda registrada).
+  // El anticipo de un encargo va a ese encargo mientras esté en curso, o si quedó aplicado a la venta que lo entregó.
+  // Si ya no está en curso (entregado por otra venta, o cancelado) y no quedó aplicado a nada, es un cobro más.
+  const aplicadoEnc = {};
+  movs.forEach(m => { if (m.encargo_id && m.tipo !== 'pago') aplicadoEnc[m.encargo_id] = (aplicadoEnc[m.encargo_id] || 0) + +m.monto; });
+  const anticipoSuelto = m => ['entregado', 'cancelado'].includes(m.encargo?.estado) && !((aplicadoEnc[m.encargo_id] || 0) > 0.009);
   const claveDe = m => m.encargo_id ? `encargo:${m.encargo_id}` : m.venta_id ? `venta:${m.venta_id}` : m.orden_id ? `orden:${m.orden_id}` : `cargo:${m.id}`;
   const grupo = (clave, m) => {
     if (!grupos.has(clave)) grupos.set(clave, { clave, fecha: m.fecha, concepto: m.concepto, venta_id: m.venta_id || null, orden_id: m.orden_id || null,
@@ -2877,7 +2882,7 @@ function deudaPorConcepto(movs, imps = []) {
       let resto = -monto; const apl = aplicaciones[m.id] = [];
       const aplicar = (g, max) => { const x = Math.min(max, resto); if (x <= 0.009) return; g.pendiente -= x; g.pagado += x; resto -= x; apl.push({ grupo: g.clave, monto: x }); };
       if (m.orden_id) { const g = grupo(`orden:${m.orden_id}`, m); if (!g.total) g.desdeAnticipo = true; aplicar(g, resto); }   // anticipo de service: va a su orden
-      else if (m.encargo_id && m.encargo?.estado !== 'cancelado') { const g = grupo(`encargo:${m.encargo_id}`, m); if (!g.total) g.desdeAnticipo = true; aplicar(g, resto); }   // anticipo de encargo/reserva: va a su encargo (si se canceló, es un cobro más)
+      else if (m.encargo_id && !anticipoSuelto(m)) { const g = grupo(`encargo:${m.encargo_id}`, m); if (!g.total) g.desdeAnticipo = true; aplicar(g, resto); }   // anticipo de encargo/reserva: va a su encargo (si se canceló, es un cobro más)
       imps.filter(x => x.pago_id === m.id).forEach(x => { const g = grupos.get(x.grupo); if (g) aplicar(g, Math.min(+x.monto, Math.max(g.pendiente, 0))); });
       [...grupos.values()].filter(g => g.pendiente > 0.009).forEach(g => aplicar(g, g.pendiente));   // resto: a lo más viejo
       if (resto > 0.009) aFavor.push({ apl, resto });            // a favor del cliente (se aplica a lo que venga)
