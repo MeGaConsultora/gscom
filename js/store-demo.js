@@ -38,12 +38,17 @@ function normalizarPagos(pagos, forma_pago, total, cliente_id) {
     const suma = pagos.reduce((s, p) => s + +p.monto, 0);
     if (Math.abs(suma - total) > 0.01) throw new Error(`Los medios de pago suman ${suma} y el total es ${total}`);
     if (!cliente_id && pagos.some(p => p.forma_pago === CC)) throw new Error('Para dejar una parte a cuenta corriente hay que elegir el cliente');
-    if (pagos.length > 1) return { pagos: pagos.map(p => ({ forma_pago: p.forma_pago, monto: Math.round(+p.monto * 100) / 100 })), forma_pago: pagos.map(p => p.forma_pago).join(' + ') };
+    if (pagos.some(p => +p.recargo > 0 && !MEDIOS_RECARGO.includes(p.forma_pago))) throw new Error('El recargo solo va con débito, crédito o Mercado Pago');
+    if (pagos.length > 1 || recargoDePagos(pagos) > 0) return { pagos: pagos.map(partePago), forma_pago: pagos.map(p => p.forma_pago).join(' + ') };
     forma_pago = pagos[0].forma_pago;
   }
   if (forma_pago === CC && !cliente_id) throw new Error('Para vender a cuenta corriente hay que elegir el cliente');
   return { pagos: null, forma_pago };
 }
+const MEDIOS_RECARGO = ['Débito', 'Crédito', 'Mercado Pago'];
+const recargoDePagos = pagos => Math.round((pagos || []).reduce((s, p) => s + (+p.recargo || 0), 0) * 100) / 100;
+const partePago = p => Object.fromEntries(Object.entries({ forma_pago: p.forma_pago, monto: Math.round(+p.monto * 100) / 100, recargo: +p.recargo ? Math.round(+p.recargo * 100) / 100 : null,
+  plan: p.plan || null, cuotas: p.cuotas ?? null, pct: p.pct ?? null, plan_id: p.plan_id ?? null }).filter(([, x]) => x != null));
 function aplicarPagosVenta(v, signo, concepto) {
   for (const p of v.pagos || [{ forma_pago: v.forma_pago, monto: v.total }]) {
     if (!p.monto) continue;
@@ -378,11 +383,11 @@ export const store = {
   },
   async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '', pagos = null }) {
     if (!items.length) throw new Error('La venta no tiene ítems');
-    const subtotal = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
-    ({ pagos, forma_pago } = normalizarPagos(pagos, forma_pago, subtotal - (+descuento || 0), cliente_id));
+    const subtotal = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0), recargo = recargoDePagos(pagos);
+    ({ pagos, forma_pago } = normalizarPagos(pagos, forma_pago, subtotal - (+descuento || 0) + recargo, cliente_id));
     db.seq.venta_numero = (db.seq.venta_numero || 0) + 1;
-    const v = insert('ventas', { numero: db.seq.venta_numero, fecha: now(), cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0,
-      total: subtotal - (+descuento || 0), forma_pago, pagos, notas, anulada: false });
+    const v = insert('ventas', { numero: db.seq.venta_numero, fecha: now(), cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0, recargo,
+      total: subtotal - (+descuento || 0) + recargo, forma_pago, pagos, notas, anulada: false });
     for (const i of items) {
       insert('venta_items', { venta_id: v.id, producto_id: i.producto_id || null, descripcion: i.descripcion, cantidad: i.cantidad,
         precio_unitario: i.precio_unitario, subtotal: i.cantidad * i.precio_unitario });
@@ -454,7 +459,7 @@ export const store = {
 
     // Igual que editar_venta en la base: solo se corrige lo que cambió
     const subtotal = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0);
-    const total = subtotal - (+descuento || 0);
+    const recargo = recargoDePagos(pagos), total = subtotal - (+descuento || 0) + recargo;
     ({ pagos, forma_pago } = normalizarPagos(pagos, forma_pago, total, cliente_id));
     const firma = l => JSON.stringify(l.map(i => [i.producto_id || null, i.descripcion, +i.cantidad, +i.precio_unitario]).sort());
     const itemsIguales = firma(db.venta_items.filter(i => i.venta_id === v.id)) === firma(items);
@@ -470,7 +475,7 @@ export const store = {
       }
     }
     const antes = { ...v };
-    Object.assign(v, { cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0, total, forma_pago, pagos, notas: notas ?? v.notas });
+    Object.assign(v, { cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0, recargo, total, forma_pago, pagos, notas: notas ?? v.notas });
     if (!plataIgual) {
       aplicarPagosVenta(antes, -1, `Corrección de venta #${v.numero}`);
       aplicarPagosVenta(v, 1, `Venta #${v.numero}`);
@@ -507,13 +512,15 @@ export const store = {
   },
   async ccMovimientos(clienteId) { return clone(db.cc_movimientos.filter(m => m.cliente_id === +clienteId).reverse().map(m => ({ ...m, venta: m.venta_id ? { notas: byId('ventas', m.venta_id)?.notas || '' } : null, encargo: m.encargo_id ? { estado: byId('encargos', m.encargo_id)?.estado } : null }))); },
   async ccMovimiento(id) { return clone(byId('cc_movimientos', id) || null); },
-  async cobrarCuenta(clienteId, { monto, forma_pago, nota = '', imputaciones = [] }) {
+  async cobrarCuenta(clienteId, { monto, forma_pago, nota = '', imputaciones = [], recargo = 0, plan = '' }) {
     if (!(+monto > 0)) throw new Error('El monto a cobrar tiene que ser mayor a cero');
+    if (+recargo > 0 && !MEDIOS_RECARGO.includes(forma_pago)) throw new Error('El recargo solo va con débito, crédito o Mercado Pago');
+    recargo = Math.round((+recargo || 0) * 100) / 100;
     if (forma_pago === CC) throw new Error('Elegí cómo paga (efectivo, transferencia, etc.)');
     if (imputaciones.reduce((s, x) => s + +x.monto, 0) > +monto + 0.009) throw new Error('Lo imputado supera el monto cobrado');
     const c = byId('clientes', clienteId);
-    const m = insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || 'Cobro de cuenta corriente', forma_pago, anulado: false });
-    insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Cobro cta. cte. — ${c.nombre}`, monto: +monto, forma_pago, cc_movimiento_id: m.id });
+    const m = insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || 'Cobro de cuenta corriente', forma_pago, recargo, plan: recargo ? plan || null : null, anulado: false });
+    insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Cobro cta. cte. — ${c.nombre}${recargo && plan ? ` · ${plan}` : ''}`, monto: +monto + recargo, forma_pago, cc_movimiento_id: m.id });
     db.cc_imputaciones ||= [];
     imputaciones.filter(x => +x.monto > 0).forEach(x => insert('cc_imputaciones', { pago_id: m.id, grupo: x.grupo, monto: +x.monto }));
     save(); return m.id;
@@ -588,7 +595,7 @@ export const store = {
     const c = byId('clientes', m.cliente_id);
     m.anulado = true;
     insert('cc_movimientos', { cliente_id: m.cliente_id, fecha: now(), tipo: 'ajuste', monto: -m.monto, concepto: `Anulación de cobro del ${new Date(m.fecha).toLocaleDateString('es-AR')}`, forma_pago: '', anulado: false });
-    insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Anulación cobro cta. cte. — ${c.nombre}`, monto: -m.monto, forma_pago: m.forma_pago, cc_movimiento_id: m.id });
+    insert('caja_movimientos', { fecha: now(), tipo: 'egreso', concepto: `Anulación cobro cta. cte. — ${c.nombre}`, monto: -m.monto + (+m.recargo || 0), forma_pago: m.forma_pago, cc_movimiento_id: m.id });
     save();
   },
 
@@ -723,6 +730,21 @@ export const store = {
   async guardarArchivosCompra(id, rutas) { const c = byId('compras', id); if (c) { c.archivos = rutas; save(); } },
   async urlArchivoFactura() { throw new Error('En la demo no se guardan los archivos de las facturas'); },
   async usoIA() { return []; },
+  async planesPago() {
+    db.planes_pago ||= [{ id: 1, medio: 'Crédito', nombre: 'Visa / Master', cuotas: 1, recargo: 4, activo: true }, { id: 2, medio: 'Crédito', nombre: 'Visa / Master', cuotas: 6, recargo: 12, activo: true },
+      { id: 3, medio: 'Débito', nombre: 'Cualquier banco', cuotas: 1, recargo: 2, activo: true }, { id: 4, medio: 'Mercado Pago', nombre: 'Cuotas MP', cuotas: 3, recargo: 9, activo: true }];
+    db.seq.planes_pago ||= 4;
+    return clone(db.planes_pago.slice().sort((a, b) => a.medio.localeCompare(b.medio) || a.nombre.localeCompare(b.nombre) || a.cuotas - b.cuotas));
+  },
+  async guardarPlanPago({ id, medio, nombre, cuotas, recargo, activo = true }) {
+    await this.planesPago();
+    if (!MEDIOS_RECARGO.includes(medio) || !String(nombre || '').trim()) throw new Error('Completá el medio y el nombre del plan');
+    if (!(+recargo >= 0 && +recargo < 100) || !(+cuotas >= 1 && +cuotas <= 60)) throw new Error('Revisá las cuotas (1 a 60) y el recargo (0 a 99 %)');
+    const fila = { medio, nombre: String(nombre).trim(), cuotas: +cuotas || 1, recargo: +recargo || 0, activo };
+    if (id) Object.assign(byId('planes_pago', id), fila); else insert('planes_pago', fila);
+    save();
+  },
+  async borrarPlanPago(id) { await this.planesPago(); db.planes_pago = db.planes_pago.filter(p => p.id !== +id); save(); },
   async crearPedidoCelular() { db.factura_celular ||= []; const t = crypto.randomUUID(); db.factura_celular.push({ token: t, creado: now(), estado: 'esperando', archivos: [] }); save(); return t; },
   async pedidoCelular(token) { const d = JSON.parse(localStorage.getItem(DEMO_KEY) || '{}'); return clone((d.factura_celular || []).find(x => x.token === token) || null); },
   async enviarPedidoCelular(token, rutas) { const d = JSON.parse(localStorage.getItem(DEMO_KEY) || '{}'); const p = (d.factura_celular || []).find(x => x.token === token && x.estado === 'esperando'); if (p) { p.estado = 'subido'; p.archivos = rutas; localStorage.setItem(DEMO_KEY, JSON.stringify(d)); db.factura_celular = d.factura_celular; } },
@@ -860,12 +882,16 @@ export const store = {
     db.orden_items.filter(i => i.orden_id === o.id && i.producto_id).forEach(i => movStock(i.producto_id, -i.cantidad, 'service', { orden_id: o.id, nota: `Orden #${o.numero}` }));
     const anticipos = -db.cc_movimientos.filter(m => m.orden_id === o.id && m.tipo === 'pago' && !m.anulado).reduce((s, m) => s + m.monto, 0);
     const restante = Math.max(+total - anticipos, 0);
-    if (pagos?.length) {   // pago combinado (igual que entregar_orden en la base)
+    let recargo = 0;
+    if (pagos?.length) {   // pago combinado o con recargo (igual que entregar_orden en la base)
       if (pagos.some(p => !p.forma_pago || p.forma_pago === CC || !(+p.monto > 0))) throw new Error('Cada medio de pago tiene que tener su forma (no cuenta corriente) y un monto mayor a 0');
-      const suma = pagos.reduce((s, p) => s + +p.monto, 0);
-      if (suma > restante + 0.01) throw new Error(`Los medios de pago suman ${suma} y el saldo a cobrar es ${restante}`);
-      if (pagos.length === 1) { forma_pago = pagos[0].forma_pago; pagado = suma; pagos = null; }
-      else { forma_pago = pagos.map(p => p.forma_pago).join(' + '); pagado = suma; pagos = pagos.map(p => ({ forma_pago: p.forma_pago, monto: +p.monto })); }
+      if (pagos.some(p => +p.recargo > 0 && !MEDIOS_RECARGO.includes(p.forma_pago))) throw new Error('El recargo solo va con débito, crédito o Mercado Pago');
+      recargo = recargoDePagos(pagos);
+      const suma = pagos.reduce((s, p) => s + +p.monto, 0) - recargo;
+      if (suma > restante + 0.01) throw new Error(`Los medios de pago suman ${suma} (sin recargo) y el saldo a cobrar es ${restante}`);
+      pagado = suma;
+      if (pagos.length === 1) { forma_pago = pagos[0].forma_pago; pagos = recargo ? pagos.map(partePago) : null; }
+      else { forma_pago = pagos.map(p => p.forma_pago).join(' + '); pagos = pagos.map(partePago); }
     } else pagos = null;
     const pagadoAhora = forma_pago === CC ? 0 : Math.min(pagado == null ? restante : +pagado, restante);
     if (anticipos > 0) insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'cargo', monto: anticipos, concepto: `Service orden #${o.numero} (aplica anticipo)`, forma_pago: '', orden_id: o.id, anulado: false });
@@ -873,7 +899,7 @@ export const store = {
     else if (pagadoAhora > 0) insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Service orden #${o.numero}`, monto: pagadoAhora, forma_pago, orden_id: o.id });
     if (restante - pagadoAhora > 0) insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'cargo', monto: restante - pagadoAhora,
       concepto: `Service orden #${o.numero}${pagadoAhora > 0 ? ' (saldo)' : ''}`, forma_pago: '', orden_id: o.id, anulado: false });
-    o.total_cobrado = +total; o.forma_pago_entrega = forma_pago; o.pagado_entrega = pagadoAhora; o.pagos_entrega = pagos;
+    o.total_cobrado = +total + recargo; o.recargo_entrega = recargo; o.forma_pago_entrega = forma_pago; o.pagado_entrega = pagadoAhora + recargo; o.pagos_entrega = pagos;
     if (notaInterna.trim()) o.notas_internas = o.notas_internas ? `${o.notas_internas}\n${notaInterna.trim()}` : notaInterna.trim();
     await this.cambiarEstadoOrden(id, 'entregado', comentario);
   },

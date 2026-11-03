@@ -314,6 +314,13 @@ export const store = {
     if (error) throw new Error('No se pudo abrir el archivo de la factura');
     return data.signedUrl;
   },
+  // Planes de pago con recargo (tarjetas / Mercado Pago), se cargan en Ajustes
+  async planesPago() { return q(sb.from('planes_pago').select('*').order('medio').order('nombre').order('cuotas')); },
+  async guardarPlanPago({ id, medio, nombre, cuotas, recargo, activo = true }) {
+    const fila = { medio, nombre: String(nombre || '').trim(), cuotas: +cuotas || 1, recargo: +recargo || 0, activo };
+    return id ? q(sb.from('planes_pago').update(fila).eq('id', id)) : q(sb.from('planes_pago').insert(fila));
+  },
+  async borrarPlanPago(id) { await q(sb.from('planes_pago').delete().eq('id', id)); },
   async usoIA() { return q(sb.from('uso_ia').select('*').order('fecha', { ascending: false }).limit(500)); },
   // Factura desde el celular: la PC crea el pedido (token del QR), el celular sube las fotos y lo marca "subido"
   async crearPedidoCelular() { return (await q(sb.from('factura_celular').insert({}).select().single())).token; },
@@ -421,7 +428,8 @@ export const store = {
   async ccSaldos() { return q(sb.from('cc_saldos').select('*').order('saldo', { ascending: false })); },
   async ccMovimientos(clienteId) { return q(sb.from('cc_movimientos').select('*, venta:ventas(notas), encargo:encargos(estado)').eq('cliente_id', clienteId).order('fecha', { ascending: false }).order('id', { ascending: false })); },
   async ccMovimiento(id) { return q(sb.from('cc_movimientos').select('*').eq('id', id).maybeSingle()); },
-  async cobrarCuenta(clienteId, { monto, forma_pago, nota = '', imputaciones = [] }) {
+  async cobrarCuenta(clienteId, { monto, forma_pago, nota = '', imputaciones = [], recargo = 0, plan = '' }) {
+    if (+recargo > 0) return q(sb.rpc('cobrar_cuenta_plan', { p_cliente_id: clienteId, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota, p_imputaciones: imputaciones, p_recargo: +recargo, p_plan: plan }));
     if (imputaciones.length) return q(sb.rpc('cobrar_cuenta_imputado', { p_cliente_id: clienteId, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota, p_imputaciones: imputaciones }));
     return q(sb.rpc('cobrar_cuenta', { p_cliente_id: clienteId, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }));
   },
