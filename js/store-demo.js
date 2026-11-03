@@ -685,6 +685,26 @@ export const store = {
   // Facturas con IA: en la demo no se lee nada de verdad (no hay clave); devuelve una factura de ejemplo armada con productos de la demo
   async subirArchivoFactura(blob, ext) { return `compras/demo/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`; },
   async borrarArchivosFactura() {},
+  async asignarCodigoBarras(productoId, codigo) {
+    const v = String(codigo || '').trim(), p = byId('productos', productoId);
+    if (!/^[0-9A-Za-z.\-]{4,40}$/.test(v)) throw new Error(`El código "${v}" no es válido`);
+    if (!p) throw new Error('El producto no existe');
+    if ((p.codigo_barras || '').toLowerCase() === v.toLowerCase()) return;
+    const otro = db.productos.find(x => x.id !== p.id && ((x.codigo_barras || '').toLowerCase() === v.toLowerCase() || (x.codigos_extra || []).some(c => c.toLowerCase() === v.toLowerCase())));
+    if (otro) throw new Error(`Ese código ya lo tiene otro producto: ${otro.nombre}`);
+    p.codigos_extra = (p.codigos_extra || []).filter(c => c !== v);
+    if (p.codigo_barras && !p.codigos_extra.includes(p.codigo_barras)) p.codigos_extra.push(p.codigo_barras);
+    p.codigo_barras = v; p.codigo_interno = false; save();
+  },
+  async codigosProveedor(proveedorId) { return clone((db.producto_codigos_proveedor || []).filter(c => c.proveedor_id === +proveedorId)); },
+  async guardarCodigosProveedor(filas) {
+    db.producto_codigos_proveedor ||= [];
+    for (const f of filas) {
+      const ex = db.producto_codigos_proveedor.find(c => c.proveedor_id === f.proveedor_id && c.codigo === f.codigo);
+      if (ex) Object.assign(ex, f, { actualizado: now() }); else db.producto_codigos_proveedor.push({ ...f, actualizado: now() });
+    }
+    save();
+  },
   async leerFactura(rutas) {
     const ps = db.productos.filter(p => !p.es_servicio && p.activo !== false);
     const conCodigo = ps.find(p => p.codigo_barras && !/^200/.test(p.codigo_barras)) || ps[0], otro = ps.find(p => p !== conCodigo) || ps[0];

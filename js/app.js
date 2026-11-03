@@ -80,9 +80,9 @@ function encabezadosOrdenables(raiz, orden, alCambiar) {
 const MAX_SUGERENCIAS = 50;
 function buscarProductos(productos, cats, t, filtro = () => true, { stockPrimero = false, limite = MAX_SUGERENCIAS } = {}) {
   const tn = norm(t).trim();
-  const todos = productos.filter(p => filtro(p) && (mismoCodigo(p.codigo_barras, t)
+  const todos = productos.filter(p => filtro(p) && (tieneCodigo(p, t)
     || matches(t, p.nombre, p.marca, p.descripcion, p.codigo_barras, cats.find(c => c.id === p.categoria_id)?.nombre)));
-  const rango = p => mismoCodigo(p.codigo_barras, t) ? 0 : norm(p.nombre).startsWith(tn) ? 1 : norm(p.nombre).includes(tn) ? 2 : 3;
+  const rango = p => tieneCodigo(p, t) ? 0 : norm(p.nombre).startsWith(tn) ? 1 : norm(p.nombre).includes(tn) ? 2 : 3;
   const conStock = p => stockPrimero && !p.es_servicio && p.stock <= 0 ? 1 : 0;
   todos.sort((a, b) => rango(a) - rango(b) || conStock(a) - conStock(b) || a.nombre.localeCompare(b.nombre));
   const r = todos.slice(0, limite);
@@ -593,9 +593,10 @@ ROUTES.vender = async ({ q }) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       const t = scan.value.trim(); if (!t) return;
-      const exact = productos.find(p => mismoCodigo(p.codigo_barras, t));
+      const exact = productos.find(p => tieneCodigo(p, t));
       if (exact) return add(exact);
       if (results[sel]) return add(results[sel]);
+      if (/^[0-9A-Za-z.\-]{6,40}$/.test(t)) { scan.value = ''; sug.hidden = true; return codigoDesconocidoModal(t, productos, cats, p => add(p)); }
       toast('No se encontró un producto con ese código', true);
     }
     if (e.key === 'Escape') sug.hidden = true;
@@ -803,7 +804,7 @@ ROUTES.productos = async ({ q }) => {
     ${puedeDeshacer ? `<button class="btn" id="deshacer-precios" title="${esc(ultimoAjuste.detalle)} · ${fdatetime(ultimoAjuste.fecha)}">↶ Deshacer último cambio</button>` : ''}
     <button class="btn" id="precios" title="Actualizar precios o asignar márgenes en bloque">Precios y márgenes <span id="nsel3"></span></button>
     <button class="btn" id="pedido">Armar pedido <span id="nsel2"></span></button>
-    <button class="btn" id="etiquetas">Imprimir etiquetas <span id="nsel"></span></button><button class="btn primary" id="nuevo">+ Nuevo producto</button></div></div>
+    <button class="btn" id="esc-codigos" title="Cargar el código de barras de fábrica a los productos que tienen código interno">Escanear los códigos</button><button class="btn" id="etiquetas">Imprimir etiquetas <span id="nsel"></span></button><button class="btn primary" id="nuevo">+ Nuevo producto</button></div></div>
   <div class="card card-pad" style="margin-bottom:1rem"><div class="row" style="align-items:center">
     <div class="search" style="flex:3"><input class="input" id="buscar" placeholder="Buscar por nombre, marca, proveedor o código (también podés escanear)"></div>
     <select class="input" id="prov" style="flex:1"><option value="">Todos los proveedores</option>${proveedores.map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></div></div>
@@ -829,10 +830,10 @@ ROUTES.productos = async ({ q }) => {
     $('#all').onchange = e => { lista().forEach(p => e.target.checked ? prodSel.add(p.id) : prodSel.delete(p.id)); paint(); };
   };
   const nRevisar = productos.filter(aRevisar).length;
-  const chips = [['todos', 'Todos'], ['bajo', 'Stock bajo'], ['sinstock', 'Sin stock'], ['ocultos', 'Ocultos en tienda'], ['sinfoto', 'Sin foto'], ...(nRevisar ? [['revisar', `⚠ A revisar (${nRevisar})`]] : []), ...categorias.map(c => [String(c.id), c.nombre])];
-  const lista = () => productos.filter(p => (filtro === 'todos' || (filtro === 'bajo' ? faltaStock(p) : filtro === 'sinstock' ? (!p.es_servicio && p.stock <= 0) : filtro === 'ocultos' ? p.publicado === false : filtro === 'sinfoto' ? (!p.es_servicio && !p.foto_url) : filtro === 'revisar' ? aRevisar(p) : p.categoria_id === +filtro))
+  const chips = [['todos', 'Todos'], ['bajo', 'Stock bajo'], ['sinstock', 'Sin stock'], ['ocultos', 'Ocultos en tienda'], ['sinfoto', 'Sin foto'], ['sincodigo', 'Sin código de barras'], ...(nRevisar ? [['revisar', `⚠ A revisar (${nRevisar})`]] : []), ...categorias.map(c => [String(c.id), c.nombre])];
+  const lista = () => productos.filter(p => (filtro === 'todos' || (filtro === 'bajo' ? faltaStock(p) : filtro === 'sinstock' ? (!p.es_servicio && p.stock <= 0) : filtro === 'ocultos' ? p.publicado === false : filtro === 'sinfoto' ? (!p.es_servicio && !p.foto_url) : filtro === 'sincodigo' ? (!p.es_servicio && p.codigo_interno) : filtro === 'revisar' ? aRevisar(p) : p.categoria_id === +filtro))
     && (!prov || p.proveedor_id === +prov)
-    && (mismoCodigo(p.codigo_barras, texto) || matches(texto, p.nombre, p.marca, p.descripcion, p.codigo_barras, catName(p.categoria_id), provName(p.proveedor_id))));
+    && (tieneCodigo(p, texto) || matches(texto, p.nombre, p.marca, p.descripcion, p.codigo_barras, catName(p.categoria_id), provName(p.proveedor_id))));
   function paint() {
     $('#cats').innerHTML = chips.map(([k, l]) => `<button class="chip ${filtro === k ? 'active' : ''}" data-k="${k}">${esc(l)}</button>`).join('');
     $$('#cats .chip').forEach(c => c.onclick = () => { filtro = c.dataset.k; paint(); });
@@ -873,6 +874,7 @@ ROUTES.productos = async ({ q }) => {
   $('#precios').onclick = () => preciosModal(productos, categorias, proveedores, neg.redondeo_precios ?? 1);
   if ($('#deshacer-precios')) $('#deshacer-precios').onclick = () => deshacerAjuste(ultimoAjuste);
   $('#etiquetas').onclick = () => etiquetasModal([...prodSel]);
+  $('#esc-codigos').onclick = () => asignarCodigosModal(productos.filter(p => !p.es_servicio && p.activo !== false && p.codigo_interno).sort((a, b) => b.id - a.id), n => { if (n) render(); });
   $('#pedido').onclick = () => armarPedido(prodSel.size ? [...prodSel] : lista().filter(faltaStock).map(p => p.id), productos);
   paint();
   $('#buscar').focus();
@@ -1396,7 +1398,7 @@ ROUTES.inventario = async () => {
 
   const lista = () => productos.filter(p => (!cat || p.categoria_id === +cat) && (!prov || p.proveedor_id === +prov)
     && (estado === 'todos' || (estado === 'contados' ? contado(p) : !contado(p)))
-    && (!texto || mismoCodigo(p.codigo_barras, texto) || matches(texto, p.nombre, p.marca, p.codigo_barras)));
+    && (!texto || tieneCodigo(p, texto) || matches(texto, p.nombre, p.marca, p.codigo_barras)));
   const pintarProgreso = () => {
     const n = productos.filter(contado).length;
     $('#progreso-txt').innerHTML = `<b>${n}</b> de ${productos.length} productos contados`;
@@ -3270,13 +3272,15 @@ async function revisarFacturaIA(f, rutas, uso, { d, productos, proveedores, cats
 
   // productos: por código de barras; si no, por nombre parecido (se elige solo si el parecido es claro)
   const cand = productos.filter(p => !p.es_servicio && p.activo !== false);
+  const codigosProv = provAuto ? await store.codigosProveedor(provAuto.id).catch(() => []) : [];
   const filas = items.map(it => {
     const cod = soloDigitos(it.codigo_barras), codProv = soloDigitos(it.codigo);
-    const exacto = cand.find(p => cod.length >= 8 && mismoCodigo(p.codigo_barras, cod)) || cand.find(p => codProv.length >= 8 && mismoCodigo(p.codigo_barras, codProv));
+    const porProveedor = it.codigo && codigosProv.find(c => mismoCodigo(c.codigo, String(it.codigo).trim()));
+    const exacto = (porProveedor && cand.find(p => p.id === porProveedor.producto_id)) || cand.find(p => cod.length >= 8 && tieneCodigo(p, cod)) || cand.find(p => codProv.length >= 8 && tieneCodigo(p, codProv));
     const t = palabras(it.descripcion);
     const sim = cand.filter(p => p !== exacto).map(p => [p, parecido(t, palabras(`${p.marca || ''} ${p.nombre}`))]).filter(([, s]) => s >= 0.25).sort((a, b) => b[1] - a[1]).slice(0, 6);
     const claro = sim[0] && sim[0][1] >= 0.6 && (!sim[1] || sim[0][1] - sim[1][1] >= 0.1);
-    return { it, exacto, sim, extra: [], elegido: exacto ? String(exacto.id) : claro ? String(sim[0][0].id) : 'nuevo' };
+    return { it, exacto, porProveedor: !!(porProveedor && exacto?.id === porProveedor.producto_id), sim, extra: [], elegido: exacto ? String(exacto.id) : claro ? String(sim[0][0].id) : 'nuevo' };
   });
 
   const m = modal('Revisar la factura leída', `
@@ -3299,7 +3303,7 @@ async function revisarFacturaIA(f, rutas, uso, { d, productos, proveedores, cats
   const pintar = () => {
     $('#r-filas', m.el).innerHTML = filas.map((r, k) => {
       const opc = [
-        ...(r.exacto ? [[String(r.exacto.id), `✓ ${r.exacto.nombre} (mismo código)`]] : []),
+        ...(r.exacto ? [[String(r.exacto.id), `✓ ${r.exacto.nombre} (mismo código${r.porProveedor ? ' del proveedor' : ''})`]] : []),
         ...r.sim.map(([p, s]) => [String(p.id), `${p.nombre} · ${Math.round(s * 100)}% parecido`]),
         ...r.extra.map(p => [String(p.id), p.nombre]),
         ['nuevo', '➕ Crear producto nuevo'], ['buscar', '🔎 Buscar otro producto…'], ['ignorar', '— No cargar este renglón —'],
@@ -3335,11 +3339,15 @@ async function revisarFacturaIA(f, rutas, uso, { d, productos, proveedores, cats
           productos.push(p); creados++;
         } else p = productos.find(x => x.id === +r.elegido);
         if (!p) continue;
+        r.producto = p;
         const ex = d.items.find(i => i.producto_id === p.id);
         if (ex) { ex.cantidad += cantidad; ex.costo_unitario = costo; }
         else d.items.push({ producto_id: p.id, nombre: p.nombre, codigo_barras: p.codigo_barras || '', stock: p.stock ?? 0, cantidad, costo_unitario: costo,
           precio_venta: +p.precio_venta || 0, precio_venta_orig: +p.precio_venta || 0, margen: p.margen ?? null, ...(r.elegido === 'nuevo' ? { nuevo: true } : {}) });
       }
+      // el código de cada renglón queda guardado para ese proveedor: la próxima factura lo reconoce exacto
+      if (provId) await store.guardarCodigosProveedor(filas.filter(r => r.producto && String(r.it.codigo || '').trim())
+        .map(r => ({ proveedor_id: provId, codigo: String(r.it.codigo).trim(), producto_id: r.producto.id, descripcion: r.it.descripcion || '' }))).catch(() => {});
       if (provId) d.proveedor_id = String(provId);
       const nro = $('#r-nro', m.el).value.trim(); if (nro) d.nro_comprobante = nro;
       d.archivos = [...(d.archivos || []), ...rutas];
@@ -3361,6 +3369,71 @@ function buscarProductoModal(productos, cats, alElegir) {
   };
   $('#bp-q', m.el).oninput = pintar;
   setTimeout(() => $('#bp-q', m.el).focus(), 50);
+}
+
+// =====================================================================
+// CÓDIGOS DE BARRAS DE FÁBRICA para los productos que tienen código interno ("int", generado por GScom)
+// Al cargar el de fábrica, el interno queda como código extra: las etiquetas ya impresas se siguen leyendo.
+// =====================================================================
+const tieneCodigo = (p, t) => mismoCodigo(p.codigo_barras, t) || (p.codigos_extra || []).some(c => mismoCodigo(c, t));
+
+// De a uno: se muestra el producto y se escanea la caja (o se saltea)
+function asignarCodigosModal(lista, alTerminar = () => {}) {
+  if (!lista.length) return toast('No hay productos sin código de barras');
+  let k = 0, cargados = 0;
+  const m = modal('Escanear los códigos de barras', '<div id="ac-cuerpo"></div>',
+    '<button class="btn" id="ac-saltear">Saltear</button><button class="btn primary" id="ac-fin">Terminar</button>');
+  const terminar = () => { m.close(); if (cargados) toast(`${cargados} código(s) de barras cargados`); alTerminar(cargados); };
+  const pintar = () => {
+    if (k >= lista.length) return terminar();
+    const p = lista[k];
+    $('#ac-cuerpo', m.el).innerHTML = `
+      <p class="small muted" style="margin-bottom:.6rem">Producto ${k + 1} de ${lista.length}. Escaneá el código de barras de la caja (o escribilo y tocá Enter). Si no tiene, tocá <b>Saltear</b>.</p>
+      <div style="font-size:1.08rem;font-weight:600">${esc(p.nombre)}</div>
+      <div class="small muted" style="margin:.2rem 0 .8rem">${esc(p.marca || '')}${p.marca ? ' · ' : ''}código interno <span class="mono">${esc(p.codigo_barras || '—')}</span> (se sigue leyendo)</div>
+      <input class="input scan-input" id="ac-cod" placeholder="Código de barras de fábrica" autocomplete="off" inputmode="numeric">`;
+    const inp = $('#ac-cod', m.el);
+    setTimeout(() => inp.focus(), 50);
+    inp.onkeydown = e => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const v = inp.value.trim(); if (!v) return;
+      run(async () => {
+        inp.disabled = true;
+        try { await store.asignarCodigoBarras(p.id, v); p.codigos_extra = [...(p.codigos_extra || []), p.codigo_barras]; p.codigo_barras = v; p.codigo_interno = false; cargados++; k++; pintar(); }
+        finally { inp.disabled = false; if (document.body.contains(inp)) { inp.select(); inp.focus(); } }
+      });
+    };
+  };
+  $('#ac-saltear', m.el).onclick = () => { k++; pintar(); };
+  $('#ac-fin', m.el).onclick = terminar;
+  pintar();
+}
+
+// En Vender: se escaneó un código que no tiene ningún producto → ¿a cuál corresponde?
+function codigoDesconocidoModal(codigo, productos, cats, alElegir) {
+  const sinCodigo = productos.filter(p => !p.es_servicio && p.activo !== false && p.codigo_interno).sort((a, b) => b.id - a.id);
+  const m = modal('Código desconocido', `
+    <p class="small" style="margin-bottom:.6rem">Ningún producto tiene el código <b class="mono">${esc(codigo)}</b>. Si es de un producto que cargaste sin código de barras, elegilo: se le guarda y entra a la venta.</p>
+    <div class="search"><input class="input" id="cd-q" placeholder="Buscar entre los productos sin código de barras" autocomplete="off"></div>
+    <div id="cd-res" style="margin-top:.5rem;max-height:50vh;overflow:auto"></div>`,
+    '<button class="btn" data-close>Cancelar</button><button class="btn" id="cd-nuevo">+ Crear producto nuevo</button>');
+  const pintar = () => {
+    const t = $('#cd-q', m.el).value.trim();
+    const l = (t ? buscarProductos(sinCodigo, cats, t) : sinCodigo).slice(0, 40);
+    $('#cd-res', m.el).innerHTML = l.map((p, i) => `<div data-i="${i}" style="padding:.5rem .3rem;border-bottom:1px solid var(--line);cursor:pointer">${prodSugHTML(p, cats)}</div>`).join('')
+      || `<p class="muted small">${sinCodigo.length ? 'Sin resultados.' : 'No hay productos sin código de barras.'}</p>`;
+    $$('[data-i]', m.el).forEach(x => x.onclick = () => run(async () => {
+      const p = l[+x.dataset.i];
+      await store.asignarCodigoBarras(p.id, codigo);
+      p.codigos_extra = [...(p.codigos_extra || []), p.codigo_barras]; p.codigo_barras = codigo; p.codigo_interno = false;
+      m.close(); toast(`Código guardado en ${p.nombre}`); alElegir(p);
+    }));
+  };
+  $('#cd-q', m.el).oninput = pintar;
+  $('#cd-nuevo', m.el).onclick = () => { m.close(); productoModal(null, { prefill: { codigo_barras: codigo }, onSaved: p => { productos.push(p); alElegir(p); } }); };
+  pintar();
+  setTimeout(() => $('#cd-q', m.el).focus(), 50);
 }
 
 async function nuevaCompra() {
@@ -3469,7 +3542,7 @@ async function nuevaCompra() {
     if (e.key !== 'Enter') return;
     e.preventDefault();
     const t = b.value.trim(); if (!t) return;
-    const exact = productos.find(p => mismoCodigo(p.codigo_barras, t));
+    const exact = productos.find(p => tieneCodigo(p, t));
     if (exact) return addP(exact);
     if (sel < results.length) return addP(results[sel]);
     crearProducto(t);  // código escaneado que no existe → alta directa
@@ -3503,6 +3576,9 @@ async function nuevaCompra() {
       await store.actualizarPedido(d.pedido_id, { estado: 'recibido', fecha_recibido: new Date().toISOString() });
       toast(`Pedido N° ${d.pedido_numero} recibido`);
     }
+    const sinCodigo = d.editId ? [] : d.items.map(i => productos.find(p => p.id === i.producto_id)).filter(p => p && !p.es_servicio && p.codigo_interno);
+    if (sinCodigo.length && confirm(`${sinCodigo.length} producto(s) de esta compra no tienen código de barras de fábrica (tienen el interno de GScom). ¿Escanearlos ahora desde las cajas?`))
+      return asignarCodigosModal(sinCodigo, () => go('#/compras'));
     go('#/compras');
   });
 
@@ -4473,7 +4549,7 @@ function tiendaProductos({ productos, categorias, config }) {
   <div style="text-align:center;margin:1rem 0"><button class="btn" id="mas" hidden>Mostrar más</button></div>`;
 
   const lista = () => productos.filter(p => FILTROS[filtro][1](p) && (!cat || p.categoria_id === +cat)
-    && (mismoCodigo(p.codigo_barras, texto) || matches(texto, p.nombre, p.marca, p.codigo_barras)));
+    && (tieneCodigo(p, texto) || matches(texto, p.nombre, p.marca, p.codigo_barras)));
   const avisos = p => [+p.precio_venta > 0 ? '' : '<span class="pill red" title="Los productos sin precio no se muestran">sin precio</span>',
     ocultas.has(p.categoria_id) ? '<span class="pill gray" title="Su categoría está oculta en la tienda">categoría oculta</span>' : ''].join(' ');
   function pintar() {

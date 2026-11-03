@@ -281,6 +281,12 @@ export const store = {
     if (error) throw new Error(`No se pudo subir el archivo: ${error.message}`);
     return ruta;
   },
+  // Código de barras de fábrica (el interno que tenía queda como código extra) y códigos de cada proveedor
+  async asignarCodigoBarras(productoId, codigo) { await q(sb.rpc('asignar_codigo_barras', { p_producto_id: productoId, p_codigo: codigo })); },
+  async codigosProveedor(proveedorId) { return proveedorId ? q(sb.from('producto_codigos_proveedor').select('*').eq('proveedor_id', proveedorId)) : []; },
+  async guardarCodigosProveedor(filas) {
+    if (filas.length) await q(sb.from('producto_codigos_proveedor').upsert(filas.map(f => ({ ...f, actualizado: new Date().toISOString() })), { onConflict: 'proveedor_id,codigo' }));
+  },
   async borrarArchivosFactura(rutas) { if (rutas?.length) await sb.storage.from('facturas').remove(rutas).catch(() => {}); },
   async leerFactura(rutas) {
     const { data, error } = await sb.functions.invoke('leer-factura', { body: { archivos: rutas } });
