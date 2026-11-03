@@ -304,6 +304,11 @@ export const store = {
     return data.signedUrl;
   },
   async usoIA() { return q(sb.from('uso_ia').select('*').order('fecha', { ascending: false }).limit(500)); },
+  // Factura desde el celular: la PC crea el pedido (token del QR), el celular sube las fotos y lo marca "subido"
+  async crearPedidoCelular() { return (await q(sb.from('factura_celular').insert({}).select().single())).token; },
+  async pedidoCelular(token) { return q(sb.from('factura_celular').select('*').eq('token', token).maybeSingle()); },
+  async enviarPedidoCelular(token, rutas) { await q(sb.from('factura_celular').update({ estado: 'subido', archivos: rutas }).eq('token', token).eq('estado', 'esperando')); },
+  async borrarPedidoCelular(token) { await sb.from('factura_celular').delete().eq('token', token); },
   async compras() { return q(sb.from('compras').select('*, items:compra_items(*)').order('fecha', { ascending: false }).limit(500)); },
   async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {
     const id = await q(sb.rpc('registrar_compra', { p_proveedor_id: proveedor_id || null, p_nro_comprobante: nro_comprobante || '', p_items: items, p_notas: notas }));

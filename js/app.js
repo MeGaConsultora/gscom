@@ -3208,9 +3208,9 @@ function elegirArchivosFactura(alLeer) {
   const m = modal('Cargar compra desde la factura', `
     <p class="small muted">Elegí el PDF de la factura o sacale una foto a cada hoja (derecha, completa y con buena luz). La lee la IA y completa la compra; después revisás todo antes de guardar.</p>
     <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.9rem 0">
-      ${conCamara ? '<label class="btn">📷 Sacar foto de una hoja<input type="file" accept="image/*" capture="environment" id="f-cam" hidden></label>' : ''}
+      ${conCamara ? '<label class="btn">📷 Sacar foto de una hoja<input type="file" accept="image/*" capture="environment" id="f-cam" hidden></label>' : '<button class="btn primary" id="f-celu">📱 Desde el celular (QR)</button>'}
       <label class="btn">📁 Elegir PDF o imágenes<input type="file" accept="application/pdf,image/*" multiple id="f-arch" hidden></label></div>
-    ${conCamara ? '' : '<p class="small muted" style="margin:-.3rem 0 .7rem">¿La factura está en papel? Abrí GScom en el celular → Compras → Ingresar mercadería → Cargar desde factura, y sacale una foto a cada hoja.</p>'}
+    ${conCamara ? '' : '<p class="small muted" style="margin:-.3rem 0 .7rem">¿La factura está en papel? Tocá <b>Desde el celular</b>: escaneás el código, le sacás las fotos con el celular y llegan acá.</p>'}
     <div id="f-hojas"></div>
     <p class="small muted" style="margin-top:.6rem">Cada lectura tiene un costo de IA (unos centavos de dólar por factura).</p>`,
     '<button class="btn" data-close>Cancelar</button><button class="btn primary" id="f-leer" disabled>Leer factura</button>');
@@ -3237,6 +3237,7 @@ function elegirArchivosFactura(alLeer) {
     pintar();
   });
   if (conCamara) $('#f-cam', m.el).onchange = e => { agregar([...e.target.files]); e.target.value = ''; };
+  else $('#f-celu', m.el).onclick = () => { m.close(); run(() => facturaDesdeCelular(alLeer)); };
   $('#f-arch', m.el).onchange = e => { agregar([...e.target.files]); e.target.value = ''; };
   $('#f-leer', m.el).onclick = () => run(async () => {
     const b = $('#f-leer', m.el); b.disabled = true; b.textContent = 'Leyendo… (puede tardar un minuto)';
@@ -3253,6 +3254,104 @@ function elegirArchivosFactura(alLeer) {
   });
   pintar();
 }
+
+// En la PC: QR para sacar las fotos con el celular. La PC espera a que lleguen, las lee con IA y sigue con la revisión.
+async function facturaDesdeCelular(alLeer) {
+  const token = await store.crearPedidoCelular();
+  const url = new URL(`index.html#/foto-factura/${token}`, location.href).href;
+  const vence = Date.now() + 15 * 60000;
+  const m = modal('Factura desde el celular', `
+    <div style="display:flex;gap:1.2rem;align-items:center;flex-wrap:wrap">
+      <div style="width:190px;height:190px;background:#fff;padding:8px;border:1px solid var(--line);border-radius:10px">${qrSVG(url)}</div>
+      <div style="flex:1;min-width:220px">
+        <ol class="small" style="margin:0 0 .6rem 1.1rem;line-height:1.7">
+          <li>Escaneá el código con la cámara del celular (tiene que tener la sesión de GScom iniciada).</li>
+          <li>Sacale una foto a cada hoja de la factura (o elegí el PDF).</li>
+          <li>Tocá <b>Enviar a la PC</b>: acá se lee sola y seguís con la revisión.</li></ol>
+        <div class="small" id="fc-estado"><span class="muted">Esperando las fotos del celular…</span></div></div></div>`,
+    '<button class="btn" data-close>Cancelar</button>');
+  let listo = false;
+  const t = setInterval(() => {
+    if (listo) return;
+    if (!document.body.contains(m.el)) { clearInterval(t); store.borrarPedidoCelular(token).catch(() => {}); return; }   // se cerró la ventana
+    if (Date.now() > vence) {
+      clearInterval(t); store.borrarPedidoCelular(token).catch(() => {});
+      $('#fc-estado', m.el).innerHTML = '<span style="color:var(--bad)">El código venció (15 minutos). Cerrá esta ventana y pedí uno nuevo.</span>';
+      return;
+    }
+    store.pedidoCelular(token).then(async p => {
+      if (listo || p?.estado !== 'subido') return;
+      listo = true; clearInterval(t);
+      $('#fc-estado', m.el).innerHTML = `<b>📥 Llegaron ${p.archivos.length} archivo(s).</b> Leyendo la factura… (puede tardar un minuto)`;
+      try {
+        const r = await store.leerFactura(p.archivos);
+        m.close(); store.borrarPedidoCelular(token).catch(() => {});
+        alLeer(r.factura, p.archivos, r.uso);
+      } catch (e) {
+        await store.borrarArchivosFactura(p.archivos); store.borrarPedidoCelular(token).catch(() => {});
+        $('#fc-estado', m.el).innerHTML = `<span style="color:var(--bad)">No se pudo leer: ${esc(e.message)}</span>`;
+      }
+    }).catch(() => {});
+  }, 2000);
+}
+
+// En el celular (lo abre el QR de la PC): sacar las fotos de la factura y mandarlas a la PC
+ROUTES['foto-factura'] = async ({ id }) => {
+  const p = await store.pedidoCelular(id).catch(() => null);
+  const vencido = p && Date.now() - new Date(p.creado).getTime() > 15 * 60000;
+  if (!p || p.estado !== 'esperando' || vencido) {
+    view().innerHTML = `<div class="card card-pad" style="max-width:480px;margin:2rem auto;text-align:center">
+      <h2>${p?.estado === 'subido' ? '✓ Esta factura ya se mandó' : 'El código ya no sirve'}</h2>
+      <p class="small muted" style="margin:.6rem 0 1rem">${p?.estado === 'subido' ? 'Seguí con la revisión en la PC.' : 'Venció o ya se usó. Pedí un código nuevo desde la PC (Compras → Ingresar mercadería → Cargar desde factura → Desde el celular).'}</p>
+      <a class="btn" href="#/inicio">Ir al inicio</a></div>`;
+    return;
+  }
+  const hojas = [];
+  view().innerHTML = `<div style="max-width:520px;margin:0 auto">
+    <div class="page-head"><div><h1>Factura para la PC</h1><div class="small muted">Sacale una foto a cada hoja (derecha, completa y con buena luz) o elegí el PDF.</div></div></div>
+    <div class="card card-pad">
+      <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin-bottom:.8rem">
+        <label class="btn primary">📷 Sacar foto de una hoja<input type="file" accept="image/*" capture="environment" id="ff-cam" hidden></label>
+        <label class="btn">📁 Elegir PDF o imágenes<input type="file" accept="application/pdf,image/*" multiple id="ff-arch" hidden></label></div>
+      <div id="ff-hojas"></div>
+      <button class="btn ok lg block" id="ff-enviar" style="margin-top:1rem" disabled>Enviar a la PC</button></div></div>`;
+  const pintar = () => {
+    $('#ff-hojas').innerHTML = hojas.length
+      ? `<table class="tbl small"><tbody>${hojas.map((h, k) => `<tr><td>${h.ext === 'pdf' ? '📄' : '🖼️'} ${hojas.length > 1 ? `Hoja ${k + 1}` : esc(h.nombre)}</td><td class="num muted nowrap">${Math.max(1, Math.round(h.blob.size / 1024))} KB</td><td class="right"><button class="x" data-q="${k}" title="Quitar">×</button></td></tr>`).join('')}</tbody></table>`
+      : '<p class="small muted">Todavía no sacaste ninguna foto.</p>';
+    $$('[data-q]').forEach(b => b.onclick = () => { hojas.splice(+b.dataset.q, 1); pintar(); });
+    $('#ff-enviar').disabled = !hojas.length;
+  };
+  const agregar = files => run(async () => {
+    for (const f of files) {
+      const esPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+      if (esPdf) {
+        if (hojas.length) { toast('Un PDF se manda solo: quitá las fotos primero', true); continue; }
+        if (f.size > 15 * 1024 * 1024) { toast('El PDF pesa más de 15 MB', true); continue; }
+        hojas.push({ blob: f, ext: 'pdf', nombre: f.name });
+      } else {
+        if (hojas.some(h => h.ext === 'pdf')) { toast('Ya elegiste un PDF: las fotos van solas, sin PDF', true); continue; }
+        if (hojas.length >= 10) { toast('Como máximo 10 hojas', true); break; }
+        hojas.push({ blob: await achicarImagen(f, 2000), ext: 'jpg', nombre: f.name || 'foto' });
+      }
+    }
+    pintar();
+  });
+  $('#ff-cam').onchange = e => { agregar([...e.target.files]); e.target.value = ''; };
+  $('#ff-arch').onchange = e => { agregar([...e.target.files]); e.target.value = ''; };
+  $('#ff-enviar').onclick = () => run(async () => {
+    const b = $('#ff-enviar'); b.disabled = true; b.textContent = 'Enviando…';
+    const rutas = [];
+    try {
+      for (const h of hojas) rutas.push(await store.subirArchivoFactura(h.blob, h.ext));
+      await store.enviarPedidoCelular(id, rutas);
+    } catch (e) { await store.borrarArchivosFactura(rutas); b.disabled = false; b.textContent = 'Enviar a la PC'; throw e; }
+    view().innerHTML = `<div class="card card-pad" style="max-width:480px;margin:2rem auto;text-align:center">
+      <h2>✓ Listo</h2><p class="small muted" style="margin:.6rem 0 1rem">La factura ya está en la PC: ahí se lee y seguís con la revisión.</p>
+      <a class="btn" href="#/inicio">Ir al inicio</a></div>`;
+  });
+  pintar();
+};
 
 // Revisión de lo leído: proveedor y, renglón por renglón, a qué producto corresponde (o crear uno nuevo / no cargarlo)
 async function revisarFacturaIA(f, rutas, uso, { d, productos, proveedores, cats, redondeo, alListo }) {
