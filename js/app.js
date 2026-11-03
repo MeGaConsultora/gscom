@@ -2729,8 +2729,10 @@ async function cuentaCliente(clienteId) {
     .forEach(i => subas.set(i.venta_id, [...(subas.get(i.venta_id) || []), i]));
   // Saldo a favor cargado "sin aplicar a la deuda": no baja los conceptos pendientes (el saldo total sí lo cuenta)
   const sinAplicar = movs.filter(m => m.tipo === 'ajuste' && m.manual && m.imputa_deuda === false).reduce((s, m) => s - m.monto, 0);
+  // Anticipos de encargos/reservas sin entregar: son de ese encargo, no pagan otras compras (el saldo total sí los cuenta)
+  const anticipos = grupos.filter(g => g.encargo_id && g.pendiente < -0.009);
   // Lo que se puede cobrar: con saldo a favor aparte, es la deuda de los conceptos (no el saldo neto)
-  const cobrable = sinAplicar > 0.009 ? pendientes.reduce((s, g) => s + g.pendiente, 0) : saldo;
+  const cobrable = sinAplicar > 0.009 || anticipos.length ? pendientes.reduce((s, g) => s + g.pendiente, 0) : saldo;
   // Total compras: total neto por venta/orden/cargo (ya corregido si se editó), no la suma bruta de todos los "cargo" cargados alguna vez
   const totalCompras = grupos.reduce((s, g) => s + g.total, 0);
   // saldo acumulado línea por línea (de la más vieja a la más nueva)
@@ -2756,6 +2758,7 @@ async function cuentaCliente(clienteId) {
       <td class="num"><b style="color:var(--bad)">${money(g.pendiente)}</b></td>
       <td class="right"><button class="btn sm ok" data-cobrar-uno="${g.clave}">Cobrar este</button></td></tr>`).join('')}
     </tbody></table></div>
+    ${anticipos.map(g => `<p class="small muted" style="margin-top:.6rem">Además tiene <b>${money(-g.pendiente)} de anticipo</b> (${esc(g.concepto)}): se aplica cuando se entregue. Si se cae, cancelá el encargo y pasa a pagar lo que debe. El saldo de arriba ya lo descuenta.</p>`).join('')}
     ${sinAplicar > 0.009 ? `<p class="small muted" style="margin-top:.6rem">Además tiene <b>${money(sinAplicar)} a favor sin aplicar a la deuda</b> (se ve en los movimientos; se puede aplicar cuando quieras). El saldo de arriba ya lo descuenta.</p>` : ''}</div>` : ''}
   <h2 style="font-size:1rem;font-weight:600;margin:0 0 .6rem">Movimientos</h2>
   <div class="card tbl-wrap"><table class="tbl"><thead><tr><th>Fecha</th><th>Tipo</th><th>Concepto</th><th>Observaciones</th><th class="num">Debe</th><th class="num">Haber</th><th class="num">Saldo</th><th></th></tr></thead><tbody>
@@ -2855,7 +2858,7 @@ function editarCargoModal(mv, onDone) {
 // ---------------------------------------------------------------------
 function deudaPorConcepto(movs, imps = []) {
   const cron = movs.slice().sort((a, b) => String(a.fecha).localeCompare(String(b.fecha)) || a.id - b.id);
-  const grupos = new Map(), aplicaciones = {};
+  const grupos = new Map(), aplicaciones = {}, aFavor = [];   // aFavor: lo que sobró de cada cobro, para lo que se cargue después
   // Un movimiento de un encargo agrupa por el encargo (aunque también tenga venta_id: es el mismo concepto
   // desde que se cobra el anticipo hasta que la venta que lo entrega queda registrada).
   const claveDe = m => m.encargo_id ? `encargo:${m.encargo_id}` : m.venta_id ? `venta:${m.venta_id}` : m.orden_id ? `orden:${m.orden_id}` : `cargo:${m.id}`;
@@ -2874,10 +2877,10 @@ function deudaPorConcepto(movs, imps = []) {
       let resto = -monto; const apl = aplicaciones[m.id] = [];
       const aplicar = (g, max) => { const x = Math.min(max, resto); if (x <= 0.009) return; g.pendiente -= x; g.pagado += x; resto -= x; apl.push({ grupo: g.clave, monto: x }); };
       if (m.orden_id) { const g = grupo(`orden:${m.orden_id}`, m); if (!g.total) g.desdeAnticipo = true; aplicar(g, resto); }   // anticipo de service: va a su orden
-      else if (m.encargo_id) { const g = grupo(`encargo:${m.encargo_id}`, m); if (!g.total) g.desdeAnticipo = true; aplicar(g, resto); }   // anticipo de encargo/reserva: va a su encargo
+      else if (m.encargo_id && m.encargo?.estado !== 'cancelado') { const g = grupo(`encargo:${m.encargo_id}`, m); if (!g.total) g.desdeAnticipo = true; aplicar(g, resto); }   // anticipo de encargo/reserva: va a su encargo (si se canceló, es un cobro más)
       imps.filter(x => x.pago_id === m.id).forEach(x => { const g = grupos.get(x.grupo); if (g) aplicar(g, Math.min(+x.monto, Math.max(g.pendiente, 0))); });
       [...grupos.values()].filter(g => g.pendiente > 0.009).forEach(g => aplicar(g, g.pendiente));   // resto: a lo más viejo
-      if (resto > 0.009) apl.push({ grupo: null, monto: resto });            // a favor del cliente
+      if (resto > 0.009) aFavor.push({ apl, resto });            // a favor del cliente (se aplica a lo que venga)
       continue;
     }
     if (m.tipo === 'ajuste' && !m.venta_id && !m.orden_id && !m.encargo_id && /^Anulación de cobro/.test(m.concepto)) continue;
@@ -2885,7 +2888,12 @@ function deudaPorConcepto(movs, imps = []) {
     if (m.tipo === 'cargo' && g.desdeAnticipo) { g.concepto = m.concepto.replace(/ \(aplica anticipo\)$/, ''); g.fecha = m.fecha; g.desdeAnticipo = false; }
     if (m.venta_id && !g.venta_id) g.venta_id = m.venta_id;   // la venta que terminó de aplicar el anticipo, para poder verla
     g.total += monto; g.pendiente += monto;
+    for (const f of aFavor) {
+      const x = Math.min(f.resto, g.pendiente); if (x <= 0.009) continue;
+      g.pendiente -= x; g.pagado += x; f.resto -= x; f.apl.push({ grupo: g.clave, monto: x });
+    }
   }
+  aFavor.filter(f => f.resto > 0.009).forEach(f => f.apl.push({ grupo: null, monto: f.resto }));
   return { grupos: [...grupos.values()], aplicaciones };
 }
 
@@ -2894,7 +2902,7 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
   const [movs, imps] = await Promise.all([store.ccMovimientos(clienteId), store.ccImputaciones(clienteId).catch(() => [])]);
   const pendientes = deudaPorConcepto(movs, imps).grupos.filter(g => g.pendiente > 0.009);
   // con un saldo a favor cargado aparte (sin aplicar a la deuda) se cobra contra la deuda de los conceptos, no contra el saldo neto
-  if (movs.some(x => x.tipo === 'ajuste' && x.manual && x.imputa_deuda === false)) saldo = Math.max(pendientes.reduce((s, g) => s + g.pendiente, 0), 0);
+  if (movs.some(x => x.tipo === 'ajuste' && x.manual && x.imputa_deuda === false) || deudaPorConcepto(movs, imps).grupos.some(g => g.encargo_id && g.pendiente < -0.009)) saldo = Math.max(pendientes.reduce((s, g) => s + g.pendiente, 0), 0);
   const sel = new Set(preseleccion ? [preseleccion] : pendientes.map(g => g.clave));
   let forma = 'Efectivo';
   const m = modal(`Cobrar a ${nombre}`, `

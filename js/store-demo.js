@@ -505,7 +505,7 @@ export const store = {
     });
     return clone(Object.values(por).sort((a, b) => b.saldo - a.saldo));
   },
-  async ccMovimientos(clienteId) { return clone(db.cc_movimientos.filter(m => m.cliente_id === +clienteId).reverse().map(m => ({ ...m, venta: m.venta_id ? { notas: byId('ventas', m.venta_id)?.notas || '' } : null }))); },
+  async ccMovimientos(clienteId) { return clone(db.cc_movimientos.filter(m => m.cliente_id === +clienteId).reverse().map(m => ({ ...m, venta: m.venta_id ? { notas: byId('ventas', m.venta_id)?.notas || '' } : null, encargo: m.encargo_id ? { estado: byId('encargos', m.encargo_id)?.estado } : null }))); },
   async ccMovimiento(id) { return clone(byId('cc_movimientos', id) || null); },
   async cobrarCuenta(clienteId, { monto, forma_pago, nota = '', imputaciones = [] }) {
     if (!(+monto > 0)) throw new Error('El monto a cobrar tiene que ser mayor a cero');
@@ -848,6 +848,8 @@ export const store = {
     const m = db.cc_movimientos.filter(x => x.venta_id === +ventaId && x.encargo_id && x.tipo === 'cargo').sort((a, b) => b.id - a.id)[0];
     if (!m) return;
     insert('cc_movimientos', { cliente_id: m.cliente_id, fecha: now(), tipo: 'ajuste', monto: -m.monto, concepto: 'Anulación de venta: se libera el anticipo aplicado', forma_pago: '', encargo_id: m.encargo_id, venta_id: +ventaId, anulado: false });
+    const e = byId('encargos', m.encargo_id);   // el encargo vuelve a estar para entregar
+    if (e?.estado === 'entregado') { e.estado = e.tipo === 'reserva' ? 'reservado' : 'recibido'; e.fecha_entrega = null; }
     save();
   },
   // pagado: cuánto paga ahora (lo que falta queda en su cuenta corriente); si no viene, paga todo

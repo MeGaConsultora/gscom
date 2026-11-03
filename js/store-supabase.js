@@ -419,7 +419,7 @@ export const store = {
 
   // Fichero (cuentas corrientes)
   async ccSaldos() { return q(sb.from('cc_saldos').select('*').order('saldo', { ascending: false })); },
-  async ccMovimientos(clienteId) { return q(sb.from('cc_movimientos').select('*, venta:ventas(notas)').eq('cliente_id', clienteId).order('fecha', { ascending: false }).order('id', { ascending: false })); },
+  async ccMovimientos(clienteId) { return q(sb.from('cc_movimientos').select('*, venta:ventas(notas), encargo:encargos(estado)').eq('cliente_id', clienteId).order('fecha', { ascending: false }).order('id', { ascending: false })); },
   async ccMovimiento(id) { return q(sb.from('cc_movimientos').select('*').eq('id', id).maybeSingle()); },
   async cobrarCuenta(clienteId, { monto, forma_pago, nota = '', imputaciones = [] }) {
     if (imputaciones.length) return q(sb.rpc('cobrar_cuenta_imputado', { p_cliente_id: clienteId, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota, p_imputaciones: imputaciones }));
