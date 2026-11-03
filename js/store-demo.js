@@ -682,6 +682,27 @@ export const store = {
   },
 
   async compras() { return clone(db.compras.slice().reverse().map(c => ({ ...c, items: db.compra_items.filter(i => i.compra_id === c.id) }))); },
+  // Facturas con IA: en la demo no se lee nada de verdad (no hay clave); devuelve una factura de ejemplo armada con productos de la demo
+  async subirArchivoFactura(blob, ext) { return `compras/demo/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`; },
+  async borrarArchivosFactura() {},
+  async leerFactura(rutas) {
+    const ps = db.productos.filter(p => !p.es_servicio && p.activo !== false);
+    const conCodigo = ps.find(p => p.codigo_barras && !/^200/.test(p.codigo_barras)) || ps[0], otro = ps.find(p => p !== conCodigo) || ps[0];
+    const prov = db.proveedores[0];
+    return { factura: {
+      proveedor: { nombre: prov?.nombre || 'Proveedor de ejemplo S.A.', cuit: prov?.cuit || '30-11111111-1' },
+      comprobante: 'A 0005-00012345', fecha: new Date().toISOString().slice(0, 10),
+      items: [
+        { codigo: '1001', codigo_barras: conCodigo.codigo_barras || '', descripcion: conCodigo.nombre.toUpperCase(), cantidad: 4, unidad: 'unidad', unidades_por_bulto: null, precio_unitario: 10000, bonificacion: null, importe: 40000, alicuota_iva: 21, precio_sugerido: null },
+        { codigo: '1002', codigo_barras: '', descripcion: otro.nombre.split(' ').slice(0, 3).join(' ').toUpperCase() + ' X', cantidad: 2, unidad: 'unidad', unidades_por_bulto: null, precio_unitario: 5000, bonificacion: 10, importe: 9000, alicuota_iva: 21, precio_sugerido: null },
+        { codigo: '1003', codigo_barras: '7798000000017', descripcion: 'MOUSE PAD GAMER XL 80X30', cantidad: 1, unidad: 'bulto', unidades_por_bulto: 10, precio_unitario: 20000, bonificacion: null, importe: 20000, alicuota_iva: 10.5, precio_sugerido: 3500 },
+      ],
+      descuento_global: null, otros_cargos: 1500, subtotal: 69000, iva: 12390, percepciones: 1035, total: 83925, observaciones: 'Factura de ejemplo (modo demo): no se leyó ningún archivo.',
+    }, uso: { modelo: 'demo', tokens_entrada: 0, tokens_salida: 0, costo_usd: 0 } };
+  },
+  async guardarArchivosCompra(id, rutas) { const c = byId('compras', id); if (c) { c.archivos = rutas; save(); } },
+  async urlArchivoFactura() { throw new Error('En la demo no se guardan los archivos de las facturas'); },
+  async usoIA() { return []; },
   async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {
     const c = insert('compras', { fecha: now(), proveedor_id: proveedor_id || null, nro_comprobante, notas,
       total: items.reduce((s, i) => s + i.cantidad * i.costo_unitario, 0) });

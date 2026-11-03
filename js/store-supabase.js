@@ -274,6 +274,30 @@ export const store = {
   async actualizarEncargo(id, cambios) { await q(sb.from('encargos').update(cambios).eq('id', id)); },
   async cancelarEncargo(id) { await q(sb.rpc('cancelar_encargo', { p_encargo_id: id })); },
 
+  // Facturas de compra leídas con IA: los archivos van al bucket privado "facturas"; la lectura la hace la función "leer-factura"
+  async subirArchivoFactura(blob, ext) {
+    const ruta = `compras/${new Date().toISOString().slice(0, 7)}/${crypto.randomUUID()}.${ext}`;
+    const { error } = await sb.storage.from('facturas').upload(ruta, blob, { contentType: blob.type || (ext === 'pdf' ? 'application/pdf' : 'image/jpeg') });
+    if (error) throw new Error(`No se pudo subir el archivo: ${error.message}`);
+    return ruta;
+  },
+  async borrarArchivosFactura(rutas) { if (rutas?.length) await sb.storage.from('facturas').remove(rutas).catch(() => {}); },
+  async leerFactura(rutas) {
+    const { data, error } = await sb.functions.invoke('leer-factura', { body: { archivos: rutas } });
+    if (error) {
+      let msg = error.message;
+      try { msg = (await error.context.json()).error || msg; } catch { /* sin detalle */ }
+      throw new Error(/Failed to send|fetch/i.test(msg) ? 'No se pudo conectar con la función "leer-factura" (¿está publicada en Supabase?)' : msg);
+    }
+    return data;
+  },
+  async guardarArchivosCompra(id, rutas) { await q(sb.from('compras').update({ archivos: rutas }).eq('id', id)); },
+  async urlArchivoFactura(ruta) {
+    const { data, error } = await sb.storage.from('facturas').createSignedUrl(ruta, 3600);
+    if (error) throw new Error('No se pudo abrir el archivo de la factura');
+    return data.signedUrl;
+  },
+  async usoIA() { return q(sb.from('uso_ia').select('*').order('fecha', { ascending: false }).limit(500)); },
   async compras() { return q(sb.from('compras').select('*, items:compra_items(*)').order('fecha', { ascending: false }).limit(500)); },
   async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {
     const id = await q(sb.rpc('registrar_compra', { p_proveedor_id: proveedor_id || null, p_nro_comprobante: nro_comprobante || '', p_items: items, p_notas: notas }));

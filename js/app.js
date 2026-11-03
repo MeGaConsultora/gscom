@@ -3145,13 +3145,18 @@ function compraModal(c, productos, provName) {
   const prod = id => productos.find(p => p.id === id);
   const m = modal(`Compra #${c.id}`, `
     <dl class="kv" style="margin-bottom:1rem"><dt>Fecha</dt><dd>${fdatetime(c.fecha)}</dd><dt>Proveedor</dt><dd>${esc(provName(c.proveedor_id))}</dd>
-      <dt>Comprobante</dt><dd>${esc(c.nro_comprobante) || '—'}</dd>${c.notas ? `<dt>Notas</dt><dd>${esc(c.notas)}</dd>` : ''}</dl>
+      <dt>Comprobante</dt><dd>${esc(c.nro_comprobante) || '—'}</dd>${c.notas ? `<dt>Notas</dt><dd>${esc(c.notas)}</dd>` : ''}
+      ${c.archivos?.length ? `<dt>Factura</dt><dd>${c.archivos.map((r, k) => `<button class="btn sm" data-arch="${k}">📄 ${c.archivos.length > 1 ? `Hoja ${k + 1}` : 'Ver factura'}</button>`).join(' ')}</dd>` : ''}</dl>
     <table class="tbl"><thead><tr><th>Producto</th><th class="num">Cant.</th><th class="num">Costo unit.</th><th class="num">Subtotal</th></tr></thead><tbody>
       ${c.items.map(i => `<tr><td>${esc(prod(i.producto_id)?.nombre || '(producto eliminado)')}<div class="small muted mono">${esc(prod(i.producto_id)?.codigo_barras || '')}</div></td>
         <td class="num">${i.cantidad}</td><td class="num">${money(i.costo_unitario)}</td><td class="num">${money(i.cantidad * i.costo_unitario)}</td></tr>`).join('')}
       <tr><td colspan="3"><b>Total</b></td><td class="num"><b>${money(c.total)}</b></td></tr></tbody></table>`,
     `<button class="btn danger" id="del">Eliminar</button><button class="btn" id="edit">Editar</button><button class="btn primary" data-close>Cerrar</button>`, { wide: true });
 
+  $$('[data-arch]', m.el).forEach(b => b.onclick = () => {
+    const w = window.open('', '_blank');   // se abre ya (en el celular, abrirla después de esperar la bloquea)
+    run(async () => { try { const url = await store.urlArchivoFactura(c.archivos[+b.dataset.arch]); if (w) w.location = url; else location.href = url; } catch (e) { w?.close(); throw e; } });
+  });
   $('#edit', m.el).onclick = () => {
     if (compraDraft?.items.length && !confirm('Tenés otra carga de compra sin terminar. ¿Descartarla para editar esta?')) return;
     compraDraft = {
@@ -3183,6 +3188,181 @@ function proveedorModal(onSaved, p = null) {
   });
 }
 
+// =====================================================================
+// CARGAR COMPRA DESDE LA FACTURA (PDF o fotos) leída con IA — función "leer-factura" de Supabase.
+// La factura completa el formulario de "Ingresar mercadería": siempre se revisa antes de guardar.
+// Costos: importe del renglón (ya bonificado, sin IVA) ± descuento global / otros cargos repartidos
+// en proporción, dividido por las unidades, + el IVA del renglón (en GScom el costo va con IVA).
+// =====================================================================
+const IVA_POR_DEFECTO = 21;
+const PALABRAS_VACIAS = new Set(['de', 'la', 'el', 'los', 'las', 'para', 'con', 'sin', 'un', 'una', 'y', 'en', 'por', 'x', 'c', 'p']);
+const palabras = s => norm(s).split(/[^a-z0-9]+/).filter(t => t.length >= 2 && !PALABRAS_VACIAS.has(t));
+const parecido = (a, b) => { const A = new Set(a), B = new Set(b); let c = 0; A.forEach(t => { if (B.has(t)) c++; }); return A.size + B.size ? 2 * c / (A.size + B.size) : 0; };   // (soloDigitos ya está definido más arriba)
+
+function elegirArchivosFactura(alLeer) {
+  const hojas = [];   // { blob, ext, nombre }
+  const m = modal('Cargar compra desde la factura', `
+    <p class="small muted">Elegí el PDF de la factura o sacale una foto a cada hoja (derecha, completa y con buena luz). La lee la IA y completa la compra; después revisás todo antes de guardar.</p>
+    <div style="display:flex;gap:.5rem;flex-wrap:wrap;margin:.9rem 0">
+      <label class="btn">📷 Sacar foto de una hoja<input type="file" accept="image/*" capture="environment" id="f-cam" hidden></label>
+      <label class="btn">📁 Elegir PDF o imágenes<input type="file" accept="application/pdf,image/*" multiple id="f-arch" hidden></label></div>
+    <div id="f-hojas"></div>
+    <p class="small muted" style="margin-top:.6rem">Cada lectura tiene un costo de IA (unos centavos de dólar por factura).</p>`,
+    '<button class="btn" data-close>Cancelar</button><button class="btn primary" id="f-leer" disabled>Leer factura</button>');
+  const pintar = () => {
+    $('#f-hojas', m.el).innerHTML = hojas.length
+      ? `<table class="tbl small"><tbody>${hojas.map((h, k) => `<tr><td>${h.ext === 'pdf' ? '📄' : '🖼️'} ${hojas.length > 1 ? `Hoja ${k + 1} · ` : ''}${esc(h.nombre)}</td><td class="num muted nowrap">${Math.max(1, Math.round(h.blob.size / 1024))} KB</td><td class="right"><button class="x" data-q="${k}" title="Quitar">×</button></td></tr>`).join('')}</tbody></table>`
+      : '<p class="small muted">Todavía no elegiste nada.</p>';
+    $$('[data-q]', m.el).forEach(b => b.onclick = () => { hojas.splice(+b.dataset.q, 1); pintar(); });
+    $('#f-leer', m.el).disabled = !hojas.length;
+  };
+  const agregar = files => run(async () => {
+    for (const f of files) {
+      const esPdf = f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+      if (esPdf) {
+        if (hojas.length) { toast('Un PDF se lee solo: quitá las otras hojas primero', true); continue; }
+        if (f.size > 15 * 1024 * 1024) { toast('El PDF pesa más de 15 MB', true); continue; }
+        hojas.push({ blob: f, ext: 'pdf', nombre: f.name });
+      } else {
+        if (hojas.some(h => h.ext === 'pdf')) { toast('Ya elegiste un PDF: las fotos van solas, sin PDF', true); continue; }
+        if (hojas.length >= 10) { toast('Como máximo 10 hojas', true); break; }
+        hojas.push({ blob: await achicarImagen(f, 2000), ext: 'jpg', nombre: f.name || 'foto' });
+      }
+    }
+    pintar();
+  });
+  $('#f-cam', m.el).onchange = e => { agregar([...e.target.files]); e.target.value = ''; };
+  $('#f-arch', m.el).onchange = e => { agregar([...e.target.files]); e.target.value = ''; };
+  $('#f-leer', m.el).onclick = () => run(async () => {
+    const b = $('#f-leer', m.el); b.disabled = true; b.textContent = 'Leyendo… (puede tardar un minuto)';
+    const rutas = [];
+    try {
+      for (const h of hojas) rutas.push(await store.subirArchivoFactura(h.blob, h.ext));
+      const r = await store.leerFactura(rutas);
+      m.close(); alLeer(r.factura, rutas, r.uso);
+    } catch (e) {
+      await store.borrarArchivosFactura(rutas);
+      b.disabled = false; b.textContent = 'Leer factura';
+      throw e;
+    }
+  });
+  pintar();
+}
+
+// Revisión de lo leído: proveedor y, renglón por renglón, a qué producto corresponde (o crear uno nuevo / no cargarlo)
+async function revisarFacturaIA(f, rutas, uso, { d, productos, proveedores, cats, redondeo, alListo }) {
+  const cfgElit = await store.elitConfig().catch(() => null);
+  const margenNuevo = +(cfgElit?.margen_defecto ?? 30);
+  const items = (f.items || []).filter(it => (+it.cantidad || 0) > 0);
+  const importeDe = it => +it.importe || (+it.precio_unitario || 0) * (+it.cantidad || 0) * (1 - (+it.bonificacion || 0) / 100);
+  const sumaImportes = items.reduce((s, it) => s + importeDe(it), 0);
+  const factor = sumaImportes > 0 ? (sumaImportes - (+f.descuento_global || 0) + (+f.otros_cargos || 0)) / sumaImportes : 1;
+  const unidadesDe = it => (+it.cantidad || 0) * (it.unidad === 'bulto' && +it.unidades_por_bulto > 0 ? +it.unidades_por_bulto : 1);
+  const ivaDe = it => it.alicuota_iva == null ? IVA_POR_DEFECTO : +it.alicuota_iva;
+  const costoDe = it => { const u = unidadesDe(it); return u > 0 ? Math.round(importeDe(it) * factor / u * (1 + ivaDe(it) / 100) * 100) / 100 : 0; };
+  const totalCostos = items.reduce((s, it) => s + costoDe(it) * unidadesDe(it), 0);
+
+  // proveedor: por CUIT, o por nombre parecido
+  const cuit = soloDigitos(f.proveedor?.cuit);
+  const provAuto = proveedores.find(p => cuit && soloDigitos(p.cuit) === cuit)
+    || proveedores.map(p => [p, parecido(palabras(f.proveedor?.nombre), palabras(p.nombre))]).filter(([, s]) => s >= 0.5).sort((a, b) => b[1] - a[1])[0]?.[0];
+  let provSel = provAuto ? String(provAuto.id) : (f.proveedor?.nombre ? '__nuevo' : (d.proveedor_id || ''));
+
+  // productos: por código de barras; si no, por nombre parecido (se elige solo si el parecido es claro)
+  const cand = productos.filter(p => !p.es_servicio && p.activo !== false);
+  const filas = items.map(it => {
+    const cod = soloDigitos(it.codigo_barras), codProv = soloDigitos(it.codigo);
+    const exacto = cand.find(p => cod.length >= 8 && mismoCodigo(p.codigo_barras, cod)) || cand.find(p => codProv.length >= 8 && mismoCodigo(p.codigo_barras, codProv));
+    const t = palabras(it.descripcion);
+    const sim = cand.filter(p => p !== exacto).map(p => [p, parecido(t, palabras(`${p.marca || ''} ${p.nombre}`))]).filter(([, s]) => s >= 0.25).sort((a, b) => b[1] - a[1]).slice(0, 6);
+    const claro = sim[0] && sim[0][1] >= 0.6 && (!sim[1] || sim[0][1] - sim[1][1] >= 0.1);
+    return { it, exacto, sim, extra: [], elegido: exacto ? String(exacto.id) : claro ? String(sim[0][0].id) : 'nuevo' };
+  });
+
+  const m = modal('Revisar la factura leída', `
+    ${f.observaciones ? `<div class="small" style="background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px;margin-bottom:.8rem">⚠ ${esc(f.observaciones)}</div>` : ''}
+    <div class="row">
+      <div class="field"><label>Proveedor <span class="muted">(leído: ${esc(f.proveedor?.nombre || '—')}${f.proveedor?.cuit ? ' · ' + esc(f.proveedor.cuit) : ''})</span></label>
+        <select class="input" id="r-prov"><option value="">— Sin especificar —</option>
+          ${f.proveedor?.nombre && !provAuto ? `<option value="__nuevo">➕ Crear proveedor «${esc(f.proveedor.nombre)}»</option>` : ''}
+          ${proveedores.map(p => `<option value="${p.id}">${esc(p.nombre)}</option>`).join('')}</select></div>
+      <div class="field"><label>Comprobante</label><input class="input" id="r-nro" value="${esc(f.comprobante || '')}"></div></div>
+    <div class="tbl-wrap" style="margin-top:.4rem"><table class="tbl small"><thead><tr><th>Renglón de la factura</th><th class="num">Unidades</th><th class="num">Costo unit. (con IVA)</th><th style="min-width:230px">En GScom</th></tr></thead><tbody id="r-filas"></tbody></table></div>
+    <div class="small muted" style="margin-top:.7rem">
+      Total de la factura: <b>${f.total != null ? money(f.total) : '—'}</b>${+f.percepciones ? ` · percepciones ${money(f.percepciones)} (no se suman al costo)` : ''}
+      · Suma de los costos: <b>${money(totalCostos)}</b>${+f.descuento_global ? ` · descuento ${money(f.descuento_global)} repartido` : ''}${+f.otros_cargos ? ` · otros cargos ${money(f.otros_cargos)} repartidos` : ''}
+      ${uso?.costo_usd ? `<br>Lectura con IA: US$ ${uso.costo_usd.toFixed(3)}` : ''}</div>`,
+    '<button class="btn" data-close>Cancelar</button><button class="btn primary" id="r-ok">Pasar a la compra</button>', { wide: true });
+  $('#r-prov', m.el).value = provSel;
+  $('#r-prov', m.el).onchange = e => { provSel = e.target.value; };
+
+  const pintar = () => {
+    $('#r-filas', m.el).innerHTML = filas.map((r, k) => {
+      const opc = [
+        ...(r.exacto ? [[String(r.exacto.id), `✓ ${r.exacto.nombre} (mismo código)`]] : []),
+        ...r.sim.map(([p, s]) => [String(p.id), `${p.nombre} · ${Math.round(s * 100)}% parecido`]),
+        ...r.extra.map(p => [String(p.id), p.nombre]),
+        ['nuevo', '➕ Crear producto nuevo'], ['buscar', '🔎 Buscar otro producto…'], ['ignorar', '— No cargar este renglón —'],
+      ];
+      return `<tr><td>${esc(r.it.descripcion)}<div class="muted mono">${esc([r.it.codigo, r.it.codigo_barras].filter(Boolean).join(' · '))}${r.it.unidad === 'bulto' ? ` · ${+r.it.cantidad} bulto(s)` : ''}</div></td>
+        <td class="num">${unidadesDe(r.it)}</td><td class="num nowrap">${money(costoDe(r.it))}</td>
+        <td><select class="input" data-r="${k}">${opc.map(([v, l]) => `<option value="${v}" ${v === r.elegido ? 'selected' : ''}>${esc(l)}</option>`).join('')}</select></td></tr>`;
+    }).join('') || '<tr><td colspan="4" class="empty">La factura no trae renglones de mercadería.</td></tr>';
+    $$('[data-r]', m.el).forEach(s => s.onchange = () => {
+      const r = filas[+s.dataset.r];
+      if (s.value !== 'buscar') { r.elegido = s.value; return; }
+      s.value = r.elegido;
+      buscarProductoModal(cand, cats, p => { if (!r.sim.some(([x]) => x.id === p.id) && !r.extra.some(x => x.id === p.id) && r.exacto?.id !== p.id) r.extra.push(p); r.elegido = String(p.id); pintar(); });
+    });
+  };
+  pintar();
+
+  $('#r-ok', m.el).onclick = () => run(async () => {
+    const b = $('#r-ok', m.el); b.disabled = true;
+    try {
+      let provId = provSel && provSel !== '__nuevo' ? +provSel : null;
+      if (provSel === '__nuevo') provId = (await store.guardarProveedor({ nombre: f.proveedor.nombre.trim(), cuit: f.proveedor.cuit || '' })).id;
+      let creados = 0;
+      for (const r of filas) {
+        if (r.elegido === 'ignorar') continue;
+        const cantidad = unidadesDe(r.it), costo = costoDe(r.it);
+        let p;
+        if (r.elegido === 'nuevo') {
+          const cod = soloDigitos(r.it.codigo_barras);
+          const sug = +r.it.precio_sugerido || 0;
+          p = await store.guardarProducto({ nombre: r.it.descripcion.trim(), codigo_barras: cod.length >= 8 && cod.length <= 14 && !productos.some(x => mismoCodigo(x.codigo_barras, cod)) ? cod : null,
+            proveedor_id: provId, precio_costo: costo, margen: sug ? null : margenNuevo, precio_venta: sug || precioPorMargen(costo, margenNuevo, redondeo), stock_minimo: 0 });
+          productos.push(p); creados++;
+        } else p = productos.find(x => x.id === +r.elegido);
+        if (!p) continue;
+        const ex = d.items.find(i => i.producto_id === p.id);
+        if (ex) { ex.cantidad += cantidad; ex.costo_unitario = costo; }
+        else d.items.push({ producto_id: p.id, nombre: p.nombre, codigo_barras: p.codigo_barras || '', stock: p.stock ?? 0, cantidad, costo_unitario: costo,
+          precio_venta: +p.precio_venta || 0, precio_venta_orig: +p.precio_venta || 0, margen: p.margen ?? null, ...(r.elegido === 'nuevo' ? { nuevo: true } : {}) });
+      }
+      if (provId) d.proveedor_id = String(provId);
+      const nro = $('#r-nro', m.el).value.trim(); if (nro) d.nro_comprobante = nro;
+      d.archivos = [...(d.archivos || []), ...rutas];
+      m.close();
+      toast(`Factura cargada: ${filas.filter(r => r.elegido !== 'ignorar').length} renglón(es)${creados ? ` · ${creados} producto(s) nuevo(s)` : ''}. Revisá y tocá "Registrar compra".`);
+      alListo();
+    } finally { b.disabled = false; }
+  });
+}
+
+// Buscar un producto cualquiera (para asignar un renglón de la factura que no se reconoció)
+function buscarProductoModal(productos, cats, alElegir) {
+  const m = modal('Buscar producto', '<div class="search"><input class="input" id="bp-q" placeholder="Nombre, marca o código" autocomplete="off"></div><div id="bp-res" style="margin-top:.6rem;max-height:50vh;overflow:auto"></div>', '<button class="btn" data-close>Cancelar</button>');
+  const pintar = () => {
+    const t = $('#bp-q', m.el).value.trim();
+    const l = t ? buscarProductos(productos, cats, t).slice(0, 30) : [];
+    $('#bp-res', m.el).innerHTML = l.map((p, i) => `<div data-i="${i}" style="padding:.5rem .3rem;border-bottom:1px solid var(--line);cursor:pointer">${prodSugHTML(p, cats, { costo: true })}</div>`).join('') || (t ? '<p class="muted small">Sin resultados.</p>' : '');
+    $$('[data-i]', m.el).forEach(x => x.onclick = () => { m.close(); alElegir(l[+x.dataset.i]); });
+  };
+  $('#bp-q', m.el).oninput = pintar;
+  setTimeout(() => $('#bp-q', m.el).focus(), 50);
+}
+
 async function nuevaCompra() {
   const [proveedores, productos, cats, neg] = await Promise.all([store.proveedores(), store.productos(), store.categorias(), store.negocio()]);
   const redondeo = neg.redondeo_precios ?? 1;
@@ -3191,7 +3371,8 @@ async function nuevaCompra() {
 
   view().innerHTML = `
   <div class="page-head"><div><a href="#/compras" class="small muted">← Compras</a><h1>${d.editId ? `Editar compra #${d.editId}` : 'Ingresar mercadería'}</h1></div>
-    <div class="actions"><button class="btn danger" id="descartar">${d.editId ? 'Cancelar edición' : 'Descartar'}</button></div></div>
+    <div class="actions">${d.editId ? '' : '<button class="btn primary" id="desde-factura" title="Elegí el PDF o sacale fotos: la lee la IA y completa la compra">📄 Cargar desde factura</button>'}<button class="btn danger" id="descartar">${d.editId ? 'Cancelar edición' : 'Descartar'}</button></div></div>
+  ${d.archivos?.length ? `<div class="small" style="background:var(--accent-soft);padding:.55rem .8rem;border-radius:8px;margin-bottom:1rem">📄 Factura adjunta (${d.archivos.length} archivo${d.archivos.length > 1 ? 's' : ''}): se guarda con la compra.</div>` : ''}
   ${d.editId ? '<div class="small" style="background:var(--warn-soft);padding:.6rem .8rem;border-radius:8px;margin-bottom:1rem">Al guardar, el stock se corrige según la diferencia con lo cargado originalmente.</div>' : ''}
   <div class="card card-pad" style="margin-bottom:1rem">
     <div class="row">
@@ -3297,8 +3478,11 @@ async function nuevaCompra() {
 
   $('#descartar').onclick = () => {
     if (d.items.length && !confirm(d.editId ? '¿Cancelar la edición? La compra queda como estaba.' : '¿Descartar esta carga? Se pierden los productos agregados.')) return;
+    if (!d.editId && d.archivos?.length) store.borrarArchivosFactura(d.archivos);
     compraDraft = null; go('#/compras');
   };
+  const df = $('#desde-factura');
+  if (df) df.onclick = () => elegirArchivosFactura((f, rutas, uso) => run(() => revisarFacturaIA(f, rutas, uso, { d, productos, proveedores, cats, redondeo, alListo: () => nuevaCompra() })));
   $('#registrar').onclick = () => run(async () => {
     if (!d.items.length) return toast('No agregaste productos', true);
     const btn = $('#registrar'); btn.disabled = true;
@@ -3306,7 +3490,10 @@ async function nuevaCompra() {
       const datos = { proveedor_id: d.proveedor_id ? +d.proveedor_id : null, nro_comprobante: d.nro_comprobante.trim(), notas: d.notas.trim(),
         items: d.items.map(({ producto_id, cantidad, costo_unitario }) => ({ producto_id, cantidad, costo_unitario })) };
       if (d.editId) await store.editarCompra(d.editId, datos);
-      else await store.registrarCompra(datos);
+      else {
+        const r = await store.registrarCompra(datos);
+        if (d.archivos?.length) await store.guardarArchivosCompra(r.id, d.archivos).catch(() => toast('La compra se registró, pero no se pudo asociar el archivo de la factura', true));
+      }
       for (const i of d.items.filter(i => i.margen == null && i.precio_venta !== i.precio_venta_orig)) await store.guardarProducto({ id: i.producto_id, precio_venta: i.precio_venta });
     } finally { btn.disabled = false; }
     const n = d.items.length; compraDraft = null;
@@ -4436,6 +4623,9 @@ ROUTES.ajustes = async () => {
   ${store.modo !== 'demo' ? `<div class="card card-pad" style="margin-top:1rem"><h2>Usuarios</h2>
     <p class="small muted" style="margin-bottom:.8rem"><b>Administrador</b>: todo el sistema. <b>Tienda</b>: solo la pestaña Tienda (fotos, descripciones, destacados, aviso y textos); no ve costos, caja, clientes ni cuentas.</p>
     <div id="usuarios" class="small muted">Cargando…</div></div>
+  <div class="card card-pad" style="margin-top:1rem"><h2>Lectura de facturas con IA</h2>
+    <p class="small muted" style="margin-bottom:.6rem">Compras → Ingresar mercadería → "Cargar desde factura". Costo estimado de cada lectura; el detalle real está en la consola de Anthropic.</p>
+    <div id="uso-ia" class="small muted">Cargando…</div></div>
   <div class="card card-pad" style="margin-top:1rem"><h2>Esta computadora</h2>
     <p class="small muted" style="margin-bottom:.8rem">Se guarda solo en este navegador: cada PC puede tener su propio tiempo (por ejemplo, 1 hora en el local y "Nunca" en tu casa).</p>
     <div class="field" style="max-width:320px"><label>Cerrar la sesión tras un tiempo sin uso</label><select class="input" id="inactividad">
@@ -4443,6 +4633,12 @@ ROUTES.ajustes = async () => {
     <p class="small muted">Un minuto antes avisa. Si estabas cargando una venta, se recupera al volver a entrar.</p></div>` : ''}
   </div>`;
   if ($('#usuarios')) pintarUsuarios();
+  if ($('#uso-ia')) store.usoIA().then(l => {
+    const mes = new Date().toISOString().slice(0, 7), delMes = l.filter(u => String(u.fecha).slice(0, 7) === mes);
+    const usd = a => 'US$ ' + a.reduce((s, u) => s + +u.costo_usd, 0).toFixed(2);
+    $('#uso-ia').innerHTML = l.length ? `<table class="tbl small"><tbody><tr><td>Este mes</td><td class="num">${delMes.length} lectura(s)</td><td class="num">${usd(delMes)}</td></tr>
+      <tr><td>Total</td><td class="num">${l.length} lectura(s)</td><td class="num">${usd(l)}</td></tr></tbody></table>` : 'Todavía no se leyó ninguna factura.';
+  }).catch(() => { $('#uso-ia').textContent = 'No se pudo consultar (¿falta ejecutar el SQL 52?).'; });
   if ($('#inactividad')) $('#inactividad').onchange = e => {
     try { localStorage.setItem(INACT_KEY, e.target.value); } catch {}
     marcarActividad(true);
