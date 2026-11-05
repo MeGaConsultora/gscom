@@ -108,7 +108,15 @@ function toast(msg, err = false) {
   t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg;
   document.body.appendChild(t); setTimeout(() => t.remove(), err ? 4500 : 2500);
 }
-async function run(fn) { try { return await fn(); } catch (e) { console.error(e); toast(e.message || 'Error', true); } }
+// Una misma acción no corre dos veces a la vez: un doble clic (o un clic impaciente mientras todavía guarda) registraría la
+// operación dos veces (ej: ventas duplicadas). Cada botón crea su propia función pero con el mismo código: se identifica por su texto.
+const accionesEnCurso = new Set();
+async function run(fn) {
+  const clave = String(fn);
+  if (accionesEnCurso.has(clave)) return;
+  accionesEnCurso.add(clave);
+  try { return await fn(); } catch (e) { console.error(e); toast(e.message || 'Error', true); } finally { accionesEnCurso.delete(clave); }
+}
 
 function modal(title, body, foot = '', { wide = false } = {}) {
   const bg = document.createElement('div');
