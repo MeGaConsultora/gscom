@@ -216,17 +216,23 @@ export const store = {
   async anularVenta(id) { await q(sb.rpc('anular_venta', { p_venta_id: id })); },
   // Cuántas ventas y entregas de service esperan su factura (para el aviso en la barra; no baja todos los datos)
   async facturasPendientes() {
-    const [v, o, c] = await Promise.all([
+    const [v, o] = await Promise.all([
       sb.from('ventas').select('id', { count: 'exact', head: true }).eq('facturacion', 'pendiente').eq('anulada', false),
-      sb.from('ordenes_servicio').select('id', { count: 'exact', head: true }).eq('facturacion', 'pendiente').eq('estado', 'entregado'),
-      sb.from('cc_movimientos').select('id', { count: 'exact', head: true }).eq('facturacion', 'pendiente').eq('anulado', false)]);
+      sb.from('ordenes_servicio').select('id', { count: 'exact', head: true }).eq('facturacion', 'pendiente').eq('estado', 'entregado')]);
     if (v.error) throw new Error(v.error.message);
     if (o.error) throw new Error(o.error.message);
-    return (v.count || 0) + (o.count || 0) + (c.count || 0);   // c puede fallar si la base todavía no tiene el SQL 62: no cuenta
+    return (v.count || 0) + (o.count || 0);
   },
   // Cobros de cuenta corriente con recargo que se facturan
   async recargosParaFacturar() {
     return q(sb.from('cc_movimientos').select('*').eq('tipo', 'pago').gt('recargo', 0).neq('facturacion', 'no').order('fecha', { ascending: false }).limit(2000));
+  },
+  // Estado de factura de las ventas y órdenes indicadas (para saber si el recargo de un cobro se factura)
+  async estadosFactura(ventaIds, ordenIds) {
+    const [ventas, ordenes] = await Promise.all([
+      ventaIds.length ? q(sb.from('ventas').select('id, facturacion, anulada').in('id', ventaIds)) : [],
+      ordenIds.length ? q(sb.from('ordenes_servicio').select('id, facturacion').in('id', ordenIds)) : []]);
+    return { ventas, ordenes };
   },
   async establecerFacturaCobro(id, { estado, nro = '' }) {
     const emitida = estado === 'emitida';

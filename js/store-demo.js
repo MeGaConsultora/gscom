@@ -400,10 +400,12 @@ export const store = {
   },
   async facturasPendientes() {
     return db.ventas.filter(v => v.facturacion === 'pendiente' && !v.anulada).length
-      + db.ordenes_servicio.filter(o => o.facturacion === 'pendiente' && o.estado === 'entregado').length
-      + db.cc_movimientos.filter(m => m.facturacion === 'pendiente' && !m.anulado).length;
+      + db.ordenes_servicio.filter(o => o.facturacion === 'pendiente' && o.estado === 'entregado').length;
   },
   async recargosParaFacturar() { return clone(db.cc_movimientos.filter(m => m.tipo === 'pago' && +m.recargo > 0 && (m.facturacion || 'no') !== 'no').reverse()); },
+  async estadosFactura(ventaIds, ordenIds) {
+    return clone({ ventas: db.ventas.filter(v => ventaIds.includes(v.id)), ordenes: db.ordenes_servicio.filter(o => ordenIds.includes(o.id)) });
+  },
   async establecerFacturaCobro(id, { estado, nro = '' }) {
     const m = byId('cc_movimientos', id); if (!m) throw new Error('Cobro no encontrado');
     const emitida = estado === 'emitida';

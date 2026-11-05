@@ -327,7 +327,7 @@ async function actualizarContador() {
   if (e) e.innerHTML = `Encargos${n ? ` <span class="badge" title="Solicitudes de la tienda para revisar">${n}</span>` : ''}`;
   // Ventas con la factura pendiente de emitir
   const f = $('nav.tabs a[data-r=facturas]');
-  if (f) { const p = await store.facturasPendientes().catch(() => 0); f.innerHTML = `Facturas${p ? ` <span class="badge" style="background:var(--warn)" title="Ventas y servicios con la factura pendiente de emitir">${p}</span>` : ''}`; }
+  if (f) { const p = await store.facturasPendientes().catch(() => 0) + (await recargosAFacturar().catch(() => [])).filter(m => m.facturacion === 'pendiente' && !m.anulado).length; f.innerHTML = `Facturas${p ? ` <span class="badge" style="background:var(--warn)" title="Ventas y servicios con la factura pendiente de emitir">${p}</span>` : ''}`; }
   // los avisos cambian el ancho de las pestañas: se vuelve a dejar a la vista la actual (si la barra tiene scroll)
   $('nav.tabs a.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
 }
@@ -397,7 +397,7 @@ const go = h => { if (location.hash === h) render(); else location.hash = h; };
 // INICIO
 // =====================================================================
 ROUTES.inicio = async () => {
-  const [ventas, ordenes, productos, caja, clientes, encargos, recargosFact] = await Promise.all([store.ventas(), store.ordenes(), store.productos(), store.cajaMovimientos(), store.clientes(), store.encargos().catch(() => []), store.recargosParaFacturar().catch(() => [])]);
+  const [ventas, ordenes, productos, caja, clientes, encargos, recargosFact] = await Promise.all([store.ventas(), store.ordenes(), store.productos(), store.cajaMovimientos(), store.clientes(), store.encargos().catch(() => []), recargosAFacturar().catch(() => [])]);
   const llegaron = encargos.filter(listoParaRetirar);
   const cliNombre = id => clientes.find(c => c.id === id)?.nombre;
   const hoy = ventas.filter(v => !v.anulada && isToday(v.fecha));
@@ -428,7 +428,7 @@ ROUTES.inicio = async () => {
     // ventas y entregas de service con la factura pendiente (de cada una: su monto y su fecha)
     const fp = [...ventas.filter(v => v.facturacion === 'pendiente' && !v.anulada).map(v => ({ monto: +v.total, fecha: v.fecha })),
       ...ordenes.filter(o => o.facturacion === 'pendiente' && o.estado === 'entregado').map(o => ({ monto: +o.total_cobrado || 0, fecha: o.fecha_entrega || o.fecha_ingreso })),
-      ...recargosFact.filter(m => m.facturacion === 'pendiente' && !m.anulado).map(m => ({ monto: +m.recargo, fecha: m.fecha }))];
+      ...recargosFact.filter(m => m.facturacion === 'pendiente' && !m.anulado).map(m => ({ monto: m.monto_factura, fecha: m.fecha }))];
     return fp.length ? `<div class="card card-pad" style="margin-bottom:1rem;border-left:4px solid var(--warn)">
       <h2>Facturas pendientes de emitir <span class="badge" style="background:var(--warn)">${fp.length}</span> <a class="small" href="#/facturas">Ver →</a></h2>
       <div class="small muted">${money(fp.reduce((s, x) => s + x.monto, 0))} en ventas y servicios que todavía no tienen su factura${fp.some(x => daysSince(x.fecha) >= 7) ? ` · <b>${fp.filter(x => daysSince(x.fecha) >= 7).length}</b> con más de una semana` : ''}.</div></div>` : '';
@@ -2531,14 +2531,14 @@ async function imprimirDetalleFacturar(lista, clientes) {
 }
 
 ROUTES.facturas = async ({ q }) => {
-  const [ventas, ordenes, clientes, recargos] = await Promise.all([store.ventas(), store.ordenes(), store.clientes(), store.recargosParaFacturar().catch(() => [])]);
+  const [ventas, ordenes, clientes, recargos] = await Promise.all([store.ventas(), store.ordenes(), store.clientes(), recargosAFacturar().catch(() => [])]);
   const nombreDe = id => clientes.find(c => c.id === id)?.nombre || 'Consumidor final';
   // Ventas y entregas de service en una sola lista. "cancelada": venta anulada, o service cuya entrega se anuló / todavía no se entregó
   const facturables = [
     ...ventas.filter(v => (v.facturacion || 'no') !== 'no').map(v => ({ ...v, origen: 'venta', clave: `v${v.id}`, fechaRef: v.fecha, monto: +v.total, cancelada: !!v.anulada })),
     ...ordenes.filter(o => (o.facturacion || 'no') !== 'no').map(o => ({ ...o, origen: 'service', clave: `s${o.id}`, fechaRef: o.fecha_entrega || o.fecha_ingreso, monto: +o.total_cobrado || 0, cancelada: o.estado !== 'entregado' })),
     // el recargo de un cobro de cuenta corriente: se factura aparte de la venta (el número es el del recibo)
-    ...recargos.map(m => ({ ...m, origen: 'cobro', numero: m.id, clave: `c${m.id}`, fechaRef: m.fecha, monto: +m.recargo, cancelada: !!m.anulado })),
+    ...recargos.map(m => ({ ...m, origen: 'cobro', numero: m.id, clave: `c${m.id}`, fechaRef: m.fecha, monto: m.monto_factura, cancelada: !!m.anulado })),
   ].sort((a, b) => String(b.fechaRef).localeCompare(String(a.fechaRef)));
   const anticipos = await store.anticiposDeOrdenes(facturables.filter(x => x.origen === 'service').map(x => x.id)).catch(() => []);
   const pendientes = facturables.filter(x => x.facturacion === 'pendiente' && !x.cancelada);
@@ -2561,7 +2561,7 @@ ROUTES.facturas = async ({ q }) => {
   const opts = [['pendiente', 'Pendientes de emitir', pendientes.length], ['emitida', 'Emitidas', emitidas.length], ['todas', 'Todas las que se facturan', facturables.length]];
   // Cómo se pagó: la venta con sus partes; el service con pagos a cuenta + lo pagado al retirar + lo que quedó en cuenta corriente
   const cobro = x => {
-    if (x.origen === 'cobro') return `<span class="small">${esc(x.forma_pago)}${x.plan ? ` (${esc(x.plan)})` : ''}</span>`;
+    if (x.origen === 'cobro') return `<span class="small">${esc(x.forma_pago)}${x.plan ? ` (${esc(x.plan)})` : ''}${x.monto < +x.recargo - 0.009 ? `<br><span class="muted">parte facturable de un recargo de ${money(x.recargo)}</span>` : ''}</span>`;
     const cc = m => `<span class="pill amber">Cuenta corriente ${money(m)}</span>`;
     if (x.origen === 'venta') return (x.pagos?.length ? x.pagos : [{ forma_pago: x.forma_pago, monto: x.total }])
       .map(p => p.forma_pago === CUENTA_CORRIENTE ? cc(p.monto) : `<span class="small">${esc(p.forma_pago)} ${money(p.monto)}</span>`).join('<br>');
@@ -3015,6 +3015,28 @@ function deudaPorConcepto(movs, imps = []) {
   }
   aFavor.filter(f => f.resto > 0.009).forEach(f => f.apl.push({ grupo: null, monto: f.resto }));
   return { grupos: [...grupos.values()], aplicaciones };
+}
+
+// Recargos de cobros que se facturan: el recargo sigue a lo que pagó el cobro. Si la venta o el service no se factura, el recargo tampoco;
+// si el cobro cubrió cosas que se facturan y otras que no, se factura la parte proporcional. Se calcula con el estado actual de cada una.
+// Lo ya emitido sigue en la lista aunque después cambie el estado de la venta (monto_factura: lo que corresponde facturar).
+async function recargosAFacturar() {
+  const cobros = await store.recargosParaFacturar();
+  if (!cobros.length) return [];
+  const cuentas = new Map(await Promise.all([...new Set(cobros.map(m => m.cliente_id))].map(async id => {
+    const [movs, imps] = await Promise.all([store.ccMovimientos(id), store.ccImputaciones(id).catch(() => [])]);
+    return [id, deudaPorConcepto(movs, imps)];
+  })));
+  const cubierto = m => { const { grupos, aplicaciones } = cuentas.get(m.cliente_id); return (aplicaciones[m.id] || []).filter(a => a.grupo).map(a => ({ monto: a.monto, g: grupos.find(x => x.clave === a.grupo) })); };
+  const partes = cobros.flatMap(cubierto);
+  const estados = await store.estadosFactura([...new Set(partes.map(a => a.g?.venta_id).filter(Boolean))], [...new Set(partes.map(a => a.g?.orden_id).filter(Boolean))]);
+  const seFactura = g => g?.venta_id ? estados.ventas.some(v => v.id === g.venta_id && !v.anulada && (v.facturacion || 'no') !== 'no')
+    : g?.orden_id ? estados.ordenes.some(o => o.id === g.orden_id && (o.facturacion || 'no') !== 'no') : false;
+  return cobros.map(m => {
+    const parte = cubierto(m).filter(a => seFactura(a.g)).reduce((s, a) => s + a.monto, 0);
+    const proporcional = Math.round(+m.recargo * Math.min(parte / -m.monto, 1) * 100) / 100;
+    return { ...m, monto_factura: m.facturacion === 'emitida' ? proporcional || +m.recargo : proporcional };
+  }).filter(m => m.facturacion === 'emitida' || m.monto_factura > 0.009);
 }
 
 // Cobro de cuenta corriente: elegir qué conceptos se pagan (todo, uno o parte) o un monto libre

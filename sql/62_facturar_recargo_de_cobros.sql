@@ -3,10 +3,11 @@
 -- En ventas y entregas de service el recargo ya va dentro del total facturado.
 -- En un cobro de cuenta corriente no: la venta pudo facturarse antes, o el cobro
 -- puede cubrir varias ventas. Por eso cada cobro con recargo tiene su propio estado
--- de factura y aparece en Facturas como pendiente de emitir (solo por el recargo).
+-- de factura. La app lo muestra en Facturas solo si lo que pagó se factura: si la venta
+-- o el service es "No se factura", el recargo tampoco (si es parte y parte, proporcional).
 -- Se puede marcar emitido junto con otros comprobantes del cliente, con el mismo número.
 -- Es solo un registro: no emite nada en AFIP.
--- Al final muestra cuántos cobros ya hechos quedaron pendientes de facturar.
+-- Al final muestra cuántos cobros con recargo ya hechos se revisan en Facturas.
 -- =====================================================================
 alter table cc_movimientos add column if not exists facturacion   text not null default 'no';
 alter table cc_movimientos add column if not exists factura_nro   text not null default '';
@@ -47,10 +48,10 @@ revoke execute on function cobrar_cuenta_plan(bigint, numeric, text, text, jsonb
 grant  execute on function cobrar_cuenta_plan(bigint, numeric, text, text, jsonb, numeric, text, uuid) to authenticated;
 notify pgrst, 'reload schema';
 
--- Los cobros con recargo que ya se hicieron quedan pendientes de facturar
+-- Los cobros con recargo que ya se hicieron quedan para revisar en Facturas (según lo que pagó cada uno)
 with marcados as (
   update cc_movimientos set facturacion = 'pendiente'
    where tipo = 'pago' and recargo > 0 and not anulado and facturacion = 'no'
   returning recargo
 )
-select count(*) as cobros_pendientes_de_facturar, coalesce(sum(recargo), 0) as recargos_a_facturar from marcados;
+select count(*) as cobros_con_recargo, coalesce(sum(recargo), 0) as total_de_recargos from marcados;
