@@ -400,7 +400,15 @@ export const store = {
   },
   async facturasPendientes() {
     return db.ventas.filter(v => v.facturacion === 'pendiente' && !v.anulada).length
-      + db.ordenes_servicio.filter(o => o.facturacion === 'pendiente' && o.estado === 'entregado').length;
+      + db.ordenes_servicio.filter(o => o.facturacion === 'pendiente' && o.estado === 'entregado').length
+      + db.cc_movimientos.filter(m => m.facturacion === 'pendiente' && !m.anulado).length;
+  },
+  async recargosParaFacturar() { return clone(db.cc_movimientos.filter(m => m.tipo === 'pago' && +m.recargo > 0 && (m.facturacion || 'no') !== 'no').reverse()); },
+  async establecerFacturaCobro(id, { estado, nro = '' }) {
+    const m = byId('cc_movimientos', id); if (!m) throw new Error('Cobro no encontrado');
+    const emitida = estado === 'emitida';
+    Object.assign(m, { facturacion: estado, factura_nro: emitida ? String(nro || '').trim() : '', factura_fecha: emitida ? now() : null });
+    save();
   },
   async establecerFacturaOrden(id, { estado, nro = '' }) {
     const o = byId('ordenes_servicio', id); if (!o) throw new Error('Orden no encontrada');
@@ -523,7 +531,7 @@ export const store = {
     if (forma_pago === CC) throw new Error('Elegí cómo paga (efectivo, transferencia, etc.)');
     if (imputaciones.reduce((s, x) => s + +x.monto, 0) > +monto + 0.009) throw new Error('Lo imputado supera el monto cobrado');
     const c = byId('clientes', clienteId);
-    const m = insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || 'Cobro de cuenta corriente', forma_pago, recargo, plan: recargo ? plan || null : null, clave, anulado: false });
+    const m = insert('cc_movimientos', { cliente_id: +clienteId, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || 'Cobro de cuenta corriente', forma_pago, recargo, plan: recargo ? plan || null : null, facturacion: recargo ? 'pendiente' : 'no', clave, anulado: false });
     insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Cobro cta. cte. — ${c.nombre}${recargo && plan ? ` · ${plan}` : ''}`, monto: +monto + recargo, forma_pago, cc_movimiento_id: m.id });
     db.cc_imputaciones ||= [];
     imputaciones.filter(x => +x.monto > 0).forEach(x => insert('cc_imputaciones', { pago_id: m.id, grupo: x.grupo, monto: +x.monto }));
