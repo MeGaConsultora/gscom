@@ -108,14 +108,19 @@ function toast(msg, err = false) {
   t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg;
   document.body.appendChild(t); setTimeout(() => t.remove(), err ? 4500 : 2500);
 }
-// Una misma acción no corre dos veces a la vez: un doble clic (o un clic impaciente mientras todavía guarda) registraría la
-// operación dos veces (ej: ventas duplicadas). Cada botón crea su propia función pero con el mismo código: se identifica por su texto.
-const accionesEnCurso = new Set();
+async function conAvisoDeError(fn) { try { return await fn(); } catch (e) { console.error(e); toast(e.message || 'Error', true); } }
+// Un mismo botón no dispara su acción dos veces a la vez: un doble clic (o un clic impaciente mientras todavía guarda) registraría la
+// operación dos veces (ej: ventas duplicadas). La protección va por el elemento que se tocó, no por el código de la acción:
+// así los botones de otras filas siguen funcionando y, si una acción nunca termina, solo queda trabado ese botón.
+const botonesOcupados = new WeakMap();   // botón → evento que inició su acción (un run anidado del mismo clic sí corre)
 async function run(fn) {
-  const clave = String(fn);
-  if (accionesEnCurso.has(clave)) return;
-  accionesEnCurso.add(clave);
-  try { return await fn(); } catch (e) { console.error(e); toast(e.message || 'Error', true); } finally { accionesEnCurso.delete(clave); }
+  const ev = window.event, tocado = ev?.target?.closest?.('button, a, tr, label') ?? ev?.currentTarget;
+  const boton = tocado instanceof Element ? tocado : null;
+  if (!boton) return conAvisoDeError(fn);
+  if (botonesOcupados.has(boton)) { if (botonesOcupados.get(boton) === ev) return conAvisoDeError(fn); return; }
+  botonesOcupados.set(boton, ev);
+  boton.setAttribute('aria-busy', 'true');
+  try { return await conAvisoDeError(fn); } finally { botonesOcupados.delete(boton); boton.removeAttribute('aria-busy'); }
 }
 
 function modal(title, body, foot = '', { wide = false } = {}) {
@@ -273,8 +278,16 @@ let etiquetarPend = false;
 new MutationObserver(() => { if (etiquetarPend) return; etiquetarPend = true; try { etiquetarTablas(); menusMovil(); } finally { etiquetarPend = false; } })
   .observe(document.body, { childList: true, subtree: true });
 
+// Las pantallas se muestran de a una y gana la última pedida: si una lenta terminara después que la siguiente, la pisaría
+// (la dirección diría una sección y se vería otra). Si una se traba, a los 10 segundos deja pasar a la que sigue.
+let renderando = false, renderPendiente = false;
 async function render() {
   $$('.modal-bg').forEach(m => m.remove()); // cerrar modales al cambiar de pantalla
+  if (renderando) { renderPendiente = true; return; }
+  renderando = true;
+  try { do { renderPendiente = false; await mostrarPantalla(); } while (renderPendiente); } finally { renderando = false; }
+}
+async function mostrarPantalla() {
   const r = parseHash();
   if (soloTienda() && r.name !== 'tienda') { history.replaceState(null, '', '#/tienda'); r.name = 'tienda'; r.id = undefined; r.q = new URLSearchParams(); }
   // Si se sale de Vender a mitad de la edición de una venta, la edición se cancela:
@@ -287,7 +300,7 @@ async function render() {
   $('nav.tabs a.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });   // si la barra tiene scroll, la pestaña actual queda a la vista
   const fn = ROUTES[r.name] || ROUTES.inicio;
   view().innerHTML = '<div class="empty">Cargando…</div>';
-  await run(() => fn(r));
+  await Promise.race([conAvisoDeError(() => fn(r)), new Promise(ok => setTimeout(ok, 10000))]);
   window.scrollTo(0, 0);
   if (!soloTienda()) actualizarContador();
 }
@@ -2211,7 +2224,9 @@ async function detalleOrden(id) {
   });
   const ent = $('#entregar');
   if (ent) ent.onclick = async () => {
+    ent.disabled = true;
     const planes = await planesPago();
+    ent.disabled = false;
     const tItems = totalItems();
     const sugerido = tItems || o.presupuesto || 0;
     let forma = 'Efectivo', plan = null, pagaEditado = false, comb = null;   // comb: [{ forma, monto, auto }] si paga con más de un medio
