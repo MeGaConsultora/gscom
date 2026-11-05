@@ -764,8 +764,10 @@ export const store = {
     return { ok: true, archivos: hojas.length };
   },
   async borrarPedidoCelular(token) { db.factura_celular = (db.factura_celular || []).filter(x => x.token !== token); save(); },
-  async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {
-    const c = insert('compras', { fecha: now(), proveedor_id: proveedor_id || null, nro_comprobante, notas,
+  async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '', clave = null }) {
+    const ya = clave && db.compras.find(x => x.clave === clave);
+    if (ya) return clone(ya);   // la misma compra reintentada (igual que en la base)
+    const c = insert('compras', { clave, fecha: now(), proveedor_id: proveedor_id || null, nro_comprobante, notas,
       total: items.reduce((s, i) => s + i.cantidad * i.costo_unitario, 0) });
     for (const i of items) {
       insert('compra_items', { compra_id: c.id, ...i });
@@ -840,24 +842,28 @@ export const store = {
     byId('ordenes_servicio', ordenId).foto_url = url; save(); return url;
   },
   async quitarFotoOrden(ordenId) { byId('ordenes_servicio', ordenId).foto_url = ''; save(); },
-  async registrarAnticipoOrden(id, { monto, forma_pago, nota = '' }) {
+  async registrarAnticipoOrden(id, { monto, forma_pago, nota = '', clave = null }) {
+    const ya = clave && db.cc_movimientos.find(x => x.clave === clave);
+    if (ya) return ya.id;   // el mismo anticipo reintentado (igual que en la base)
     if (!(+monto > 0)) throw new Error('El monto del anticipo tiene que ser mayor a cero');
     if (forma_pago === CC) throw new Error('Un anticipo es plata ya cobrada: elegí cómo lo pagó (efectivo, transferencia, etc.)');
     const o = byId('ordenes_servicio', id); if (!o) throw new Error('Orden no encontrada');
     if (o.estado === 'entregado') throw new Error('La orden ya fue entregada: registrá el pago desde el Fichero del cliente');
-    const m = insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || `Anticipo orden #${o.numero}`, forma_pago, orden_id: o.id, anulado: false });
+    const m = insert('cc_movimientos', { cliente_id: o.cliente_id, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || `Anticipo orden #${o.numero}`, forma_pago, clave, orden_id: o.id, anulado: false });
     insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `Anticipo orden #${o.numero}`, monto: +monto, forma_pago, orden_id: o.id, cc_movimiento_id: m.id });
     save(); return m.id;
   },
   async anticiposEncargo(encargoId) { return clone(db.cc_movimientos.filter(m => m.encargo_id === +encargoId && m.tipo === 'pago')); },
-  async registrarAnticipoEncargo(id, { monto, forma_pago, nota = '' }) {
+  async registrarAnticipoEncargo(id, { monto, forma_pago, nota = '', clave = null }) {
+    const ya = clave && db.cc_movimientos.find(x => x.clave === clave);
+    if (ya) return ya.id;   // el mismo anticipo reintentado (igual que en la base)
     if (!(+monto > 0)) throw new Error('El monto del anticipo tiene que ser mayor a cero');
     if (forma_pago === CC) throw new Error('Un anticipo es plata ya cobrada: elegí cómo lo pagó (efectivo, transferencia, etc.)');
     const e = byId('encargos', id); if (!e) throw new Error('Encargo no encontrado');
     if (['entregado', 'cancelado'].includes(e.estado)) throw new Error(`Ese ${e.tipo === 'reserva' ? 'reserva' : 'encargo'} ya está ${e.estado}`);
     if (!e.cliente_id) throw new Error(`Este ${e.tipo === 'reserva' ? 'reserva' : 'encargo'} no tiene un cliente cargado (es a nombre de alguien que todavía no es cliente): no se le puede registrar un anticipo`);
     const etiqueta = e.tipo === 'reserva' ? 'Anticipo reserva N°' : 'Anticipo encargo N°';
-    const m = insert('cc_movimientos', { cliente_id: e.cliente_id, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || `${etiqueta} ${e.numero}`, forma_pago, encargo_id: e.id, anulado: false });
+    const m = insert('cc_movimientos', { cliente_id: e.cliente_id, fecha: now(), tipo: 'pago', monto: -monto, concepto: nota || `${etiqueta} ${e.numero}`, forma_pago, clave, encargo_id: e.id, anulado: false });
     insert('caja_movimientos', { fecha: now(), tipo: 'ingreso', concepto: `${etiqueta} ${e.numero}`, monto: +monto, forma_pago, encargo_id: e.id, cc_movimiento_id: m.id });
     save(); return m.id;
   },

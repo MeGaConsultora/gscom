@@ -18,6 +18,11 @@ function check({ data, error }) {
   throw new Error(error.message);
 }
 const q = async p => check(await p);
+// Registrar con clave (no se duplica al reintentar). Si la base todavía no tiene el SQL que la recibe, se registra sin clave.
+async function rpcConClave(fn, datos, clave) {
+  const r = await sb.rpc(fn, { ...datos, p_clave: clave });
+  return check(r.error?.code === 'PGRST202' ? await sb.rpc(fn, datos) : r);
+}
 
 // Supabase entrega como máximo 1000 filas por consulta: esto las pide en tandas
 // hasta traer todas (o hasta 'max'). 'armar' devuelve la consulta ya ordenada.
@@ -340,8 +345,8 @@ export const store = {
   },
   async borrarPedidoCelular(token) { await sb.from('factura_celular').delete().eq('token', token); },
   async compras() { return q(sb.from('compras').select('*, items:compra_items(*)').order('fecha', { ascending: false }).limit(500)); },
-  async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '' }) {
-    const id = await q(sb.rpc('registrar_compra', { p_proveedor_id: proveedor_id || null, p_nro_comprobante: nro_comprobante || '', p_items: items, p_notas: notas }));
+  async registrarCompra({ proveedor_id, nro_comprobante, items, notas = '', clave = null }) {
+    const id = await rpcConClave('registrar_compra', { p_proveedor_id: proveedor_id || null, p_nro_comprobante: nro_comprobante || '', p_items: items, p_notas: notas }, clave);
     return { id };
   },
   async editarCompra(id, { proveedor_id, nro_comprobante, items, notas = '' }) {
@@ -401,14 +406,14 @@ export const store = {
     return url;
   },
   async quitarFotoOrden(ordenId) { await q(sb.from('ordenes_servicio').update({ foto_url: '' }).eq('id', ordenId)); },
-  async registrarAnticipoOrden(id, { monto, forma_pago, nota = '' }) {
-    return q(sb.rpc('registrar_anticipo_orden', { p_orden_id: id, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }));
+  async registrarAnticipoOrden(id, { monto, forma_pago, nota = '', clave = null }) {
+    return rpcConClave('registrar_anticipo_orden', { p_orden_id: id, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }, clave);
   },
   async anticiposEncargo(encargoId) {
     return q(sb.from('cc_movimientos').select('*').eq('encargo_id', encargoId).eq('tipo', 'pago').order('fecha'));
   },
-  async registrarAnticipoEncargo(id, { monto, forma_pago, nota = '' }) {
-    return q(sb.rpc('registrar_anticipo_encargo', { p_encargo_id: id, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }));
+  async registrarAnticipoEncargo(id, { monto, forma_pago, nota = '', clave = null }) {
+    return rpcConClave('registrar_anticipo_encargo', { p_encargo_id: id, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }, clave);
   },
   async aplicarAnticipoEncargo(encargoId, ventaId) {
     return q(sb.rpc('aplicar_anticipo_encargo', { p_encargo_id: encargoId, p_venta_id: ventaId }));

@@ -108,6 +108,13 @@ function toast(msg, err = false) {
   t.className = 'toast' + (err ? ' err' : ''); t.textContent = msg;
   document.body.appendChild(t); setTimeout(() => t.remove(), err ? 4500 : 2500);
 }
+// Clave de un registro: mientras se reintente con los mismos datos es la misma (la base no lo registra dos veces).
+// Si cambió algo, es otro registro y lleva otra clave. "estado" es un objeto que vive mientras dura esa carga.
+function claveReintento(estado, datos) {
+  const firma = JSON.stringify(datos);
+  if (estado.firma !== firma) { estado.clave = crypto.randomUUID(); estado.firma = firma; }
+  return estado.clave;
+}
 async function conAvisoDeError(fn) { try { return await fn(); } catch (e) { console.error(e); toast(e.message || 'Error', true); } }
 // Un mismo botón no dispara su acción dos veces a la vez: un doble clic (o un clic impaciente mientras todavía guarda) registraría la
 // operación dos veces (ej: ventas duplicadas). La protección va por el elemento que se tocó, no por el código de la acción:
@@ -3151,7 +3158,7 @@ async function imprimirReciboAnticipo(ordenId, ccId) {
 }
 
 function anticipoModal(o, onDone) {
-  let forma = 'Efectivo';
+  let forma = 'Efectivo'; const reintento = {};
   const m = modal(`Anticipo — orden #${o.numero}`, `
     <p class="small muted" style="margin-top:-.4rem">Plata que el cliente ya pagó a cuenta de esta orden (por ejemplo, al confirmar el presupuesto). Entra a caja ahora y se descuenta del total al entregar el equipo.</p>
     <div class="field"><label>Monto</label><input class="input" type="number" step="any" min="0" id="monto"></div>
@@ -3167,7 +3174,8 @@ function anticipoModal(o, onDone) {
     const dia = $('#fecha-ant', m.el).value || hoyISO();
     if (diaFuturo(dia)) return toast('La fecha del pago no puede ser futura', true);
     if (dia < diaLocal(o.fecha_ingreso)) return toast('El pago no puede ser anterior al ingreso del equipo', true);
-    const ccId = await store.registrarAnticipoOrden(o.id, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
+    const datosAnt = { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() };
+    const ccId = await store.registrarAnticipoOrden(o.id, { ...datosAnt, clave: claveReintento(reintento, datosAnt) });
     // otro día que hoy: el pago y su ingreso a caja se reubican en esa fecha (se registran primero y se mueven después)
     const f = fechaDeDia(dia);
     if (f) await store.fijarFechaCobro(ccId, f).catch(() => toast('El anticipo se registró, pero no se pudo cambiar su fecha: quedó como hoy', true));
@@ -3792,7 +3800,7 @@ async function nuevaCompra() {
         items: d.items.map(({ producto_id, cantidad, costo_unitario }) => ({ producto_id, cantidad, costo_unitario })) };
       if (d.editId) await store.editarCompra(d.editId, datos);
       else {
-        const r = await store.registrarCompra(datos);
+        const r = await store.registrarCompra({ ...datos, clave: claveReintento(d.reintento ??= {}, datos) });
         if (d.archivos?.length) await store.guardarArchivosCompra(r.id, d.archivos).catch(() => toast('La compra se registró, pero no se pudo asociar el archivo de la factura', true));
       }
       for (const i of d.items.filter(i => i.margen == null && i.precio_venta !== i.precio_venta_orig)) await store.guardarProducto({ id: i.producto_id, precio_venta: i.precio_venta });
@@ -4426,7 +4434,7 @@ async function encargoModal(e) {
 
 function anticipoEncargoModal(e, onDone) {
   const tipoTxt = e.tipo === 'reserva' ? 'reserva' : 'encargo';
-  let forma = 'Efectivo';
+  let forma = 'Efectivo'; const reintento = {};
   const m = modal(`Anticipo — ${tipoTxt} N° ${e.numero}`, `
     <p class="small muted" style="margin-top:-.4rem">Plata que el cliente ya pagó a cuenta de ${tipoTxt === 'reserva' ? 'esta reserva' : 'este encargo'}. Entra a caja ahora y se descuenta del total cuando se entregue por "Vender".</p>
     <div class="field"><label>Monto</label><input class="input" type="number" step="any" min="0" id="monto"></div>
@@ -4442,7 +4450,8 @@ function anticipoEncargoModal(e, onDone) {
     const dia = $('#fecha-ant', m.el).value || hoyISO();
     if (diaFuturo(dia)) return toast('La fecha del pago no puede ser futura', true);
     if (e.fecha && dia < diaLocal(e.fecha)) return toast(`El pago no puede ser anterior a la fecha ${tipoTxt === 'reserva' ? 'de la reserva' : 'del encargo'}`, true);
-    const ccId = await store.registrarAnticipoEncargo(e.id, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() });
+    const datosAnt = { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim() };
+    const ccId = await store.registrarAnticipoEncargo(e.id, { ...datosAnt, clave: claveReintento(reintento, datosAnt) });
     const f = fechaDeDia(dia);   // otro día que hoy: el pago y su ingreso a caja se reubican en esa fecha
     if (f) await store.fijarFechaCobro(ccId, f).catch(() => toast('El anticipo se registró, pero no se pudo cambiar su fecha: quedó como hoy', true));
     m.close(); toast(`Anticipo registrado · ${money(monto)}${f ? ` · con fecha ${fdate(dia + 'T12:00')}` : ''}`); onDone();
@@ -4605,7 +4614,7 @@ async function nuevoEncargoModal() {
         if (fAnt) await store.fijarFechaCobro(ccId, fAnt);
         antMsg = ` · seña ${money(antMontoVal)} registrada${fAnt ? ` con fecha ${fdate(diaAnt + 'T12:00')}` : ''}`;
       }
-      catch (err) { toast(`Se guardó, pero la seña no se pudo registrar: ${err.message || 'Error'}`, true); }
+      catch (err) { toast(`El encargo se guardó, pero no se pudo confirmar la seña (${err.message || 'Error'}). Revisá la caja antes de cargarla de nuevo.`, true); }
     }
     m.close();
     if (plan.length === 1 && pedidos.size === 1 && !nRes) {   // un solo encargo: como siempre, a su pedido
@@ -4689,6 +4698,7 @@ ROUTES.reportes = async ({ q }) => {
   const vs = ventas.filter(v => !v.anulada && new Date(v.fecha) >= desde);
   const detalle = await store.itemsVendidos(desde.toISOString());
   const total = vs.reduce((s, v) => s + v.total, 0);
+  const recargos = vs.reduce((s, v) => s + (+v.recargo || 0), 0);   // recargo por medio de pago: es parte del total, pero no ganancia
   const costo = detalle.reduce((s, i) => s + i.cantidad * (productos.find(p => p.id === i.producto_id)?.precio_costo || 0), 0);
   const top = Object.values(detalle.reduce((acc, i) => { const k = i.descripcion; acc[k] ??= { nombre: k, cant: 0, total: 0 }; acc[k].cant += i.cantidad; acc[k].total += i.subtotal; return acc; }, {})).sort((a, b) => b.total - a.total).slice(0, 10);
   const partes = vs.flatMap(v => v.pagos?.length ? v.pagos.map(p => [p.forma_pago, +p.monto]) : [[v.forma_pago, +v.total]]);
@@ -4703,7 +4713,7 @@ ROUTES.reportes = async ({ q }) => {
   <div class="page-head"><h1>Reportes</h1><div class="actions">${[7, 30, 90, 365].map(d => `<a class="chip ${d === dias ? 'active' : ''}" href="#/reportes?dias=${d}">${d === 365 ? 'Último año' : `Últimos ${d} días`}</a>`).join('')}</div></div>
   <div class="grid grid-4" style="margin-bottom:1rem">
     <div class="card kpi"><div class="label">Ventas</div><div class="value">${money(total)}</div><div class="sub">${vs.length} ventas · ticket promedio ${money(vs.length ? total / vs.length : 0)}</div></div>
-    <div class="card kpi"><div class="label">Ganancia bruta estimada</div><div class="value">${money(total - costo)}</div><div class="sub">venta − costo de lo vendido</div></div>
+    <div class="card kpi"><div class="label">Ganancia bruta estimada</div><div class="value">${money(total - recargos - costo)}</div><div class="sub">venta − costo de lo vendido${recargos ? ` · sin ${money(recargos)} de recargos` : ''}</div></div>
     <div class="card kpi"><div class="label">Service cobrado</div><div class="value">${money(factService)}</div><div class="sub">${entregadas.length} entregadas · ${ingresadas.length} ingresadas</div></div>
     <div class="card kpi"><div class="label">Demora promedio</div><div class="value">${demora.toFixed(1)} d</div><div class="sub">del ingreso a la entrega</div></div>
   </div>
