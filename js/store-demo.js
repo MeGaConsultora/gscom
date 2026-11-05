@@ -381,12 +381,14 @@ export const store = {
     const ok = new Set(db.ventas.filter(v => !v.anulada && v.fecha >= desdeISO).map(v => v.id));
     return clone(db.venta_items.filter(i => ok.has(i.venta_id)));
   },
-  async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '', pagos = null }) {
+  async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '', pagos = null, clave = null }) {
+    const ya = clave && db.ventas.find(x => x.clave === clave);
+    if (ya) return clone(ya);   // la misma venta reintentada (igual que en la base)
     if (!items.length) throw new Error('La venta no tiene ítems');
     const subtotal = items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0), recargo = recargoDePagos(pagos);
     ({ pagos, forma_pago } = normalizarPagos(pagos, forma_pago, subtotal - (+descuento || 0) + recargo, cliente_id));
     db.seq.venta_numero = (db.seq.venta_numero || 0) + 1;
-    const v = insert('ventas', { numero: db.seq.venta_numero, fecha: now(), cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0, recargo,
+    const v = insert('ventas', { clave, numero: db.seq.venta_numero, fecha: now(), cliente_id: cliente_id || null, subtotal, descuento: +descuento || 0, recargo,
       total: subtotal - (+descuento || 0) + recargo, forma_pago, pagos, notas, anulada: false });
     for (const i of items) {
       insert('venta_items', { venta_id: v.id, producto_id: i.producto_id || null, descripcion: i.descripcion, cantidad: i.cantidad,

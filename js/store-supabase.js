@@ -193,12 +193,15 @@ export const store = {
   // Ventas
   async ventas() { return todas(() => sb.from('ventas').select('*').order('fecha', { ascending: false }).order('id', { ascending: false }), 5000); },
   async venta(id) { return q(sb.from('ventas').select('*, items:venta_items(*), cliente:clientes(*)').eq('id', id).single()); },
-  async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '', pagos = null }) {
-    const id = await q(sb.rpc('registrar_venta', {
+  async registrarVenta({ cliente_id, items, descuento = 0, forma_pago, notas = '', pagos = null, clave = null }) {
+    const datos = {
       p_cliente_id: cliente_id || null,
       p_items: items.map(({ producto_id, descripcion, cantidad, precio_unitario }) => ({ producto_id, descripcion, cantidad, precio_unitario })),
       p_descuento: +descuento || 0, p_forma_pago: forma_pago, p_notas: notas, p_pagos: pagos,
-    }));
+    };
+    let r = await sb.rpc('registrar_venta', { ...datos, p_clave: clave });
+    if (r.error?.code === 'PGRST202') r = await sb.rpc('registrar_venta', datos);   // la base todavía no tiene el SQL 59
+    const id = check(r);
     return q(sb.from('ventas').select('*').eq('id', id).single());
   },
   async itemsVendidos(desdeISO) {

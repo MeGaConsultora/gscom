@@ -747,7 +747,11 @@ ROUTES.vender = async ({ q }) => {
       cart = carritoVacio();
       toast('Venta actualizada'); go('#/caja'); return;
     }
-    const v = await store.registrarVenta({ cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: formaPago, pagos, notas: (cart.notas || '').trim() });
+    const datosVenta = { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: formaPago, pagos, notas: (cart.notas || '').trim() };
+    // Clave de la venta: si falla y se reintenta igual, la base no la registra dos veces. Si cambió algo, es otra venta (otra clave).
+    const firma = JSON.stringify(datosVenta);
+    if (cart.claveFirma !== firma) { cart.clave = crypto.randomUUID(); cart.claveFirma = firma; }
+    const v = await store.registrarVenta({ ...datosVenta, clave: cart.clave });
     const factura = cart.factura || 'no';
     if (factura !== 'no') await guardarFactura(v.id);
     await aplicarFecha(v.id);
