@@ -433,7 +433,10 @@ export const store = {
   async ccSaldos() { return q(sb.from('cc_saldos').select('*').order('saldo', { ascending: false })); },
   async ccMovimientos(clienteId) { return q(sb.from('cc_movimientos').select('*, venta:ventas(notas), encargo:encargos(estado)').eq('cliente_id', clienteId).order('fecha', { ascending: false }).order('id', { ascending: false })); },
   async ccMovimiento(id) { return q(sb.from('cc_movimientos').select('*').eq('id', id).maybeSingle()); },
-  async cobrarCuenta(clienteId, { monto, forma_pago, nota = '', imputaciones = [], recargo = 0, plan = '' }) {
+  async cobrarCuenta(clienteId, { monto, forma_pago, nota = '', imputaciones = [], recargo = 0, plan = '', clave = null }) {
+    const r = await sb.rpc('cobrar_cuenta_plan', { p_cliente_id: clienteId, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota, p_imputaciones: imputaciones, p_recargo: +recargo || 0, p_plan: plan, p_clave: clave });
+    if (r.error?.code !== 'PGRST202') return check(r);
+    // la base todavía no tiene el SQL 60
     if (+recargo > 0) return q(sb.rpc('cobrar_cuenta_plan', { p_cliente_id: clienteId, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota, p_imputaciones: imputaciones, p_recargo: +recargo, p_plan: plan }));
     if (imputaciones.length) return q(sb.rpc('cobrar_cuenta_imputado', { p_cliente_id: clienteId, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota, p_imputaciones: imputaciones }));
     return q(sb.rpc('cobrar_cuenta', { p_cliente_id: clienteId, p_monto: +monto, p_forma_pago: forma_pago, p_nota: nota }));

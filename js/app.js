@@ -3009,7 +3009,7 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
   // con un saldo a favor cargado aparte (sin aplicar a la deuda) se cobra contra la deuda de los conceptos, no contra el saldo neto
   if (movs.some(x => x.tipo === 'ajuste' && x.manual && x.imputa_deuda === false) || deudaPorConcepto(movs, imps).grupos.some(g => g.encargo_id && g.pendiente < -0.009)) saldo = Math.max(pendientes.reduce((s, g) => s + g.pendiente, 0), 0);
   const sel = new Set(preseleccion ? [preseleccion] : pendientes.map(g => g.clave));
-  let forma = 'Efectivo', plan = null;
+  let forma = 'Efectivo', plan = null, claveCobro = null, firmaCobro = null;
   const planes = await planesPago();
   const m = modal(`Cobrar a ${nombre}`, `
     <dl class="kv" style="margin-bottom:.8rem"><dt>Saldo adeudado</dt><dd><b style="color:var(--bad)">${money(saldo)}</b></dd></dl>
@@ -3062,7 +3062,11 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
     let resto = monto; const imputaciones = [];
     for (const g of elegidos()) { const x = Math.min(g.pendiente, resto); if (x > 0.009) { imputaciones.push({ grupo: g.clave, monto: +x.toFixed(2) }); resto -= x; } }
     const recargo = recargoDe(monto, plan);
-    const ccId = await store.cobrarCuenta(clienteId, { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim(), imputaciones, recargo, plan: plan?.plan || '' });
+    const datosCobro = { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim(), imputaciones, recargo, plan: plan?.plan || '' };
+    // Clave del cobro: si falla y se reintenta igual, la base no lo registra dos veces. Si cambió algo, es otro cobro (otra clave).
+    const firma = JSON.stringify(datosCobro);
+    if (firmaCobro !== firma) { claveCobro = crypto.randomUUID(); firmaCobro = firma; }
+    const ccId = await store.cobrarCuenta(clienteId, { ...datosCobro, clave: claveCobro });
     // otro día que hoy: el cobro y su ingreso a caja se reubican en esa fecha (se registran primero y se mueven después)
     const f = fechaDeDia(dia);
     if (f) await store.fijarFechaCobro(ccId, f).catch(() => toast('El cobro se registró, pero no se pudo cambiar su fecha: quedó como hoy', true));
