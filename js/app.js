@@ -2310,7 +2310,9 @@ async function detalleOrden(id) {
             const sp = selectPlan(`data-ep="${k}" style="flex:1"`, p.forma, planes, p.plan);
             return sp ? `<div style="display:flex;gap:.4rem;align-items:center;margin:-.15rem 0 .5rem">${sp}<span style="width:24px"></span></div>` : '';
           })()}`).join('')
-        + (comb.length < 3 ? '<button class="linkbtn small" id="ent-mas" style="padding:0">＋ Otro medio</button>' : '');
+        + `<div class="small" style="display:flex;justify-content:space-between;gap:.5rem">
+            ${comb.length < 3 ? '<button class="linkbtn" id="ent-mas" style="padding:0;white-space:nowrap">＋ Otro medio</button>' : '<span></span>'}
+            <span class="muted">El último medio se completa con lo que falta</span></div>`;
       $$('[data-ef]', box).forEach(s => s.onchange = () => { const p = comb[+s.dataset.ef]; p.forma = s.value; p.plan = planDefecto(s.value, planes); s.blur(); pintarSaldo(); });
       $$('[data-ep]', box).forEach(s => s.onchange = () => { const p = comb[+s.dataset.ep]; p.plan = leerPlan(s, planes, p.plan); s.blur(); pintarSaldo(); });
       $$('[data-em]', box).forEach(inp => {
@@ -2318,9 +2320,14 @@ async function detalleOrden(id) {
         inp.oninput = () => { const p = comb[+inp.dataset.em]; p.monto = Math.max(0, +String(inp.value).replace(',', '.') || 0); p.auto = false; pintarSaldo(); };
         inp.onchange = () => { inp.blur(); pintarSaldo(); };
       });
-      $$('[data-eq]', box).forEach(b => b.onclick = () => { comb.splice(+b.dataset.eq, 1); if (comb.length < 2) { forma = comb[0]?.forma || forma; plan = comb[0]?.plan || null; comb = null; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x.dataset.f === forma)); } pintarSaldo(); });
+      // (se suelta el foco del botón antes de repintar: si no, se lo toma por "está escribiendo un monto" y no se dibuja el cambio)
+      $$('[data-eq]', box).forEach(b => b.onclick = () => { b.blur(); comb.splice(+b.dataset.eq, 1); if (comb.length < 2) { forma = comb[0]?.forma || forma; plan = comb[0]?.plan || null; comb = null; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x.dataset.f === forma)); } pintarSaldo(); });
       const mas = $('#ent-mas', box);
-      if (mas) mas.onclick = () => { const f = FORMAS_PAGO.find(f => !comb.some(p => p.forma === f)) || 'Efectivo'; comb.push({ forma: f, monto: 0, auto: true, plan: planDefecto(f, planes) }); pintarSaldo(); };
+      // como en Ventas: el medio nuevo va antes del último (que sigue completándose con lo que falta) y se pone a cargar su monto
+      if (mas) mas.onclick = () => {
+        mas.blur(); const f = FORMAS_PAGO.find(f => !comb.some(p => p.forma === f)) || 'Efectivo', pos = comb.length - 1;
+        comb.splice(pos, 0, { forma: f, monto: '', auto: false, plan: planDefecto(f, planes) }); pintarSaldo(); $('[data-em="' + pos + '"]', m.el)?.focus();
+      };
     }
     $('#ent-combinar', m.el).onclick = () => { comb = [{ forma, monto: '', auto: false, plan }, { forma: forma === 'Efectivo' ? 'Transferencia' : 'Efectivo', monto: 0, auto: true }]; plan = null; pintarSaldo(); $('[data-em="0"]', m.el)?.focus(); };
     let fact = { estado: o.facturacion || 'no', nro: o.factura_nro || '' };
