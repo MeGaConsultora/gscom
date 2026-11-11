@@ -2868,7 +2868,7 @@ async function cuentaCliente(clienteId) {
   view().innerHTML = `
   <div class="page-head"><div><a href="#/fichero" class="small muted">← Fichero</a><h1>${esc(c.nombre)}</h1></div>
     <div class="actions"><a class="btn" href="#/clientes/${c.id}">Ficha del cliente</a><button class="btn" id="cargo">+ Cargar deuda</button><button class="btn" id="cargo-favor">+ Saldo a favor</button>
-      <button class="btn ok" id="cobrar" ${cobrable > 0.009 ? '' : 'disabled'}>Cobrar</button></div></div>
+      <button class="btn ok" id="cobrar" ${cobrable > 0.009 ? '' : 'title="No debe nada: se registra como pago a cuenta (queda a favor del cliente)"'}>Cobrar</button></div></div>
   <div class="grid grid-3" style="margin-bottom:1rem">
     <div class="card kpi"><div class="label">Total compras</div><div class="value">${money(totalCompras)}</div></div>
     <div class="card kpi"><div class="label">Total pagado</div><div class="value">${money(-movs.filter(m => m.tipo === 'pago' && !m.anulado).reduce((s, m) => s + +m.monto, 0))}</div></div>
@@ -3059,8 +3059,11 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
   const sel = new Set(preseleccion ? [preseleccion] : pendientes.map(g => g.clave));
   let forma = 'Efectivo', plan = null, claveCobro = null, firmaCobro = null;
   const planes = await planesPago();
-  const m = modal(`Cobrar a ${nombre}`, `
-    <dl class="kv" style="margin-bottom:.8rem"><dt>Saldo adeudado</dt><dd><b style="color:var(--bad)">${money(saldo)}</b></dd></dl>
+  // Cliente que no debe nada: lo que se cobra es un pago a cuenta y queda todo como saldo a favor
+  const sinDeuda = !pendientes.length && saldo <= 0.009;
+  const m = modal(sinDeuda ? `Pago a cuenta de ${nombre}` : `Cobrar a ${nombre}`, `
+    ${sinDeuda ? `<p class="small muted" style="margin-bottom:.8rem">${nombre} no debe nada: lo que cobres entra a la caja y queda como <b>saldo a favor</b>${saldo < -0.009 ? ` (hoy tiene ${money(-saldo)} a favor)` : ''}.</p>`
+      : `<dl class="kv" style="margin-bottom:.8rem"><dt>Saldo adeudado</dt><dd><b style="color:var(--bad)">${money(saldo)}</b></dd></dl>`}
     ${pendientes.length ? `<div class="field"><label>¿Qué paga? <span class="muted">(marcá lo que corresponda)</span></label>
       <div class="card" style="max-height:230px;overflow:auto"><table class="tbl small"><tbody>
       ${pendientes.map(g => `<tr><td style="width:28px"><input type="checkbox" data-g="${g.clave}" ${sel.has(g.clave) ? 'checked' : ''}></td>
@@ -3072,7 +3075,7 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
     <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div><div id="cob-plan" style="margin-top:.4rem"></div><div class="small" id="cob-rec" style="margin-top:.3rem"></div></div>
     ${campoFecha('fecha-cobro', '', 'Fecha del cobro')}
     <div class="field"><label>Nota (opcional)</label><input class="input" id="nota" placeholder="ej: entrega a cuenta"></div>`,
-    `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">Registrar cobro</button>`, { wide: true });
+    `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">${sinDeuda ? 'Registrar pago a cuenta' : 'Registrar cobro'}</button>`, { wide: true });
   const inp = $('#monto', m.el), ayuda = $('#ayuda', m.el);
   const elegidos = () => pendientes.filter(g => sel.has(g.clave));
   const sumaSel = () => elegidos().reduce((s, g) => s + g.pendiente, 0);
@@ -3089,7 +3092,7 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
   const pintarAyuda = () => {
     const monto = +inp.value || 0, s = sumaSel();
     pintarRec();
-    ayuda.textContent = !sel.size ? 'Sin conceptos marcados: el pago se aplica a lo más viejo primero.'
+    ayuda.textContent = sinDeuda ? 'Queda como saldo a favor del cliente.' : !sel.size ? 'Sin conceptos marcados: el pago se aplica a lo más viejo primero.'
       : monto < s - 0.009 ? `Pago parcial: se aplica a lo marcado, empezando por lo más viejo (quedan ${money(s - monto)} pendientes de lo marcado).`
       : monto > s + 0.009 ? `Supera lo marcado en ${money(monto - s)}: esa diferencia se aplica al resto de la deuda.`
       : `Cancela ${sel.size === pendientes.length ? 'toda la deuda' : `${sel.size} concepto(s)`}.`;
@@ -3105,7 +3108,7 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
     if (!(monto > 0)) return toast('Ingresá el monto a cobrar', true);
     const dia = $('#fecha-cobro', m.el).value || hoyISO();
     if (diaFuturo(dia)) return toast('La fecha del cobro no puede ser futura', true);
-    if (monto > saldo + 0.009 && !confirm(`El monto supera la deuda (${money(saldo)}). La diferencia queda a favor del cliente. ¿Continuar?`)) return;
+    if (!sinDeuda && monto > saldo + 0.009 && !confirm(`El monto supera la deuda (${money(saldo)}). La diferencia queda a favor del cliente. ¿Continuar?`)) return;
     // Imputación: lo cobrado se reparte entre lo marcado, de lo más viejo a lo más nuevo
     let resto = monto; const imputaciones = [];
     for (const g of elegidos()) { const x = Math.min(g.pendiente, resto); if (x > 0.009) { imputaciones.push({ grupo: g.clave, monto: +x.toFixed(2) }); resto -= x; } }
@@ -3119,7 +3122,7 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
     const f = fechaDeDia(dia);
     if (f) await store.fijarFechaCobro(ccId, f).catch(() => toast('El cobro se registró, pero no se pudo cambiar su fecha: quedó como hoy', true));
     m.close(); onDone();
-    const r = modal('Cobro registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(forma)}${recargo ? ` ${esc(plan.plan)} · con el recargo se cobraron ${money(monto + recargo)}` : ''} · ${esc(nombre)}${f ? ` · con fecha ${fdate(dia + 'T12:00')}` : ''}</div></div>`,
+    const r = modal(sinDeuda ? 'Pago a cuenta registrado' : 'Cobro registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(forma)}${recargo ? ` ${esc(plan.plan)} · con el recargo se cobraron ${money(monto + recargo)}` : ''} · ${esc(nombre)}${f ? ` · con fecha ${fdate(dia + 'T12:00')}` : ''}</div></div>`,
       `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="rec">Imprimir recibo</button>`);
     $('#rec', r.el).onclick = () => run(() => imprimirRecibo(clienteId, ccId));
   });
@@ -3232,13 +3235,16 @@ async function cargoManualModal(clienteId = null, tipo = 'deuda') {
   const favor = tipo === 'favor';
   const clientes = clienteId ? [] : await store.clientes();
   const m = modal(favor ? 'Cargar saldo a favor' : 'Cargar deuda manual', `
-    ${favor ? `<p class="small muted" style="margin-bottom:.8rem">Se suma a lo que el cliente tiene a favor. <b>No entra a la caja</b>: si el cliente te entregó plata, registralo con <b>Cobrar</b>.</p>` : ''}
     ${clienteId ? '' : `<div class="field"><label>Cliente *</label><select class="input" id="cli"><option value="">Elegí un cliente…</option><option value="__nuevo">+ Cliente nuevo…</option>
       ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select></div>`}
+    ${favor ? `<div class="field"><label>¿Cómo se origina?</label>
+      <div class="pay-opts" id="origen"><button class="chip active" data-o="credito">Crédito, sin plata</button><button class="chip" data-o="plata">El cliente entregó plata</button></div>
+      <p class="small muted" id="origen-txt" style="margin:.4rem 0 0"></p></div>
+      <div class="field" id="forma-box" hidden><label>Forma de pago</label><div class="pay-opts" id="forma-pago">${FORMAS_PAGO.map(f => `<button class="chip ${f === 'Efectivo' ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div>` : ''}
     <div class="field"><label>Monto *</label><input class="input" type="number" step="any" min="0" id="monto"></div>
-    <div class="field"><label>Concepto *</label><input class="input" id="concepto" placeholder="${favor ? 'ej: Saldo anterior a favor, nota de crédito, devolución pendiente' : 'ej: Saldo anterior, trabajo a domicilio'}"></div>
+    <div class="field"><label id="concepto-lbl">Concepto *</label><input class="input" id="concepto" placeholder="${favor ? 'ej: Saldo anterior a favor, nota de crédito, devolución pendiente' : 'ej: Saldo anterior, trabajo a domicilio'}"></div>
     ${campoFecha('fecha-mov')}
-    ${favor ? `<label class="small" style="display:flex;gap:.45rem;align-items:flex-start;margin-bottom:.4rem"><input type="checkbox" id="imputa" checked style="margin-top:.15rem">
+    ${favor ? `<label class="small" id="imputa-box" style="display:flex;gap:.45rem;align-items:flex-start;margin-bottom:.4rem"><input type="checkbox" id="imputa" checked style="margin-top:.15rem">
       <span><b>Aplicarlo a lo que ya debe</b><br><span class="muted">Si lo destildás, queda como saldo a favor aparte y no baja las deudas pendientes (el saldo total es el mismo). Lo podés aplicar después.</span></span></label>` : ''}`,
     `<button class="btn" data-close>Cancelar</button><button class="btn primary" id="ok">${favor ? 'Cargar saldo a favor' : 'Cargar'}</button>`);
   const cliSel = $('#cli', m.el);
@@ -3250,12 +3256,43 @@ async function cargoManualModal(clienteId = null, tipo = 'deuda') {
       if (ya) cliSel.value = ya.value; else cliSel.add(new Option(c.nombre, c.id, true, true), cliSel.options.length - 1);
     });
   };
+  // Saldo a favor: "crédito, sin plata" (no toca la caja) o "el cliente entregó plata" (entra a caja como un cobro de cuenta corriente)
+  let origen = 'credito', formaPago = 'Efectivo'; const reintento = {};
+  const pintarOrigen = () => {
+    if (!favor) return;
+    const plata = origen === 'plata';
+    $$('#origen .chip', m.el).forEach(b => b.classList.toggle('active', b.dataset.o === origen));
+    $('#forma-box', m.el).hidden = !plata; $('#imputa-box', m.el).hidden = plata;
+    $('#concepto-lbl', m.el).textContent = plata ? 'Concepto (opcional)' : 'Concepto *';
+    $('#concepto', m.el).placeholder = plata ? 'ej: Seña, pago a cuenta de una compra futura' : 'ej: Saldo anterior a favor, nota de crédito, devolución pendiente';
+    $('#ok', m.el).textContent = plata ? 'Registrar pago a cuenta' : 'Cargar saldo a favor';
+    $('#origen-txt', m.el).innerHTML = plata
+      ? 'Entra a la <b>caja</b> con la forma de pago elegida y se suma a su saldo a favor. Si el cliente debe algo, se aplica primero a lo más viejo (igual que Cobrar). Queda un recibo.'
+      : 'Se suma a lo que el cliente tiene a favor. <b>No entra a la caja</b> (saldo anterior, nota de crédito, devolución pendiente).';
+  };
+  if (favor) {
+    $$('#origen .chip', m.el).forEach(b => b.onclick = () => { origen = b.dataset.o; pintarOrigen(); });
+    $$('#forma-pago .chip', m.el).forEach(b => b.onclick = () => { formaPago = b.dataset.f; $$('#forma-pago .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); });
+    pintarOrigen();
+  }
   $('#ok', m.el).onclick = () => run(async () => {
     const cid = clienteId || +$('#cli', m.el).value, monto = +$('#monto', m.el).value, concepto = $('#concepto', m.el).value.trim();
-    if (!cid || !(monto > 0) || !concepto) return toast('Completá cliente, monto y concepto', true);
+    const plata = favor && origen === 'plata';
+    if (!cid || !(monto > 0) || (!concepto && !plata)) return toast(plata ? 'Completá cliente y monto' : 'Completá cliente, monto y concepto', true);
     const dia = $('#fecha-mov', m.el).value || hoyISO();
     if (diaFuturo(dia)) return toast('La fecha no puede ser futura', true);
     const fecha = fechaDeDia(dia);
+    if (plata) {
+      // Plata que entregó el cliente: un cobro de cuenta corriente sin conceptos marcados (lo que sobre de su deuda queda a favor)
+      const datos = { monto, forma_pago: formaPago, nota: concepto || 'Pago a cuenta', imputaciones: [] };
+      const ccId = await store.cobrarCuenta(cid, { ...datos, clave: claveReintento(reintento, datos) });
+      if (fecha) await store.fijarFechaCobro(ccId, fecha).catch(() => toast('El pago se registró, pero no se pudo cambiar su fecha: quedó como hoy', true));
+      m.close(); cid === clienteId ? render() : go(`#/fichero/${cid}`);
+      const r = modal('Pago a cuenta registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(formaPago)} · entró a caja${fecha ? ` · con fecha ${fdate(dia + 'T12:00')}` : ''}</div></div>`,
+        `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="rec">Imprimir recibo</button>`);
+      $('#rec', r.el).onclick = () => run(() => imprimirRecibo(cid, ccId));
+      return;
+    }
     await (favor ? store.cargarSaldoFavor(cid, { monto, concepto, imputaDeuda: $('#imputa', m.el).checked, fecha }) : store.cargarDeuda(cid, { monto, concepto, fecha }));
     m.close(); toast(favor ? 'Saldo a favor cargado' : 'Deuda cargada'); cid === clienteId ? render() : go(`#/fichero/${cid}`);
   });
