@@ -2285,12 +2285,14 @@ async function detalleOrden(id) {
       $('#paga', m.el).disabled = !saldo || !!comb;
       pintarComb();
       $('#saldo-restante', m.el).innerHTML = !saldo ? '<span class="muted">Nada más que cobrar.</span>'
-        : +$('#paga', m.el).value > saldo + 0.009 ? `<span style="color:var(--bad)">No puede pagar más que el saldo (${money(saldo)}).</span>`
+        : +$('#paga', m.el).value > saldo + 0.009 ? `<span style="color:var(--bad)">No puede pagar más que el saldo (${money(saldo)}).${recargo || (comb || plan) ? ' Cargá cada monto <b>sin</b> el recargo de la tarjeta: se suma aparte.' : ''}</span>`
         : queda > 0.009 ? `Paga ${money(paga)} ahora${paga ? ` (${textoFormas().toLowerCase()})` : ''} y <b>quedan ${money(queda)} como deuda en su cuenta corriente</b> (Fichero).`
         : `Paga el saldo completo ahora (${textoFormas().toLowerCase()}).`;
       $('#nota-interna-box', m.el).hidden = tot !== 0;
     };
     const textoFormas = () => comb ? comb.map(p => p.forma).join(' + ') : forma;
+    // "+$ 2 → cobra $ 22": lo que el recargo suma sobre la parte del precio que se paga con ese medio
+    const textoRecargoParte = p => { const r = p.plan ? recargoDe(+p.monto || 0, p.plan) : 0; return r ? `+${money(r)} → cobra ${money((+p.monto || 0) + r)}` : ''; };
     function pintarComb() {
       $('#ent-chips', m.el).hidden = !!comb; $('#ent-combinar', m.el).hidden = !!comb;
       const box = $('#ent-comb', m.el), pb = $('#ent-plan', m.el);
@@ -2301,18 +2303,20 @@ async function detalleOrden(id) {
       }
       if (!comb) { box.innerHTML = ''; return; }
       if (box.contains(document.activeElement)) {   // mientras escribe un monto no se repinta: solo se actualiza el que se completa solo
-        comb.forEach((p, k) => { const i = $('[data-em="' + k + '"]', box); if (p.auto && i && i !== document.activeElement) i.value = p.monto; }); return;
+        comb.forEach((p, k) => { const i = $('[data-em="' + k + '"]', box); if (p.auto && i && i !== document.activeElement) i.value = p.monto;
+          const r = $('[data-er="' + k + '"]', box); if (r) r.textContent = textoRecargoParte(p); });
+        return;
       }
       box.innerHTML = comb.map((p, k) => `<div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.4rem">
           <select class="input" data-ef="${k}" style="flex:1">${FORMAS_PAGO.map(f => `<option ${f === p.forma ? 'selected' : ''}>${f}</option>`).join('')}</select>
           <input class="input" data-em="${k}" value="${p.monto ?? ''}" inputmode="decimal" placeholder="Monto" style="width:120px;text-align:right">
           <button class="x" data-eq="${k}" title="Quitar este medio">×</button></div>${(() => {
             const sp = selectPlan(`data-ep="${k}" style="flex:1"`, p.forma, planes, p.plan);
-            return sp ? `<div style="display:flex;gap:.4rem;align-items:center;margin:-.15rem 0 .5rem">${sp}<span style="width:24px"></span></div>` : '';
+            return sp ? `<div style="display:flex;gap:.4rem;align-items:center;margin:-.15rem 0 .5rem">${sp}<span class="small muted nowrap" data-er="${k}" style="width:120px;text-align:right">${textoRecargoParte(p)}</span><span style="width:24px"></span></div>` : '';
           })()}`).join('')
         + `<div class="small" style="display:flex;justify-content:space-between;gap:.5rem">
             ${comb.length < 3 ? '<button class="linkbtn" id="ent-mas" style="padding:0;white-space:nowrap">＋ Otro medio</button>' : '<span></span>'}
-            <span class="muted">El último medio se completa con lo que falta</span></div>`;
+            <span class="muted" style="text-align:right">Cada monto es parte del precio: el recargo de la tarjeta se suma aparte y no cuenta contra el saldo. El último medio se completa con lo que falta.</span></div>`;
       $$('[data-ef]', box).forEach(s => s.onchange = () => { const p = comb[+s.dataset.ef]; p.forma = s.value; p.plan = planDefecto(s.value, planes); s.blur(); pintarSaldo(); });
       $$('[data-ep]', box).forEach(s => s.onchange = () => { const p = comb[+s.dataset.ep]; p.plan = leerPlan(s, planes, p.plan); s.blur(); pintarSaldo(); });
       $$('[data-em]', box).forEach(inp => {
@@ -2321,11 +2325,11 @@ async function detalleOrden(id) {
         inp.onchange = () => { inp.blur(); pintarSaldo(); };
       });
       // (se suelta el foco del botón antes de repintar: si no, se lo toma por "está escribiendo un monto" y no se dibuja el cambio)
-      $$('[data-eq]', box).forEach(b => b.onclick = () => { b.blur(); comb.splice(+b.dataset.eq, 1); if (comb.length < 2) { forma = comb[0]?.forma || forma; plan = comb[0]?.plan || null; comb = null; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x.dataset.f === forma)); } pintarSaldo(); });
+      $$('[data-eq]', box).forEach(b => b.onclick = () => { document.activeElement?.blur?.(); comb.splice(+b.dataset.eq, 1); if (comb.length < 2) { forma = comb[0]?.forma || forma; plan = comb[0]?.plan || null; comb = null; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x.dataset.f === forma)); } pintarSaldo(); });
       const mas = $('#ent-mas', box);
       // como en Ventas: el medio nuevo va antes del último (que sigue completándose con lo que falta) y se pone a cargar su monto
       if (mas) mas.onclick = () => {
-        mas.blur(); const f = FORMAS_PAGO.find(f => !comb.some(p => p.forma === f)) || 'Efectivo', pos = comb.length - 1;
+        document.activeElement?.blur?.(); const f = FORMAS_PAGO.find(f => !comb.some(p => p.forma === f)) || 'Efectivo', pos = comb.length - 1;
         comb.splice(pos, 0, { forma: f, monto: '', auto: false, plan: planDefecto(f, planes) }); pintarSaldo(); $('[data-em="' + pos + '"]', m.el)?.focus();
       };
     }
