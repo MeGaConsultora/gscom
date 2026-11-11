@@ -467,7 +467,7 @@ function bindRowLinks() {
 // =====================================================================
 // VENDER (punto de venta)
 // =====================================================================
-const carritoVacio = () => ({ items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', plan: null, notas: '', editId: null, editNumero: null, factura: 'no', facturaNro: '', fecha: '' });
+const carritoVacio = () => ({ items: [], cliente_id: '', descuento: 0, forma_pago: 'Efectivo', plan: null, notas: '', editId: null, editNumero: null, factura: 'no', facturaNro: '', fecha: '', favor: 0 });
 
 // Facturación de una venta: solo se registra el estado (no emite nada en AFIP)
 const FACTURA_ESTADOS = { no: ['No se factura', 'gray'], pendiente: ['Pendiente de emitir', 'amber'], emitida: ['Emitida', 'green'] };
@@ -523,7 +523,11 @@ ROUTES.vender = async ({ q }) => {
         <div class="row" style="gap:.4rem"><select class="input" id="cliente"><option value="">Consumidor final</option>
           ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}${c.dni_cuit ? ' — ' + esc(c.dni_cuit) : ''}</option>`).join('')}</select>
           <button class="btn" id="nuevo-cli" style="flex:0 0 auto" title="Nuevo cliente">+</button></div></div>
-      <div class="field"><label>Forma de pago</label><div class="pay-opts" id="pagos">
+      <div class="field" id="favor-box" hidden><label>Saldo a favor del cliente: <b id="favor-libre"></b></label>
+        <div style="display:flex;gap:.4rem;align-items:center"><span class="small muted">Aplicar a esta venta</span>
+          <input class="input" type="number" step="any" min="0" id="favor-monto" placeholder="0" style="width:130px;text-align:right"><button class="btn sm" id="favor-todo" type="button">Todo</button></div>
+        <div class="small muted" id="favor-nota" style="margin-top:.25rem"></div></div>
+      <div class="field" id="pago-field"><label>Forma de pago</label><div class="pay-opts" id="pagos">
         ${FORMAS_COBRO.map(f => `<button class="chip" data-f="${f}">${f}</button>`).join('')}</div>
         <div id="plan-box" style="margin-top:.45rem"></div>
         <div id="pagos-comb"></div>
@@ -540,15 +544,29 @@ ROUTES.vender = async ({ q }) => {
       <div class="row small muted"><span>Subtotal</span><span class="right" id="subt"></span></div>
       <div class="row small muted" id="desc-fila" hidden><span id="desc-lbl">Descuento</span><span class="right" id="desc-monto"></span></div>
       <div class="row small muted" id="rec-fila" hidden title="En el comprobante del cliente no se muestra aparte: se ve solo el total"><span id="rec-lbl">Recargo</span><span class="right" id="rec-monto"></span></div>
+      <div class="row small muted" id="favor-fila" hidden><span>Saldo a favor aplicado</span><span class="right" id="favor-txt"></span></div>
       <div class="row" style="align-items:baseline;margin:.3rem 0 1rem"><span>Total</span><span class="right total-box" id="tot"></span></div>
+      <div class="row" id="ahora-fila" style="align-items:baseline;margin:-.6rem 0 1rem" hidden><span>A cobrar ahora</span><b class="right" id="ahora"></b></div>
       <div class="small muted" id="cuotas-txt" style="text-align:right;margin:-.8rem 0 .9rem" hidden></div>
       <button class="btn ok lg block" id="cobrar">${cart.editId ? 'Guardar cambios' : 'Cobrar'}</button>
     </div>
   </div>`;
 
   const scan = $('#scan'), sug = $('#sug');
+  // Saldo a favor del cliente elegido (no vinculado a ninguna venta ni servicio): se ofrece aplicarlo, empezando en 0. No al editar una venta.
+  let favorLibre = 0, favorAparte = 0;
+  const baseVenta = () => cart.items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0) - (+cart.descuento || 0);
+  const favorAplicado = base => cart.editId ? 0 : Math.min(Math.max(Math.round((+cart.favor || 0) * 100) / 100, 0), favorLibre, Math.max(Math.round(base * 100) / 100, 0));
+  const cargarFavor = async () => {
+    const cid = cart.cliente_id; favorLibre = favorAparte = 0;
+    if (cid && !cart.editId) { const f = await saldoFavorLibre(+cid).catch(() => null); if (f && cid === cart.cliente_id) { favorLibre = f.libre; favorAparte = f.aparte; } }
+    if (favorLibre < 0.01) cart.favor = 0;
+    paintCart();
+  };
   $('#cliente').value = cart.cliente_id;
-  $('#cliente').onchange = e => cart.cliente_id = e.target.value;
+  $('#cliente').onchange = e => { cart.cliente_id = e.target.value; cart.favor = 0; cargarFavor(); };
+  $('#favor-monto').oninput = e => { cart.favor = Math.max(0, +String(e.target.value).replace(',', '.') || 0); paintCart(); };
+  $('#favor-todo').onclick = () => { cart.favor = Math.min(favorLibre, Math.max(baseVenta(), 0)); paintCart(); };
   const paintPago = () => $$('#pagos .chip').forEach(b => b.classList.toggle('active', b.dataset.f === cart.forma_pago));
   $$('#pagos .chip').forEach(b => b.onclick = () => { if (cart.forma_pago !== b.dataset.f) cart.plan = planDefecto(b.dataset.f, planes); cart.forma_pago = b.dataset.f; paintPago(); paintCart(); });
   paintPago();
@@ -679,17 +697,27 @@ ROUTES.vender = async ({ q }) => {
     $('#desc-lbl').textContent = cart.descModo === 'pct' ? `Descuento (${cart.descValor}%)` : 'Descuento';
     $('#desc-monto').textContent = `−${money(cart.descuento)}`;
     // recargo del medio de pago (sobre la parte que se paga con ese medio)
-    const base = subtotal - cart.descuento, partes = partesVenta(base), recargo = partes.reduce((s, p) => s + (p.recargo || 0), 0);
+    // el saldo a favor aplicado baja lo que se paga con medios de pago (el recargo va solo sobre esa parte)
+    const base = subtotal - cart.descuento, favor = favorAplicado(base), baseMedios = Math.round((base - favor) * 100) / 100;
+    const partes = partesVenta(baseMedios), recargo = partes.reduce((s, p) => s + (p.recargo || 0), 0);
+    $('#favor-box').hidden = !(favorLibre > 0.009);
+    $('#favor-libre').textContent = money(favorLibre);
+    const fi = $('#favor-monto'); if (document.activeElement !== fi) fi.value = cart.favor ? cart.favor : '';
+    $('#favor-nota').textContent = favor ? `Se descuentan ${money(favor)} de su saldo a favor: por esa parte no entra plata a la caja (ya entró cuando el cliente la dejó).` : `Es opcional: si no aplicás nada, se cobra todo con los medios de pago.${favorAparte > 0.009 ? ` Tiene además ${money(favorAparte)} a favor "sin aplicar a la deuda" (no se ofrece acá).` : ''}`;
+    $('#favor-fila').hidden = !favor; $('#favor-txt').textContent = `−${money(favor)}`;
+    $('#ahora-fila').hidden = !favor; $('#ahora').textContent = money(baseMedios + recargo);
+    $('#pago-field').hidden = favor > 0.009 && baseMedios <= 0.009;   // cubierto del todo con el saldo a favor: no hay medio de pago que elegir
     $('#rec-fila').hidden = !recargo;
     $('#rec-lbl').textContent = !cart.pagos && cart.plan ? `Recargo (${cart.plan.plan}, ${cart.plan.pct}%)` : 'Recargo';
     $('#rec-monto').textContent = `+${money(recargo)}`;
     $('#tot').textContent = money(base + recargo);
     const cuotas = partes.filter(p => p.cuotas > 1).map(p => `${partes.length > 1 ? `${p.forma_pago}: ` : ''}${textoCuotas(p.monto, p)}`).join(' · ');
     $('#cuotas-txt').hidden = !cuotas; $('#cuotas-txt').textContent = cuotas;
-    pintarPagos(base);
+    pintarPagos(baseMedios);
     $('#cobrar').disabled = !cart.items.length;
   }
   paintCart();
+  cargarFavor();
   scan.focus();
 
   $('#vaciar').onclick = () => {
@@ -728,14 +756,23 @@ ROUTES.vender = async ({ q }) => {
     if (diaFuturo(cart.fecha)) return toast('La fecha de la venta no puede ser futura', true);
     // pago combinado: las partes con monto (el último medio lleva lo que falta)
     let pagos = null;
-    const base = cart.items.reduce((s, i) => s + i.cantidad * i.precio_unitario, 0) - (+cart.descuento || 0);
-    if (cart.pagos) {
-      pagos = partesVenta(base);
-      if (pagos.some(p => !(p.monto > 0))) return toast('Completá el monto de cada medio de pago (y que no superen el total)', true);
-      if (new Set(pagos.map(p => p.forma_pago)).size < pagos.length) return toast('Elegiste dos veces el mismo medio de pago', true);
-      if (pagos.some(p => p.forma_pago === CUENTA_CORRIENTE) && !cart.cliente_id) return toast('Para dejar una parte a cuenta corriente elegí el cliente', true);
-    } else if (cart.forma_pago === CUENTA_CORRIENTE && !cart.cliente_id) return toast('Para vender a cuenta corriente elegí el cliente', true);
-    else if (cart.plan) pagos = partesVenta(base);   // un solo medio con plan: va como parte, para guardar el recargo y el plan
+    const base = baseVenta();
+    // saldo a favor aplicado: lo que se paga con medios es el resto; esa parte queda a cuenta corriente y el Fichero la cubre con el saldo
+    const favor = favorAplicado(base), baseMedios = Math.round((base - favor) * 100) / 100;
+    if (baseMedios > 0.009) {
+      if (cart.pagos) {
+        pagos = partesVenta(baseMedios);
+        if (pagos.some(p => !(p.monto > 0))) return toast('Completá el monto de cada medio de pago (y que no superen el total)', true);
+        if (new Set(pagos.map(p => p.forma_pago)).size < pagos.length) return toast('Elegiste dos veces el mismo medio de pago', true);
+        if (pagos.some(p => p.forma_pago === CUENTA_CORRIENTE) && !cart.cliente_id) return toast('Para dejar una parte a cuenta corriente elegí el cliente', true);
+      } else if (cart.forma_pago === CUENTA_CORRIENTE && !cart.cliente_id) return toast('Para vender a cuenta corriente elegí el cliente', true);
+      else if (cart.plan || favor > 0.009) pagos = partesVenta(baseMedios);   // un solo medio con plan (o con saldo a favor): va como parte
+    }
+    if (favor > 0.009) {
+      pagos = (pagos || []).map(p => ({ ...p }));
+      const cc = pagos.find(p => p.forma_pago === CUENTA_CORRIENTE);
+      if (cc) cc.monto = Math.round((cc.monto + favor) * 100) / 100; else pagos.push({ forma_pago: CUENTA_CORRIENTE, monto: favor });
+    }
     const formaPago = pagos ? pagos.map(p => p.forma_pago).join(' + ') : cart.forma_pago;
     const sinStock = cart.items.filter(i => i.producto_id && !i.es_servicio && i.cantidad > disponibleDe(i));
     if (sinStock.length && !confirm(`Hay ${sinStock.length} producto(s) sin stock disponible suficiente según el sistema (contando lo reservado para otros clientes). ¿Registrar la venta igual?`)) return;
@@ -755,7 +792,8 @@ ROUTES.vender = async ({ q }) => {
       cart = carritoVacio();
       toast('Venta actualizada'); go('#/caja'); return;
     }
-    const datosVenta = { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: formaPago, pagos, notas: (cart.notas || '').trim() };
+    const notasVenta = [(cart.notas || '').trim(), favor > 0.009 ? `Saldo a favor aplicado ${money(favor)}` : ''].filter(Boolean).join(' · ');
+    const datosVenta = { cliente_id: cart.cliente_id ? +cart.cliente_id : null, items: cart.items, descuento: cart.descuento, forma_pago: formaPago, pagos, notas: notasVenta };
     // Clave de la venta: si falla y se reintenta igual, la base no la registra dos veces. Si cambió algo, es otra venta (otra clave).
     const firma = JSON.stringify(datosVenta);
     if (cart.claveFirma !== firma) { cart.clave = crypto.randomUUID(); cart.claveFirma = firma; }
@@ -771,6 +809,7 @@ ROUTES.vender = async ({ q }) => {
     }
     cart = carritoVacio();
     const m = modal(`Venta #${v.numero} registrada`, `<div class="empty" style="padding:1rem"><div class="total-box">${money(v.total)}</div><div class="muted">${esc(textoPago(v))}</div>
+      ${favor > 0.009 ? `<div class="small" style="margin-top:.4rem">Se aplicaron <b>${money(favor)}</b> de su saldo a favor (la parte "Cuenta corriente" queda cubierta con ese saldo)</div>` : ''}
       ${diaVenta ? `<div class="small" style="margin-top:.4rem">Con fecha <b>${fdate(diaVenta + 'T12:00')}</b></div>` : ''}
       ${factura === 'pendiente' ? '<div class="small" style="margin-top:.6rem"><span class="pill amber">Factura pendiente de emitir</span> · la ves en la pestaña Facturas</div>'
         : factura === 'emitida' ? '<div class="small" style="margin-top:.6rem"><span class="pill green">Factura emitida</span></div>' : ''}</div>`,
@@ -2237,8 +2276,10 @@ async function detalleOrden(id) {
   const ent = $('#entregar');
   if (ent) ent.onclick = async () => {
     ent.disabled = true;
-    const planes = await planesPago();
+    const [planes, favorInfo] = await Promise.all([planesPago(), saldoFavorLibre(o.cliente.id).catch(() => ({ libre: 0, aparte: 0 }))]);
     ent.disabled = false;
+    const favorLibre = favorInfo.libre;   // saldo a favor del cliente que no está vinculado a ninguna venta ni servicio
+    let favorApl = 0;                     // lo que se decide aplicar a esta entrega (arranca en 0)
     const tItems = totalItems();
     const sugerido = tItems || o.presupuesto || 0;
     let forma = 'Efectivo', plan = null, pagaEditado = false, comb = null;   // comb: [{ forma, monto, auto }] si paga con más de un medio
@@ -2246,6 +2287,10 @@ async function detalleOrden(id) {
       <div class="field"><label>Total del trabajo</label><input class="input" type="number" step="any" min="0" id="tot" value="${sugerido}"></div>
       <p class="small muted" style="margin:-.4rem 0 .8rem">${tItems ? 'Sugerido: total del detalle final.' : o.presupuesto ? 'Sugerido: presupuesto.' : esArmado ? 'Cargá el total del trabajo.' : 'Poné 0 si no se cobra (garantía, sin reparación).'}</p>
       <table class="tbl small" style="margin-bottom:.8rem"><tbody id="cuentas-ent"></tbody></table>
+      ${favorLibre > 0.009 ? `<div class="field"><label>Saldo a favor de ${esc(o.cliente.nombre)}: <b>${money(favorLibre)}</b></label>
+        <div style="display:flex;gap:.4rem;align-items:center"><span class="small muted">Aplicar a esta entrega</span>
+          <input class="input" type="number" step="any" min="0" id="favor-ent" placeholder="0" style="width:130px;text-align:right"><button class="btn sm" id="favor-ent-todo" type="button">Todo</button></div>
+        <div class="small muted" style="margin-top:.25rem">Se descuenta de lo que paga ahora: por esa parte no entra plata a la caja (ya entró cuando el cliente la dejó).${favorInfo.aparte > 0.009 ? ` Tiene además ${money(favorInfo.aparte)} a favor cargado "sin aplicar a la deuda": para usarlo, aplicalo a la deuda desde el Fichero.` : ''}</div></div>` : ''}
       <div class="row" style="align-items:flex-end"><div class="field" style="flex:0 0 170px"><label>Paga ahora</label><input class="input" type="number" step="any" min="0" id="paga"></div>
         <div class="field"><label>Forma de pago</label><div class="pay-opts" id="ent-chips">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div>
           <div id="ent-plan" style="margin-top:.4rem"></div><div id="ent-comb"></div><button class="linkbtn small" id="ent-combinar" style="margin-top:.4rem;padding:0">＋ Combinar dos medios de pago</button></div></div>
@@ -2265,29 +2310,34 @@ async function detalleOrden(id) {
     // Total − pagos a cuenta = saldo; de ese saldo, lo que no paga ahora queda en su cuenta corriente
     const cuentas = () => {
       const tot = +$('#tot', m.el).value || 0, saldo = Math.max(tot - anticipadoTotal, 0);
-      if (comb) {   // con pago combinado, "Paga ahora" es la suma de los medios; el último se completa solo hasta el saldo (si no lo tocaste)
+      // saldo a favor aplicado: baja lo que hay que cobrar ahora (queda como parte a cuenta corriente, que el Fichero cubre con ese saldo)
+      const favor = Math.min(Math.max(Math.round((+favorApl || 0) * 100) / 100, 0), favorLibre, saldo), aCobrar = Math.round((saldo - favor) * 100) / 100;
+      if (comb) {   // con pago combinado, "Paga ahora" es la suma de los medios; el último se completa solo hasta lo que hay que cobrar (si no lo tocaste)
         const ult = comb[comb.length - 1];
-        if (ult.auto) ult.monto = Math.max(Math.round((saldo - comb.slice(0, -1).reduce((s, p) => s + (+p.monto || 0), 0)) * 100) / 100, 0);
+        if (ult.auto) ult.monto = Math.max(Math.round((aCobrar - comb.slice(0, -1).reduce((s, p) => s + (+p.monto || 0), 0)) * 100) / 100, 0);
         $('#paga', m.el).value = Math.round(comb.reduce((s, p) => s + (+p.monto || 0), 0) * 100) / 100;
-      } else if (!pagaEditado) $('#paga', m.el).value = saldo;
-      const paga = Math.min(Math.max(+$('#paga', m.el).value || 0, 0), saldo);
+      } else if (!pagaEditado) $('#paga', m.el).value = aCobrar;
+      const paga = Math.min(Math.max(+$('#paga', m.el).value || 0, 0), aCobrar);
       // partes de lo que paga ahora, cada una con su recargo (la deuda baja en "paga"; a caja entra con el recargo)
       const partes = comb ? comb.filter(p => +p.monto > 0).map(p => partePago(p.forma, +p.monto, p.plan)) : paga > 0 ? [partePago(forma, paga, plan)] : [];
-      return { tot, saldo, paga, queda: saldo - paga, partes, recargo: partes.reduce((s, p) => s + (p.recargo || 0), 0) };
+      return { tot, saldo, favor, aCobrar, paga, queda: aCobrar - paga, partes, recargo: partes.reduce((s, p) => s + (p.recargo || 0), 0) };
     };
     const pintarSaldo = () => {
-      const { tot, saldo, paga, queda, partes, recargo } = cuentas();
+      const { tot, saldo, favor, aCobrar, paga, queda, partes, recargo } = cuentas();
       $('#cuentas-ent', m.el).innerHTML = `<tr><td>Total del trabajo</td><td class="num">${money(tot)}</td></tr>
         ${anticipadoTotal ? `<tr><td>Pagos a cuenta (anticipos)</td><td class="num">−${money(Math.min(anticipadoTotal, tot))}</td></tr>` : ''}
         <tr><td><b>Saldo</b></td><td class="num"><b>${money(saldo)}</b></td></tr>
+        ${favor ? `<tr><td>Saldo a favor aplicado</td><td class="num">−${money(favor)}</td></tr><tr><td><b>A cobrar ahora</b></td><td class="num"><b>${money(aCobrar)}</b></td></tr>` : ''}
         ${recargo ? `<tr><td>Recargo${!comb && plan ? ` (${esc(plan.plan)}, ${plan.pct}%)` : ''} <span class="muted">· en el comprobante no se ve aparte</span></td><td class="num">+${money(recargo)}</td></tr>
           <tr><td>Se cobra ahora${partes.some(p => p.cuotas > 1) ? ` <span class="muted">(${partes.filter(p => p.cuotas > 1).map(p => textoCuotas(p.monto, p)).join(' · ')})</span>` : ''}</td><td class="num"><b>${money(paga + recargo)}</b></td></tr>` : ''}`;
-      $('#paga', m.el).disabled = !saldo || !!comb;
+      $('#paga', m.el).disabled = !aCobrar || !!comb;
+      const fe = $('#favor-ent', m.el); if (fe && document.activeElement !== fe) fe.value = favor || '';
       pintarComb();
       $('#saldo-restante', m.el).innerHTML = !saldo ? '<span class="muted">Nada más que cobrar.</span>'
-        : +$('#paga', m.el).value > saldo + 0.009 ? `<span style="color:var(--bad)">No puede pagar más que el saldo (${money(saldo)}).${recargo || (comb || plan) ? ' Cargá cada monto <b>sin</b> el recargo de la tarjeta: se suma aparte.' : ''}</span>`
+        : !aCobrar ? `<span class="muted">Queda cubierto con el saldo a favor del cliente: no hay nada para cobrar ahora.</span>`
+        : +$('#paga', m.el).value > aCobrar + 0.009 ? `<span style="color:var(--bad)">No puede pagar más que lo que hay que cobrar (${money(aCobrar)}).${recargo || (comb || plan) ? ' Cargá cada monto <b>sin</b> el recargo de la tarjeta: se suma aparte.' : ''}</span>`
         : queda > 0.009 ? `Paga ${money(paga)} ahora${paga ? ` (${textoFormas().toLowerCase()})` : ''} y <b>quedan ${money(queda)} como deuda en su cuenta corriente</b> (Fichero).`
-        : `Paga el saldo completo ahora (${textoFormas().toLowerCase()}).`;
+        : `Paga ${favor ? 'lo que falta' : 'el saldo completo'} ahora (${textoFormas().toLowerCase()}).`;
       $('#nota-interna-box', m.el).hidden = tot !== 0;
     };
     const textoFormas = () => comb ? comb.map(p => p.forma).join(' + ') : forma;
@@ -2338,19 +2388,27 @@ async function detalleOrden(id) {
     controlFactura($('#ent-factura', m.el), fact, x => { fact = x; });
     $('#tot', m.el).oninput = pintarSaldo;
     $('#paga', m.el).oninput = () => { pagaEditado = true; pintarSaldo(); };
+    const favorEnt = $('#favor-ent', m.el);
+    if (favorEnt) {
+      favorEnt.oninput = () => { favorApl = Math.max(0, +String(favorEnt.value).replace(',', '.') || 0); pagaEditado = false; pintarSaldo(); };
+      $('#favor-ent-todo', m.el).onclick = () => { favorApl = Math.min(favorLibre, Math.max((+$('#tot', m.el).value || 0) - anticipadoTotal, 0)); pagaEditado = false; pintarSaldo(); };
+    }
     $$('#ent-chips .chip', m.el).forEach(b => b.onclick = () => { if (forma !== b.dataset.f) plan = planDefecto(b.dataset.f, planes); forma = b.dataset.f; $$('#ent-chips .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); pintarSaldo(); });
     pintarSaldo();
     $('#ok', m.el).onclick = () => run(async () => {
-      const { tot, saldo, paga, queda, partes, recargo } = cuentas();
+      const { tot, saldo, favor, aCobrar, paga, queda, partes, recargo } = cuentas();
       const diaEnt = $('#fecha-entrega', m.el).value || hoyISO();
       if (diaFuturo(diaEnt)) return toast('La fecha de la entrega no puede ser futura', true);
       if (diaEnt < diaLocal(o.fecha_ingreso)) return toast('La entrega no puede ser anterior al ingreso del equipo', true);
-      if (+$('#paga', m.el).value > saldo + 0.009) return toast(`No puede pagar más que el saldo (${money(saldo)})`, true);
+      if (+$('#paga', m.el).value > aCobrar + 0.009) return toast(`No puede pagar más que lo que hay que cobrar (${money(aCobrar)})`, true);
       const pagos = comb || recargo ? partes : null;   // un solo medio con recargo también va como parte (guarda el plan)
       if (pagos && new Set(pagos.map(p => p.forma_pago)).size < pagos.length) return toast('Elegiste dos veces el mismo medio de pago', true);
       if (queda > 0.009 && !confirm(`Quedan ${money(queda)} como deuda en la cuenta corriente de ${o.cliente.nombre}. ¿Confirmar la entrega?`)) return;
+      // El saldo a favor aplicado queda como parte a cuenta corriente de la orden: el Fichero la cubre solo con ese saldo (no entra plata a caja).
+      // Se deja anotado para el comprobante: si no, parecería que el cliente quedó debiendo esa parte.
+      const notaInterna = [$('#nota-interna', m.el).value.trim(), favor > 0.009 ? `Saldo a favor aplicado: $${favor}` : ''].filter(Boolean).join(' · ');
       await store.entregarOrden(id, { total: tot, forma_pago: paga > 0 ? textoFormas() : CUENTA_CORRIENTE, pagado: paga, pagos: pagos?.length ? pagos : null,
-        comentario: $('#msg', m.el).value.trim(), notaInterna: $('#nota-interna', m.el).value.trim() });
+        comentario: $('#msg', m.el).value.trim(), notaInterna });
       // otro día que hoy: la entrega y su cobro se reubican en esa fecha (se registran primero y se mueven después)
       const fEnt = fechaDeDia(diaEnt);
       if (fEnt) await store.fijarFechaEntrega(id, fEnt).catch(() => toast('Se entregó, pero no se pudo cambiar la fecha de la entrega: quedó como hoy', true));
@@ -2358,7 +2416,7 @@ async function detalleOrden(id) {
       if (fact.estado !== (o.facturacion || 'no') || fact.nro !== (o.factura_nro || '')) await store.establecerFacturaOrden(id, fact).catch(() => toast('Se entregó, pero no se pudo guardar el estado de la factura: cambialo desde la orden', true));
       m.close(); render();
       const r = modal(esArmado ? 'Equipo nuevo entregado' : 'Reparación entregada', `<div class="empty" style="padding:1rem"><div class="total-box">${money(tot + recargo)}</div>
-          <div class="muted">${paga ? `Pagó ${money(paga + recargo)} (${esc(partes.map(p => `${p.forma_pago}${p.plan ? ` ${p.plan}` : ''}${partes.length > 1 ? ` ${money(p.monto)}` : ''}`).join(' + '))})` : saldo ? 'No pagó al retirar' : 'Sin saldo a cobrar'}${queda > 0.009 ? ` · quedan ${money(queda)} en su cuenta corriente` : ''}</div>
+          <div class="muted">${paga ? `Pagó ${money(paga + recargo)} (${esc(partes.map(p => `${p.forma_pago}${p.plan ? ` ${p.plan}` : ''}${partes.length > 1 ? ` ${money(p.monto)}` : ''}`).join(' + '))})` : saldo && !favor ? 'No pagó al retirar' : saldo ? '' : 'Sin saldo a cobrar'}${favor ? `${paga ? ' · ' : ''}se aplicaron ${money(favor)} de su saldo a favor` : ''}${queda > 0.009 ? ` · quedan ${money(queda)} en su cuenta corriente` : ''}</div>
           ${fEnt ? `<div class="small" style="margin-top:.4rem">Con fecha <b>${fdate(diaEnt + 'T12:00')}</b></div>` : ''}</div>`,
         `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="imp2">Imprimir comprobante</button>`);
       $('#imp2', r.el).onclick = () => run(() => imprimirEntregaOrden(id, n));
@@ -2473,7 +2531,9 @@ async function imprimirEntregaOrden(id, n) {
   const restante = Math.max(total - anticipado, 0);
   // cuánto pagó al retirar (las entregas viejas no lo tienen guardado: pagaba todo, salvo cuenta corriente)
   const pagado = o.pagado_entrega != null ? +o.pagado_entrega : o.forma_pago_entrega === CUENTA_CORRIENTE ? 0 : restante;
-  const queda = Math.max(restante - pagado, 0);
+  // lo que se cubrió con saldo a favor del cliente (queda anotado al entregar): no es deuda ni plata cobrada
+  const favor = +(String(o.notas_internas || '').match(/Saldo a favor aplicado: \$(\d+(?:\.\d+)?)/)?.[1] || 0);
+  const queda = Math.max(restante - pagado - favor, 0);
   const comentario = [...o.historial].reverse().find(h => h.estado === 'entregado')?.comentario || '';
 
   printHTML(`<div class="ticket">
@@ -2490,6 +2550,7 @@ async function imprimirEntregaOrden(id, n) {
     <table>
       ${anticipado ? `<tr><td>Pagos a cuenta</td><td style="text-align:right">-${money(Math.min(anticipado, total))}</td></tr>` : ''}
       ${restante > 0 ? `<tr><td>Pagado al retirar${pagado && !o.pagos_entrega?.length ? ` (${esc(o.forma_pago_entrega)})` : ''}</td><td style="text-align:right">${money(pagado)}</td></tr>${(o.pagos_entrega || []).map(p => `<tr><td>&nbsp;&nbsp;${esc(p.forma_pago)}</td><td style="text-align:right">${money(p.monto)}</td></tr>`).join('')}` : '<tr><td colspan="2">Nada más a cobrar</td></tr>'}
+      ${favor ? `<tr><td>Saldo a favor aplicado</td><td style="text-align:right">${money(favor)}</td></tr>` : ''}
       ${queda > 0.009 ? `<tr><td class="big">SALDO</td><td class="big" style="text-align:right">${money(queda)}</td></tr>` : ''}
     </table>${queda > 0.009 ? '<div>Queda en su cuenta corriente.</div>' : ''}<hr>
     ${comentario ? `<div>${esc(comentario)}</div><hr>` : ''}
@@ -3026,6 +3087,18 @@ function deudaPorConcepto(movs, imps = []) {
   }
   aFavor.filter(f => f.resto > 0.009).forEach(f => f.apl.push({ grupo: null, monto: f.resto }));
   return { grupos: [...grupos.values()], aplicaciones };
+}
+
+// Saldo a favor "libre" de un cliente: plata o crédito que sobró sin estar vinculado a ninguna venta ni servicio (lo que el Fichero
+// deja a favor, que se aplica solo a lo que se cargue a cuenta corriente después). Se puede ofrecer al vender o entregar: esa parte queda
+// como "cuenta corriente" de la venta/orden y el Fichero la cubre con este saldo, sin mover la caja.
+// aparte: lo cargado a mano "sin aplicar a la deuda": no se ofrece (el Fichero lo deja afuera a propósito).
+async function saldoFavorLibre(clienteId) {
+  const [movs, imps] = await Promise.all([store.ccMovimientos(clienteId), store.ccImputaciones(clienteId).catch(() => [])]);
+  const { aplicaciones } = deudaPorConcepto(movs, imps);
+  const libre = Object.values(aplicaciones).flat().filter(a => !a.grupo).reduce((s, a) => s + a.monto, 0);
+  const aparte = movs.filter(m => m.tipo === 'ajuste' && m.manual && m.imputa_deuda === false).reduce((s, m) => s - m.monto, 0);
+  return { libre: Math.round(libre * 100) / 100, aparte: Math.round(aparte * 100) / 100 };
 }
 
 // Recargos de cobros que se facturan: el recargo sigue a lo que pagó el cobro. Si la venta o el service no se factura, el recargo tampoco;
