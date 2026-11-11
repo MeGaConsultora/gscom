@@ -3057,7 +3057,9 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
   // con un saldo a favor cargado aparte (sin aplicar a la deuda) se cobra contra la deuda de los conceptos, no contra el saldo neto
   if (movs.some(x => x.tipo === 'ajuste' && x.manual && x.imputa_deuda === false) || deudaPorConcepto(movs, imps).grupos.some(g => g.encargo_id && g.pendiente < -0.009)) saldo = Math.max(pendientes.reduce((s, g) => s + g.pendiente, 0), 0);
   const sel = new Set(preseleccion ? [preseleccion] : pendientes.map(g => g.clave));
-  let forma = 'Efectivo', plan = null, claveCobro = null, firmaCobro = null;
+  let forma = 'Efectivo', plan = null;
+  const clavesCobro = [];   // una clave por cada medio de pago: si falla y se reintenta igual, la base no registra dos veces lo que ya entró
+  let comb = null;          // [{ forma, monto, plan }] si paga con más de un medio; el último se completa solo con lo que falta del monto
   const planes = await planesPago();
   // Cliente que no debe nada: lo que se cobra es un pago a cuenta y queda todo como saldo a favor
   const sinDeuda = !pendientes.length && saldo <= 0.009;
@@ -3072,7 +3074,10 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
         <td class="num"><b>${money(g.pendiente)}</b></td></tr>`).join('')}</tbody></table></div></div>` : ''}
     <div class="field"><label>Monto a cobrar</label><input class="input" type="number" step="any" min="0" id="monto">
       <div class="small muted" style="margin-top:.3rem" id="ayuda"></div></div>
-    <div class="field"><label>Forma de pago</label><div class="pay-opts">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div><div id="cob-plan" style="margin-top:.4rem"></div><div class="small" id="cob-rec" style="margin-top:.3rem"></div></div>
+    <div class="field"><label>Forma de pago</label>
+      <div id="cob-simple"><div class="pay-opts" id="cob-chips">${FORMAS_PAGO.map(f => `<button class="chip ${f === forma ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div><div id="cob-plan" style="margin-top:.4rem"></div><div class="small" id="cob-rec" style="margin-top:.3rem"></div></div>
+      <div id="cob-comb"></div>
+      <button class="linkbtn small" id="cob-combinar" style="margin-top:.45rem;padding:0">＋ Combinar dos medios de pago</button></div>
     ${campoFecha('fecha-cobro', '', 'Fecha del cobro')}
     <div class="field"><label>Nota (opcional)</label><input class="input" id="nota" placeholder="ej: entrega a cuenta"></div>`,
     `<button class="btn" data-close>Cancelar</button><button class="btn ok" id="ok">${sinDeuda ? 'Registrar pago a cuenta' : 'Registrar cobro'}</button>`, { wide: true });
@@ -3080,7 +3085,53 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
   const elegidos = () => pendientes.filter(g => sel.has(g.clave));
   const sumaSel = () => elegidos().reduce((s, g) => s + g.pendiente, 0);
   // con un plan de tarjeta: la deuda baja en el monto; se cobra el monto + recargo
+  // Partes del cobro: un solo medio (con su plan) o los medios combinados; la última se completa con lo que falta del monto
+  const restoComb = () => Math.round(((+inp.value || 0) - comb.slice(0, -1).reduce((s, p) => s + (+p.monto || 0), 0)) * 100) / 100;
+  const partesCobro = () => comb ? comb.map((p, k) => ({ forma: p.forma, monto: k === comb.length - 1 ? restoComb() : +p.monto || 0, plan: p.plan }))
+    : [{ forma, monto: +inp.value || 0, plan }];
+  const textoRecParte = p => { const r = recargoDe(p.monto, p.plan); return r ? `+${money(r)} → cobra ${money(p.monto + r)}` : ''; };
+  const actualizarComb = () => {
+    const partes = partesCobro(), resto = partes[partes.length - 1].monto, rec = partes.reduce((s, p) => s + recargoDe(p.monto, p.plan), 0), monto = +inp.value || 0;
+    const rb = $('[data-cresto]', m.el); rb.textContent = money(resto); rb.style.color = resto > 0.009 ? '' : 'var(--bad)';
+    partes.forEach((p, k) => { const s = $('[data-cr="' + k + '"]', m.el); if (s) s.textContent = textoRecParte(p); });
+    $('#cob-comb-ayuda', m.el).innerHTML = resto <= 0.009 ? '<span style="color:var(--bad)">Los montos superan lo que se cobra.</span>'
+      : `${rec ? `Con el recargo se cobran <b>${money(monto + rec)}</b> en total (la deuda baja ${money(monto)}). ` : ''}El último medio se completa con lo que falta.`;
+  };
+  function pintarComb() {
+    const box = $('#cob-comb', m.el);
+    $('#cob-simple', m.el).hidden = !!comb; $('#cob-combinar', m.el).hidden = !!comb;
+    if (!comb) { box.innerHTML = ''; pintarPlanCob(); return; }
+    const ult = comb.length - 1;
+    box.innerHTML = comb.map((p, k) => `<div style="display:flex;gap:.4rem;align-items:center;margin-bottom:.4rem">
+        <select class="input" data-cf="${k}" style="flex:1">${FORMAS_PAGO.map(f => `<option ${f === p.forma ? 'selected' : ''}>${f}</option>`).join('')}</select>
+        ${k === ult ? '<div class="input" data-cresto style="width:120px;text-align:right;background:#f5f6f8" title="Se completa solo con lo que falta"></div>'
+          : `<input class="input" data-cm="${k}" value="${p.monto ?? ''}" inputmode="decimal" placeholder="Monto" style="width:120px;text-align:right">`}
+        <button class="x" data-cq="${k}" title="Quitar este medio">×</button></div>${(() => {
+          const sp = selectPlan(`data-cp="${k}" style="flex:1"`, p.forma, planes, p.plan);
+          return sp ? `<div style="display:flex;gap:.4rem;align-items:center;margin:-.15rem 0 .5rem">${sp}<span class="small muted nowrap" data-cr="${k}" style="width:120px;text-align:right"></span><span style="width:24px"></span></div>` : '';
+        })()}`).join('')
+      + `<div class="small" style="display:flex;justify-content:space-between;gap:.5rem;align-items:baseline">
+          ${comb.length < 3 ? '<button class="linkbtn" id="cob-mas" style="padding:0;white-space:nowrap">＋ Otro medio</button>' : '<span></span>'}
+          <span class="muted" style="text-align:right" id="cob-comb-ayuda"></span></div>`;
+    $$('[data-cf]', box).forEach(s => s.onchange = () => { const p = comb[+s.dataset.cf]; p.forma = s.value; p.plan = planDefecto(s.value, planes); pintarComb(); });
+    $$('[data-cp]', box).forEach(s => s.onchange = () => { const p = comb[+s.dataset.cp]; p.plan = leerPlan(s, planes, p.plan); actualizarComb(); });
+    $$('[data-cm]', box).forEach(i => { i.onfocus = () => i.select(); i.oninput = () => { comb[+i.dataset.cm].monto = Math.max(0, +String(i.value).replace(',', '.') || 0); actualizarComb(); }; });
+    $$('[data-cq]', box).forEach(b => b.onclick = () => {
+      comb.splice(+b.dataset.cq, 1);
+      if (comb.length < 2) { forma = comb[0]?.forma || forma; plan = comb[0]?.plan || null; comb = null; $$('#cob-chips .chip', m.el).forEach(x => x.classList.toggle('active', x.dataset.f === forma)); }
+      pintarComb();
+    });
+    const mas = $('#cob-mas', box);
+    if (mas) mas.onclick = () => { const f = FORMAS_PAGO.find(f => !comb.some(p => p.forma === f)) || 'Efectivo'; comb.splice(ult, 0, { forma: f, monto: '', plan: planDefecto(f, planes) }); pintarComb(); $('[data-cm="' + ult + '"]', m.el)?.focus(); };
+    actualizarComb();
+  }
+  $('#cob-combinar', m.el).onclick = () => {
+    comb = [{ forma, monto: '', plan }, { forma: forma === 'Efectivo' ? 'Transferencia' : 'Efectivo', monto: '', plan: null }];
+    comb[1].plan = planDefecto(comb[1].forma, planes);
+    pintarComb(); $('[data-cm="0"]', m.el)?.focus();
+  };
   const pintarRec = () => {
+    if (comb) return actualizarComb();
     const monto = +inp.value || 0, r = recargoDe(monto, plan);
     $('#cob-rec', m.el).innerHTML = r ? `Con el recargo (${esc(plan.plan)}, ${plan.pct}%) se cobran <b>${money(monto + r)}</b>${plan.cuotas > 1 ? ` · ${textoCuotas(monto + r, plan)}` : ''}. La deuda baja ${money(monto)}.` : '';
   };
@@ -3112,33 +3163,49 @@ async function cobrarModal(clienteId, nombre, saldo, onDone, preseleccion = null
     // Imputación: lo cobrado se reparte entre lo marcado, de lo más viejo a lo más nuevo
     let resto = monto; const imputaciones = [];
     for (const g of elegidos()) { const x = Math.min(g.pendiente, resto); if (x > 0.009) { imputaciones.push({ grupo: g.clave, monto: +x.toFixed(2) }); resto -= x; } }
-    const recargo = recargoDe(monto, plan);
-    const datosCobro = { monto, forma_pago: forma, nota: $('#nota', m.el).value.trim(), imputaciones, recargo, plan: plan?.plan || '' };
-    // Clave del cobro: si falla y se reintenta igual, la base no lo registra dos veces. Si cambió algo, es otro cobro (otra clave).
-    const firma = JSON.stringify(datosCobro);
-    if (firmaCobro !== firma) { claveCobro = crypto.randomUUID(); firmaCobro = firma; }
-    const ccId = await store.cobrarCuenta(clienteId, { ...datosCobro, clave: claveCobro });
+    // Partes: un cobro por cada medio de pago (cada uno entra a caja con su forma de pago y su recargo)
+    const partes = partesCobro();
+    if (partes.some(p => !(p.monto > 0.009))) return toast('Completá el monto de cada medio de pago (y que no superen lo que se cobra)', true);
+    if (new Set(partes.map(p => p.forma)).size < partes.length) return toast('Elegiste dos veces el mismo medio de pago', true);
+    // lo imputado a cada concepto se reparte entre los medios, en orden
+    const cola = imputaciones.map(x => ({ ...x }));
+    const tomar = n => { const out = []; let falta = n; for (const x of cola) { if (falta <= 0.009) break; const t = Math.min(x.monto, falta); if (t > 0.009) { out.push({ grupo: x.grupo, monto: +t.toFixed(2) }); x.monto -= t; falta -= t; } } return out; };
+    const nota = $('#nota', m.el).value.trim(), ids = [];
+    for (const [k, p] of partes.entries()) {
+      const datosCobro = { monto: p.monto, forma_pago: p.forma, nota, imputaciones: tomar(p.monto), recargo: recargoDe(p.monto, p.plan), plan: p.plan?.plan || '' };
+      try { ids.push(await store.cobrarCuenta(clienteId, { ...datosCobro, clave: claveReintento(clavesCobro[k] ??= {}, datosCobro) })); }
+      catch (e) {
+        if (ids.length) toast(`Se registraron ${ids.length} de ${partes.length} cobros y falló ${p.forma}. Reintentá: lo que ya entró no se duplica.`, true);
+        throw e;
+      }
+    }
     // otro día que hoy: el cobro y su ingreso a caja se reubican en esa fecha (se registran primero y se mueven después)
     const f = fechaDeDia(dia);
-    if (f) await store.fijarFechaCobro(ccId, f).catch(() => toast('El cobro se registró, pero no se pudo cambiar su fecha: quedó como hoy', true));
+    if (f) for (const ccId of ids) await store.fijarFechaCobro(ccId, f).catch(() => toast('El cobro se registró, pero no se pudo cambiar su fecha: quedó como hoy', true));
     m.close(); onDone();
-    const r = modal(sinDeuda ? 'Pago a cuenta registrado' : 'Cobro registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(forma)}${recargo ? ` ${esc(plan.plan)} · con el recargo se cobraron ${money(monto + recargo)}` : ''} · ${esc(nombre)}${f ? ` · con fecha ${fdate(dia + 'T12:00')}` : ''}</div></div>`,
+    const recargoTotal = partes.reduce((s, p) => s + recargoDe(p.monto, p.plan), 0);
+    const detalle = partes.map(p => `${esc(p.forma)}${p.plan && recargoDe(p.monto, p.plan) ? ` ${esc(p.plan.plan)}` : ''}${partes.length > 1 ? ` ${money(p.monto)}` : ''}`).join(' + ');
+    const r = modal(sinDeuda ? 'Pago a cuenta registrado' : 'Cobro registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${detalle}${recargoTotal ? ` · con el recargo se cobraron ${money(monto + recargoTotal)}` : ''} · ${esc(nombre)}${f ? ` · con fecha ${fdate(dia + 'T12:00')}` : ''}</div></div>`,
       `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="rec">Imprimir recibo</button>`);
-    $('#rec', r.el).onclick = () => run(() => imprimirRecibo(clienteId, ccId));
+    $('#rec', r.el).onclick = () => run(() => imprimirRecibo(clienteId, ids));
   });
 }
 
 // Recibo de pago de cuenta corriente (ticket): detalle de lo que se pagó, saldo anterior y actual
+// ccId puede ser una lista: un cobro con varios medios de pago registra un pago por medio y sale en un solo recibo
 async function imprimirRecibo(clienteId, ccId) {
   const [c, movs, n, imps] = await Promise.all([store.cliente(clienteId), store.ccMovimientos(clienteId), store.negocio(), store.ccImputaciones(clienteId).catch(() => [])]);
   const cron = movs.slice().reverse();                // de la más vieja a la más nueva
-  const i = cron.findIndex(m => m.id === +ccId);
-  if (i < 0) throw new Error('No se encontró el pago');
-  const pago = cron[i];
+  const ids = [].concat(ccId).map(Number);
+  const pagos = cron.filter(m => ids.includes(m.id));
+  if (!pagos.length) throw new Error('No se encontró el pago');
+  const i = cron.indexOf(pagos[pagos.length - 1]);
+  const pago = pagos[0];
   // un anticipo de service lleva su propio recibo: solo lo de esa orden, sin el saldo general de la cuenta
   if (pago.orden_id) return imprimirReciboAnticipo(pago.orden_id, pago.id);
+  const montoPagos = pagos.reduce((s, m) => s + +m.monto, 0);   // negativo
   const saldoActual = cron.slice(0, i + 1).reduce((s, m) => s + +m.monto, 0);
-  const saldoAnterior = saldoActual - +pago.monto;    // el pago tiene monto negativo
+  const saldoAnterior = saldoActual - montoPagos;
   // Qué conceptos cubrió este pago (con los productos de cada venta)
   const { grupos, aplicaciones } = deudaPorConcepto(movs, imps);
   const detalle = [];
@@ -3146,7 +3213,11 @@ async function imprimirRecibo(clienteId, ccId) {
   const pagosHasta = new Set(cron.slice(0, i + 1).filter(m => m.tipo === 'pago').map(m => m.id));
   const pagadoHasta = clave => Object.entries(aplicaciones).filter(([id]) => pagosHasta.has(+id))
     .reduce((s, [, l]) => s + l.filter(x => x.grupo === clave).reduce((t, x) => t + x.monto, 0), 0);
-  for (const a of aplicaciones[pago.id] || []) {
+  // lo que cubrieron los pagos del recibo, sumado por concepto (con varios medios, un mismo concepto puede estar en más de un pago)
+  const aplicado = new Map();
+  for (const p of pagos) for (const a of aplicaciones[p.id] || []) aplicado.set(a.grupo, (aplicado.get(a.grupo) || 0) + a.monto);
+  for (const [grupo, montoApl] of aplicado) {
+    const a = { grupo, monto: montoApl };
     if (!a.grupo) { detalle.push({ titulo: 'A cuenta (saldo a favor)', monto: a.monto, lineas: [] }); continue; }
     const g = grupos.find(x => x.clave === a.grupo);
     let lineas = [];
@@ -3157,18 +3228,19 @@ async function imprimirRecibo(clienteId, ccId) {
   printHTML(`<div class="ticket">
     <div class="c big">${esc(n.nombre)}</div><div class="c">${esc(n.direccion)}<br>${esc(n.telefono)}</div><hr>
     <div class="c"><b>RECIBO DE PAGO</b><br>${pago.orden_id ? 'Anticipo de service' : pago.encargo_id ? 'Anticipo de encargo' : 'Cuenta corriente'}</div><hr>
-    <div>Recibo N° ${pago.id}<br>${fdatetime(pago.fecha)}<br>Cliente: ${esc(c.nombre)}${c.dni_cuit ? `<br>DNI/CUIT: ${esc(c.dni_cuit)}` : ''}</div><hr>
+    <div>Recibo N° ${pagos.map(p => p.id).join(' / ')}<br>${fdatetime(pago.fecha)}<br>Cliente: ${esc(c.nombre)}${c.dni_cuit ? `<br>DNI/CUIT: ${esc(c.dni_cuit)}` : ''}</div><hr>
     ${pago.concepto && pago.concepto !== 'Cobro de cuenta corriente' ? `<div>Nota: ${esc(pago.concepto)}</div>` : ''}
     ${detalle.length ? `<div><b>Detalle de lo pagado</b></div><table>${detalle.map(d => `
       <tr><td colspan="2">${esc(d.titulo)}${d.etiqueta ? ` (${d.etiqueta})` : ''}</td></tr>
       ${d.lineas.map(l => `<tr><td colspan="2" style="padding-left:2mm">· ${esc(l)}</td></tr>`).join('')}
       <tr><td></td><td style="text-align:right">${money(d.monto)}</td></tr>`).join('')}</table>` : ''}
-    <table><tr><td>Forma de pago</td><td style="text-align:right">${esc(pago.forma_pago)}</td></tr></table><hr>
+    <table>${pagos.length > 1 ? pagos.map(p => `<tr><td>Pago con ${esc(p.forma_pago)}</td><td style="text-align:right">${money(-p.monto)}</td></tr>`).join('')
+      : `<tr><td>Forma de pago</td><td style="text-align:right">${esc(pago.forma_pago)}</td></tr>`}</table><hr>
     <table>
       <tr><td>Saldo anterior</td><td style="text-align:right">${money(saldoAnterior)}</td></tr>
-      <tr><td class="big">PAGADO</td><td class="big" style="text-align:right">${money(-pago.monto)}</td></tr>
+      <tr><td class="big">PAGADO</td><td class="big" style="text-align:right">${money(-montoPagos)}</td></tr>
       <tr><td><b>Saldo actual</b></td><td style="text-align:right"><b>${money(saldoActual)}</b></td></tr>
-    </table>${pago.anulado ? '<div class="c big">*** ANULADO ***</div>' : ''}<hr>
+    </table>${pagos.every(p => p.anulado) ? '<div class="c big">*** ANULADO ***</div>' : ''}<hr>
     <div class="c">${saldoActual > 0.009 ? 'Queda un saldo pendiente.' : saldoActual < -0.009 ? 'Queda saldo a su favor.' : 'Cuenta al día. ¡Gracias!'}<br>Documento no válido como factura.</div></div>`, PAGINA_TICKET);
 }
 
@@ -3239,10 +3311,9 @@ async function cargoManualModal(clienteId = null, tipo = 'deuda') {
       ${clientes.map(c => `<option value="${c.id}">${esc(c.nombre)}</option>`).join('')}</select></div>`}
     ${favor ? `<div class="field"><label>¿Cómo se origina?</label>
       <div class="pay-opts" id="origen"><button class="chip active" data-o="credito">Crédito, sin plata</button><button class="chip" data-o="plata">El cliente entregó plata</button></div>
-      <p class="small muted" id="origen-txt" style="margin:.4rem 0 0"></p></div>
-      <div class="field" id="forma-box" hidden><label>Forma de pago</label><div class="pay-opts" id="forma-pago">${FORMAS_PAGO.map(f => `<button class="chip ${f === 'Efectivo' ? 'active' : ''}" data-f="${f}">${f}</button>`).join('')}</div></div>` : ''}
+      <p class="small muted" id="origen-txt" style="margin:.4rem 0 0">Se suma a lo que el cliente tiene a favor. <b>No entra a la caja</b> (saldo anterior, nota de crédito, devolución pendiente). Si el cliente te entregó plata, tocá la otra opción.</p></div>` : ''}
     <div class="field"><label>Monto *</label><input class="input" type="number" step="any" min="0" id="monto"></div>
-    <div class="field"><label id="concepto-lbl">Concepto *</label><input class="input" id="concepto" placeholder="${favor ? 'ej: Saldo anterior a favor, nota de crédito, devolución pendiente' : 'ej: Saldo anterior, trabajo a domicilio'}"></div>
+    <div class="field"><label>Concepto *</label><input class="input" id="concepto" placeholder="${favor ? 'ej: Saldo anterior a favor, nota de crédito, devolución pendiente' : 'ej: Saldo anterior, trabajo a domicilio'}"></div>
     ${campoFecha('fecha-mov')}
     ${favor ? `<label class="small" id="imputa-box" style="display:flex;gap:.45rem;align-items:flex-start;margin-bottom:.4rem"><input type="checkbox" id="imputa" checked style="margin-top:.15rem">
       <span><b>Aplicarlo a lo que ya debe</b><br><span class="muted">Si lo destildás, queda como saldo a favor aparte y no baja las deudas pendientes (el saldo total es el mismo). Lo podés aplicar después.</span></span></label>` : ''}`,
@@ -3256,43 +3327,22 @@ async function cargoManualModal(clienteId = null, tipo = 'deuda') {
       if (ya) cliSel.value = ya.value; else cliSel.add(new Option(c.nombre, c.id, true, true), cliSel.options.length - 1);
     });
   };
-  // Saldo a favor: "crédito, sin plata" (no toca la caja) o "el cliente entregó plata" (entra a caja como un cobro de cuenta corriente)
-  let origen = 'credito', formaPago = 'Efectivo'; const reintento = {};
-  const pintarOrigen = () => {
-    if (!favor) return;
-    const plata = origen === 'plata';
-    $$('#origen .chip', m.el).forEach(b => b.classList.toggle('active', b.dataset.o === origen));
-    $('#forma-box', m.el).hidden = !plata; $('#imputa-box', m.el).hidden = plata;
-    $('#concepto-lbl', m.el).textContent = plata ? 'Concepto (opcional)' : 'Concepto *';
-    $('#concepto', m.el).placeholder = plata ? 'ej: Seña, pago a cuenta de una compra futura' : 'ej: Saldo anterior a favor, nota de crédito, devolución pendiente';
-    $('#ok', m.el).textContent = plata ? 'Registrar pago a cuenta' : 'Cargar saldo a favor';
-    $('#origen-txt', m.el).innerHTML = plata
-      ? 'Entra a la <b>caja</b> con la forma de pago elegida y se suma a su saldo a favor. Si el cliente debe algo, se aplica primero a lo más viejo (igual que Cobrar). Queda un recibo.'
-      : 'Se suma a lo que el cliente tiene a favor. <b>No entra a la caja</b> (saldo anterior, nota de crédito, devolución pendiente).';
-  };
-  if (favor) {
-    $$('#origen .chip', m.el).forEach(b => b.onclick = () => { origen = b.dataset.o; pintarOrigen(); });
-    $$('#forma-pago .chip', m.el).forEach(b => b.onclick = () => { formaPago = b.dataset.f; $$('#forma-pago .chip', m.el).forEach(x => x.classList.toggle('active', x === b)); });
-    pintarOrigen();
-  }
+  // Saldo a favor: "crédito, sin plata" es esta pantalla (no toca la caja). Si el cliente entregó plata, se pasa a la pantalla de
+  // cobro de cuenta corriente (forma de pago, recargo, medios combinados, caja y recibo): lo que no debe se queda como saldo a favor.
+  $$('#origen .chip', m.el).forEach(b => b.onclick = () => run(async () => {
+    if (b.dataset.o !== 'plata') return;
+    const cid = clienteId || +$('#cli', m.el).value;
+    if (!cid) return toast('Elegí primero el cliente', true);
+    const [c, movs] = await Promise.all([store.cliente(cid), store.ccMovimientos(cid)]);
+    m.close();
+    cobrarModal(cid, c.nombre, movs.reduce((s, x) => s + +x.monto, 0), () => cid === clienteId ? render() : go(`#/fichero/${cid}`));
+  }));
   $('#ok', m.el).onclick = () => run(async () => {
     const cid = clienteId || +$('#cli', m.el).value, monto = +$('#monto', m.el).value, concepto = $('#concepto', m.el).value.trim();
-    const plata = favor && origen === 'plata';
-    if (!cid || !(monto > 0) || (!concepto && !plata)) return toast(plata ? 'Completá cliente y monto' : 'Completá cliente, monto y concepto', true);
+    if (!cid || !(monto > 0) || !concepto) return toast('Completá cliente, monto y concepto', true);
     const dia = $('#fecha-mov', m.el).value || hoyISO();
     if (diaFuturo(dia)) return toast('La fecha no puede ser futura', true);
     const fecha = fechaDeDia(dia);
-    if (plata) {
-      // Plata que entregó el cliente: un cobro de cuenta corriente sin conceptos marcados (lo que sobre de su deuda queda a favor)
-      const datos = { monto, forma_pago: formaPago, nota: concepto || 'Pago a cuenta', imputaciones: [] };
-      const ccId = await store.cobrarCuenta(cid, { ...datos, clave: claveReintento(reintento, datos) });
-      if (fecha) await store.fijarFechaCobro(ccId, fecha).catch(() => toast('El pago se registró, pero no se pudo cambiar su fecha: quedó como hoy', true));
-      m.close(); cid === clienteId ? render() : go(`#/fichero/${cid}`);
-      const r = modal('Pago a cuenta registrado', `<div class="empty" style="padding:1rem"><div class="total-box">${money(monto)}</div><div class="muted">${esc(formaPago)} · entró a caja${fecha ? ` · con fecha ${fdate(dia + 'T12:00')}` : ''}</div></div>`,
-        `<button class="btn" data-close>Cerrar</button><button class="btn primary" id="rec">Imprimir recibo</button>`);
-      $('#rec', r.el).onclick = () => run(() => imprimirRecibo(cid, ccId));
-      return;
-    }
     await (favor ? store.cargarSaldoFavor(cid, { monto, concepto, imputaDeuda: $('#imputa', m.el).checked, fecha }) : store.cargarDeuda(cid, { monto, concepto, fecha }));
     m.close(); toast(favor ? 'Saldo a favor cargado' : 'Deuda cargada'); cid === clienteId ? render() : go(`#/fichero/${cid}`);
   });
