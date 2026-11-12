@@ -887,12 +887,28 @@ export const store = {
     }
     return anticipos;
   },
+  // igual que entregar_encargos_con_venta en la base
+  async entregarEncargosConVenta(ventaId, ids) {
+    for (const id of ids) {
+      const e = byId('encargos', id); if (!e) continue;
+      if (e.estado === 'entregado' && e.venta_id === +ventaId) continue;
+      if (['entregado', 'cancelado'].includes(e.estado)) throw new Error(`El ${e.tipo === 'reserva' ? 'reserva' : 'encargo'} N° ${e.numero} ya está ${e.estado}`);
+      Object.assign(e, { estado: 'entregado', fecha_entrega: now(), venta_id: +ventaId });
+      await this.aplicarAnticipoEncargo(id, ventaId);
+    }
+    save();
+  },
+  // igual que revertir_anticipo_encargo en la base: libera el anticipo de cada encargo y todos vuelven a estar para entregar
   async revertirAnticipoEncargo(ventaId) {
-    const m = db.cc_movimientos.filter(x => x.venta_id === +ventaId && x.encargo_id && x.tipo === 'cargo').sort((a, b) => b.id - a.id)[0];
-    if (!m) return;
-    insert('cc_movimientos', { cliente_id: m.cliente_id, fecha: now(), tipo: 'ajuste', monto: -m.monto, concepto: 'Anulación de venta: se libera el anticipo aplicado', forma_pago: '', encargo_id: m.encargo_id, venta_id: +ventaId, anulado: false });
-    const e = byId('encargos', m.encargo_id);   // el encargo vuelve a estar para entregar
-    if (e?.estado === 'entregado') { e.estado = e.tipo === 'reserva' ? 'reservado' : 'recibido'; e.fecha_entrega = null; }
+    const movs = db.cc_movimientos.filter(x => x.venta_id === +ventaId && x.encargo_id && ['cargo', 'ajuste'].includes(x.tipo));
+    const encs = [...new Set(movs.map(x => x.encargo_id))];
+    for (const id of encs) {
+      const neto = movs.filter(x => x.encargo_id === id).reduce((s, x) => s + +x.monto, 0);
+      const c = movs.find(x => x.encargo_id === id && x.tipo === 'cargo');
+      if (neto > 0.009) insert('cc_movimientos', { cliente_id: c.cliente_id, fecha: now(), tipo: 'ajuste', monto: -neto, concepto: 'Anulación de venta: se libera el anticipo aplicado', forma_pago: '', encargo_id: id, venta_id: +ventaId, anulado: false });
+    }
+    db.encargos.filter(e => e.estado === 'entregado' && (e.venta_id === +ventaId || encs.includes(e.id)))
+      .forEach(e => Object.assign(e, { estado: e.tipo === 'reserva' ? 'reservado' : 'recibido', fecha_entrega: null, venta_id: null }));
     save();
   },
   // pagado: cuánto paga ahora (lo que falta queda en su cuenta corriente); si no viene, paga todo

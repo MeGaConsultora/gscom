@@ -433,6 +433,15 @@ export const store = {
   async aplicarAnticipoEncargo(encargoId, ventaId) {
     return q(sb.rpc('aplicar_anticipo_encargo', { p_encargo_id: encargoId, p_venta_id: ventaId }));
   },
+  // Encargos entregados con una venta: quedan vinculados a ella y se aplica el anticipo de cada uno
+  async entregarEncargosConVenta(ventaId, ids) {
+    const r = await sb.rpc('entregar_encargos_con_venta', { p_venta_id: ventaId, p_encargos: ids });
+    if (r.error?.code !== 'PGRST202') return check(r);
+    for (const id of ids) {   // la base todavía no tiene el SQL 63: uno por uno, como antes
+      await q(sb.from('encargos').update({ estado: 'entregado', fecha_entrega: new Date().toISOString() }).eq('id', id));
+      await q(sb.rpc('aplicar_anticipo_encargo', { p_encargo_id: id, p_venta_id: ventaId }));
+    }
+  },
   async revertirAnticipoEncargo(ventaId) {
     await q(sb.rpc('revertir_anticipo_encargo', { p_venta_id: ventaId }));
   },
